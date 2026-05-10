@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+export const dynamic = 'force-dynamic';
+
+import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
@@ -13,6 +15,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -27,20 +30,43 @@ export default function SignupPage() {
     const { error } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        // This is where the confirmation email will redirect after clicking the link
+        emailRedirectTo: `${window.location.origin}/login?redirect=${encodeURIComponent(redirect)}`,
+      },
     });
 
     if (error) {
       setError(error.message);
-      setLoading(false);
-      return;
+    } else {
+      setSuccess(true);
     }
-
-    // After successful signup, redirect to the intended page
-    router.push(redirect);
+    setLoading(false);
   };
 
+  if (success) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white p-4">
+        <div className="bg-gray-800 p-10 rounded-3xl w-full max-w-md text-center">
+          <div className="text-6xl mb-6">📧</div>
+          <h1 className="text-3xl font-bold mb-4">Check your email!</h1>
+          <p className="text-gray-400 mb-8">
+            We sent a confirmation link to <span className="font-medium text-white">{email}</span>.<br />
+            Click the link to finish creating your account.
+          </p>
+          <button
+            onClick={() => router.push('/login')}
+            className="w-full py-4 bg-blue-600 hover:bg-blue-700 rounded-2xl font-semibold transition-colors"
+          >
+            Go to Login
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white p-4">
       <div className="bg-gray-800 p-10 rounded-3xl w-full max-w-md">
         <h1 className="text-4xl font-bold mb-8 text-center">Create Account</h1>
 
@@ -53,6 +79,7 @@ export default function SignupPage() {
               onChange={(e) => setEmail(e.target.value)}
               required
               className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
+              placeholder="you@example.com"
             />
           </div>
 
@@ -64,15 +91,16 @@ export default function SignupPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
+              placeholder="••••••••"
             />
           </div>
 
-          {error && <p className="text-red-500 text-center">{error}</p>}
+          {error && <p className="text-red-500 text-center text-sm">{error}</p>}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-4 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-2xl font-semibold text-lg"
+            className="w-full py-4 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-2xl font-semibold text-lg transition-colors"
           >
             {loading ? 'Creating Account...' : 'Create Account'}
           </button>
@@ -80,8 +108,8 @@ export default function SignupPage() {
 
         <p className="text-center mt-6 text-gray-400">
           Already have an account?{' '}
-          <button 
-            onClick={() => router.push(`/login?redirect=${redirect}`)}
+          <button
+            onClick={() => router.push(`/login?redirect=${encodeURIComponent(redirect)}`)}
             className="text-blue-400 hover:text-blue-500"
           >
             Sign in

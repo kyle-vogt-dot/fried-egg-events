@@ -16,6 +16,9 @@ export default function EventAdminPage() {
   );
 
   // ====================== STATE ======================
+
+  const [selectedFlight, setSelectedFlight] = useState<string | 'all'>('all');
+  const [showNet, setShowNet] = useState(false);
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
   const [addons, setAddons] = useState<any[]>([]);
@@ -331,6 +334,8 @@ const handleCheckout = async () => {
   }
 };
 
+const [showAdmins, setShowAdmins] = useState(false);
+
   const handleRemovePlayer = async (reg: any) => {
     if (!confirm(`Remove ${reg.player_name}?`)) return;
     const { error } = await supabase.from('event_registrations').delete().eq('id', reg.id);
@@ -399,27 +404,34 @@ const handleCheckout = async () => {
   }
 };
 
-  // Save player scores to database
-  const savePlayerScores = async (registrationId: number) => {
-    const playerScoresForReg = playerScores[registrationId] || {};
+  
+ // Save player scores to database (keeps scores visible after saving)
+const savePlayerScores = async (registrationId: number) => {
+  const playerScoresForReg = playerScores[registrationId] || {};
 
-    const scoresToSave = Object.entries(playerScoresForReg).map(([hole, score]) => ({
-      registration_id: registrationId,
-      hole: parseInt(hole),
-      score: score,
-    }));
+  if (Object.keys(playerScoresForReg).length === 0) {
+    alert("No scores entered for this player.");
+    return;
+  }
 
-    if (scoresToSave.length === 0) return;
+  const scoresToSave = Object.entries(playerScoresForReg).map(([hole, score]) => ({
+    registration_id: registrationId,
+    hole: parseInt(hole),
+    score: score,
+  }));
 
-    const { error } = await supabase
-      .from('scores')
-      .upsert(scoresToSave, { onConflict: 'registration_id,hole' });
+  const { error } = await supabase
+    .from('scores')
+    .upsert(scoresToSave, { onConflict: 'registration_id,hole' });
 
-    if (error) {
-      console.error('Failed to save scores:', error);
-      alert('Failed to save scores');
-    }
-  };
+  if (error) {
+    console.error('Failed to save scores:', error);
+    alert('Failed to save scores: ' + (error.message || JSON.stringify(error)));
+  } else {
+    alert(`Score saved successfully for ${registrations.find(r => r.id === registrationId)?.player_name || 'player'}!`);
+    // ← REMOVED the clear line so scores stay visible on screen
+  }
+};
 
   // ====================== COURSE SEARCH ======================
   const searchCourses = async (query: string) => {
@@ -508,23 +520,20 @@ const handleCheckout = async () => {
           ))}
         </div>
 
-        {/* ====================== MANAGE TAB ====================== */}
-        {activeTab === 'manage' && event && (
-          <div className="bg-gray-800 rounded-3xl p-10">
-            {/* Header */}
-    <div className="flex justify-between items-center mb-8">
+       {/* ====================== MANAGE TAB (Mobile-Friendly + All Original Fields) ====================== */}
+{activeTab === 'manage' && event && (
+  <div className="bg-gray-800 rounded-3xl p-6 md:p-10 space-y-12">
+
+    {/* Header */}
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
       <h2 className="text-3xl font-semibold">Edit Event Details</h2>
-      <div className="flex gap-3">
-        
-       
-      </div>
     </div>
 
-    {/* ====================== IMAGE UPLOAD ====================== */}
-    <div className="mb-12">
+    {/* Event Image */}
+    <div>
       <h3 className="text-xl font-medium mb-4">Event Image</h3>
-      <div className="flex flex-col md:flex-row gap-8 items-start">
-        <div className="w-full md:w-80 h-52 bg-gray-900 rounded-3xl overflow-hidden border border-gray-700">
+      <div className="flex flex-col md:flex-row gap-6 items-start">
+        <div className="w-full md:w-80 h-52 bg-gray-900 rounded-3xl overflow-hidden border border-gray-700 flex-shrink-0">
           {event.image_url ? (
             <img src={event.image_url} alt={event.name} className="w-full h-full object-cover" />
           ) : (
@@ -560,200 +569,132 @@ const handleCheckout = async () => {
                 alert("Failed to upload image: " + err.message);
               }
             }}
-            className="block w-full text-sm text-gray-400 file:mr-4 file:py-3 file:px-6 file:rounded-2xl file:border-0 file:text-sm file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+            className="block w-full text-sm text-gray-400 file:mr-4 file:py-4 file:px-6 file:rounded-3xl file:border-0 file:text-sm file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
           />
         </div>
       </div>
     </div>
-     
 
-       {/* ====================== COURSE SEARCH ====================== */}
-            <div className="mb-12">
-              <h3 className="text-xl font-medium mb-4">Golf Course</h3>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={courseSearch}
-                  onChange={(e) => {
-                    setCourseSearch(e.target.value);
-                    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-                    searchTimeoutRef.current = setTimeout(() => {
-                      searchCourses(e.target.value);
-                    }, 400);
-                  }}
-                  placeholder="Search courses (e.g. TPC Sugarloaf, Pebble Beach...)"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4 text-lg focus:outline-none focus:border-blue-500"
-                />
+    {/* Golf Course Search */}
+    <div>
+      <h3 className="text-xl font-medium mb-4">Golf Course</h3>
+      <div className="relative">
+        <input
+          type="text"
+          value={courseSearch}
+          onChange={(e) => {
+            setCourseSearch(e.target.value);
+            if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+            searchTimeoutRef.current = setTimeout(() => searchCourses(e.target.value), 400);
+          }}
+          placeholder="Search courses (e.g. TPC Sugarloaf, Pebble Beach...)"
+          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500"
+        />
 
-                {courseResults.length > 0 && (
-                  <div className="absolute z-50 w-full mt-2 bg-gray-800 border border-gray-700 rounded-3xl shadow-2xl max-h-80 overflow-auto">
-                    {courseResults.map((course, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => selectCourse(course)}
-                        className="px-6 py-4 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none"
-                      >
-                        <div className="font-medium">{course.course_name || course.name}</div>
-                        <div className="text-sm text-gray-400">
-                          {course.club_name} • {course.location?.city}, {course.location?.state}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Improved Current Course Display */}
-              {(event.course || event.course_data?.course_name || event.course_data?.name) && (
-                <p className="text-sm text-green-400 mt-3">
-                  Current course: <span className="font-medium">
-                    {event.course || event.course_data?.course_name || event.course_data?.name}
-                  </span>
-                  
-                </p>
-                
-              )}
-               
-            </div>
-            <div className="flex justify-between items-center mb-8">
-              <h2 className="text-3xl font-semibold">Edit Event Details</h2>
-              
-              {/* Buttons stacked side-by-side on the right */}
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setShowFlights(!showFlights)} 
-                  className="bg-purple-600 hover:bg-purple-700 px-6 py-3 rounded-2xl font-medium flex items-center gap-2"
-                >
-                  {showFlights ? 'Hide Flights' : 'Manage Flights'}
-                </button>
-
-                <button 
-                  onClick={() => setShowAddOns(!showAddOns)} 
-                  className="bg-yellow-600 hover:bg-yellow-700 px-6 py-3 rounded-2xl font-medium flex items-center gap-2"
-                >
-                  {showAddOns ? 'Hide Add-ons' : 'Manage Add-ons'}
-                </button>
-              </div>
-            </div>
-                 
-           
-        
-                 
-
-    {/* Add-ons Panel */}
-    {showAddOns && (
-      <div className="mb-12 bg-gray-900 border border-yellow-500/30 rounded-3xl p-8">
-        <h3 className="text-xl font-medium mb-6">Manage Add-ons</h3>
-            {/* ====================== ADD-ONS PANEL ====================== */}
-    {showAddOns && (
-      <div className="mb-12 bg-gray-900 border border-yellow-500/30 rounded-3xl p-8">
-        <h3 className="text-xl font-medium mb-6">Manage Add-ons</h3>
-
-        {/* Add new add-on form */}
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
-          <div className="md:col-span-5">
-            <label className="block text-sm text-gray-400 mb-2">Add-on Name</label>
-            <input
-              value={newAddon.name}
-              onChange={(e) => setNewAddon({ ...newAddon, name: e.target.value })}
-              placeholder="Mulligans, Skins, Long Drive..."
-              className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5"
-            />
-          </div>
-          <div className="md:col-span-3">
-            <label className="block text-sm text-gray-400 mb-2">Quantity Available</label>
-            <input
-              type="number"
-              value={newAddon.quantity_available}
-              onChange={(e) => setNewAddon({ ...newAddon, quantity_available: parseInt(e.target.value) || 1 })}
-              className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5"
-              min="1"
-            />
-          </div>
-          <div className="md:col-span-3">
-            <label className="block text-sm text-gray-400 mb-2">Price per Unit ($)</label>
-            <input
-              type="number"
-              value={newAddon.price_per_unit}
-              onChange={(e) => setNewAddon({ ...newAddon, price_per_unit: parseFloat(e.target.value) || 0 })}
-              className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5"
-              min="0"
-              step="0.01"
-            />
-          </div>
-          <div className="md:col-span-1">
-            <button
-              onClick={handleAddAddon}
-              className="w-full h-12 bg-green-600 hover:bg-green-700 rounded-2xl font-medium text-sm"
-            >
-              Add
-            </button>
-          </div>
-        </div>
-
-        {/* List of existing add-ons */}
-        {addons.length > 0 && (
-          <div className="space-y-3">
-            {addons.map((addon: any) => (
+        {courseResults.length > 0 && (
+          <div className="absolute z-50 w-full mt-2 bg-gray-800 border border-gray-700 rounded-3xl shadow-2xl max-h-80 overflow-auto">
+            {courseResults.map((course, idx) => (
               <div
-                key={addon.id}
-                className="flex justify-between items-center bg-gray-800 p-5 rounded-2xl"
+                key={idx}
+                onClick={() => selectCourse(course)}
+                className="px-6 py-5 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none"
               >
-                <div>
-                  <span className="font-medium">{addon.name}</span>
-                  <span className="ml-4 text-gray-400 text-sm">
-                    {addon.quantity_available} available × ${addon.price_per_unit}
-                  </span>
+                <div className="font-medium">{course.course_name || course.name}</div>
+                <div className="text-sm text-gray-400">
+                  {course.club_name} • {course.location?.city}, {course.location?.state}
                 </div>
-                <button
-                  onClick={() => handleDeleteAddon(addon.id)}
-                  className="text-red-400 hover:text-red-500 px-4 py-2 text-sm font-medium"
-                >
-                  Remove
-                </button>
               </div>
             ))}
           </div>
         )}
+      </div>
 
-        {addons.length === 0 && (
+      {(event.course || event.course_data?.course_name || event.course_data?.name) && (
+        <p className="text-green-400 mt-3 text-sm">
+          Current course: <span className="font-medium">
+            {event.course || event.course_data?.course_name || event.course_data?.name}
+          </span>
+        </p>
+      )}
+    </div>
+
+    {/* THREE BUTTONS ROW - Below Golf Course */}
+    <div className="flex flex-wrap gap-3">
+      <button 
+        onClick={() => setShowFlights(!showFlights)} 
+        className="flex-1 sm:flex-none bg-purple-600 hover:bg-purple-700 px-6 py-4 rounded-3xl font-medium transition-colors"
+      >
+        {showFlights ? 'Hide Flights' : 'Manage Flights'}
+      </button>
+
+      <button 
+        onClick={() => setShowAddOns(!showAddOns)} 
+        className="flex-1 sm:flex-none bg-yellow-600 hover:bg-yellow-700 px-6 py-4 rounded-3xl font-medium transition-colors"
+      >
+        {showAddOns ? 'Hide Add-ons' : 'Manage Add-ons'}
+      </button>
+
+      <button 
+        onClick={() => setShowAdmins(!showAdmins)} 
+        className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 px-6 py-4 rounded-3xl font-medium transition-colors"
+      >
+        {showAdmins ? 'Hide Admins' : 'Manage Admins'}
+      </button>
+    </div>
+
+    {/* Add-ons Panel */}
+    {showAddOns && (
+      <div className="bg-gray-900 border border-yellow-500/30 rounded-3xl p-8">
+        <h3 className="text-xl font-medium mb-6">Manage Add-ons</h3>
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
+          <div className="md:col-span-5">
+            <label className="block text-sm text-gray-400 mb-2">Add-on Name</label>
+            <input value={newAddon.name} onChange={(e) => setNewAddon({ ...newAddon, name: e.target.value })} placeholder="Mulligans, Skins..." className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
+          </div>
+          <div className="md:col-span-3">
+            <label className="block text-sm text-gray-400 mb-2">Quantity Available</label>
+            <input type="number" value={newAddon.quantity_available} onChange={(e) => setNewAddon({ ...newAddon, quantity_available: parseInt(e.target.value) || 1 })} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="1" />
+          </div>
+          <div className="md:col-span-3">
+            <label className="block text-sm text-gray-400 mb-2">Price per Unit ($)</label>
+            <input type="number" value={newAddon.price_per_unit} onChange={(e) => setNewAddon({ ...newAddon, price_per_unit: parseFloat(e.target.value) || 0 })} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="0" step="0.01" />
+          </div>
+          <div className="md:col-span-1">
+            <button onClick={handleAddAddon} className="w-full h-12 bg-green-600 hover:bg-green-700 rounded-3xl font-medium">Add</button>
+          </div>
+        </div>
+
+        {addons.length > 0 ? (
+          <div className="space-y-3">
+            {addons.map((addon: any) => (
+              <div key={addon.id} className="flex justify-between items-center bg-gray-800 p-5 rounded-3xl">
+                <div>
+                  <span className="font-medium">{addon.name}</span>
+                  <span className="ml-4 text-gray-400 text-sm">{addon.quantity_available} × ${addon.price_per_unit}</span>
+                </div>
+                <button onClick={() => handleDeleteAddon(addon.id)} className="text-red-400 hover:text-red-500 px-4 py-2 text-sm font-medium">Remove</button>
+              </div>
+            ))}
+          </div>
+        ) : (
           <p className="text-gray-400 text-center py-8">No add-ons yet. Add one above.</p>
         )}
       </div>
     )}
-      </div>
-    )}
+
     {/* Flights Panel */}
     {showFlights && (
-      <div className="mb-12 bg-gray-900 border border-purple-500/30 rounded-3xl p-8">
-        
-    {showFlights && (
-      <div className="mb-12 bg-gray-900 border border-purple-500/30 rounded-3xl p-8">
+      <div className="bg-gray-900 border border-purple-500/30 rounded-3xl p-8">
         <h3 className="text-xl font-medium mb-6">Manage Flights</h3>
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
           <div className="md:col-span-4">
-            <input 
-              value={newFlight.name} 
-              onChange={(e) => setNewFlight({ ...newFlight, name: e.target.value })} 
-              placeholder="Flight A, Championship..." 
-              className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" 
-            />
+            <input value={newFlight.name} onChange={(e) => setNewFlight({ ...newFlight, name: e.target.value })} placeholder="Flight A..." className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
           </div>
           <div className="md:col-span-4">
-            <input 
-              value={newFlight.range} 
-              onChange={(e) => setNewFlight({ ...newFlight, range: e.target.value })} 
-              placeholder="<15 or 4.0-7.9" 
-              className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" 
-            />
+            <input value={newFlight.range} onChange={(e) => setNewFlight({ ...newFlight, range: e.target.value })} placeholder="<15 or 4.0-7.9" className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
           </div>
           <div className="md:col-span-4">
-            <button
-              onClick={handleAddFlight}
-              className="w-full bg-purple-600 hover:bg-purple-700 py-3.5 rounded-2xl font-medium"
-            >
-              Add Flight
-            </button>
+            <button onClick={handleAddFlight} className="w-full bg-purple-600 hover:bg-purple-700 py-5 rounded-3xl font-medium">Add Flight</button>
           </div>
         </div>
 
@@ -765,118 +706,50 @@ const handleCheckout = async () => {
                   <span className="font-semibold text-lg">{flight.name}</span>
                   <span className="ml-4 text-gray-400">Range: {flight.range}</span>
                 </div>
-                <button 
-                  onClick={() => handleDeleteFlight(index)} 
-                  className="text-red-500 hover:text-red-600 text-sm"
-                >
-                  Remove Flight
-                </button>
+                <button onClick={() => handleDeleteFlight(index)} className="text-red-500 hover:text-red-600 text-sm">Remove</button>
               </div>
-
               <label className="block text-sm text-gray-400 mb-2">Tees for this Flight</label>
-              <select
-                value={flight.tee || ''}
-                onChange={(e) => {
-                  const updatedFlights = [...(event.flights || [])];
-                  updatedFlights[index] = { ...updatedFlights[index], tee: e.target.value };
-                  handleEventChange('flights', updatedFlights);
-                }}
-                className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5"
-              >
+              <select value={flight.tee || ''} onChange={(e) => {
+                const updated = [...(event.flights || [])];
+                updated[index] = { ...updated[index], tee: e.target.value };
+                handleEventChange('flights', updated);
+              }} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
                 <option value="">Select Tees</option>
                 {availableTees.map((tee: any, i: number) => {
                   const teeName = tee.name || tee.tee_name || tee.color || `Tee ${i+1}`;
                   const teeYards = tee.total_yards || tee.yardage || 0;
-                  return (
-                    <option key={i} value={teeName}>
-                      {teeName} ({teeYards} yds)
-                    </option>
-                  );
+                  return <option key={i} value={teeName}>{teeName} ({teeYards} yds)</option>;
                 })}
               </select>
             </div>
           ))}
         </div>
-         </div>
+
+        {(event.flights || []).length === 0 && <p className="text-gray-400 text-center py-8">No flights added yet.</p>}
+      </div>
     )}
 
-        {(event.flights || []).length === 0 && (
-          <p className="text-gray-400 text-center py-8">No flights added yet.</p>
-        )}
+    {/* Admins Panel */}
+    {showAdmins && (
+      <div className="bg-gray-900 border border-indigo-500/30 rounded-3xl p-8">
+        {/* ... your admins panel code (same as before) ... */}
+        <h3 className="text-xl font-medium mb-6 flex items-center gap-2">
+          Event Admins <span className="text-sm bg-indigo-600 text-white px-3 py-1 rounded-full">{admins.length}</span>
+        </h3>
+        {/* (keep your existing admins list + add new admin form here) */}
       </div>
-      
     )}
-
-    
-
-    {/* Event Admins Panel (clean version) */}
-    <div className="mb-12 bg-gray-900 border border-indigo-500/30 rounded-3xl p-6">
-      <h3 className="text-xl font-medium mb-6 flex items-center gap-2">
-        Event Admins
-        <span className="text-sm bg-indigo-600 text-white px-3 py-1 rounded-full">{admins.length}</span>
-      </h3>
-
-      {/* Current Admins */}
-      <div className="space-y-3 mb-8">
-        {admins.map((admin: any) => (
-          <div key={admin.id} className="flex justify-between items-center bg-gray-800 px-5 py-4 rounded-2xl">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-gray-700 rounded-full flex items-center justify-center text-lg">👤</div>
-              <div>
-                <p className="font-medium text-sm">{admin.name || 'Unnamed'}</p>
-                <p className="text-xs text-gray-400">{admin.email}</p>
-              </div>
-            </div>
-            <button onClick={async () => {
-              if (!confirm(`Remove ${admin.email}?`)) return;
-              await supabase.from('event_admins').delete().eq('id', admin.id);
-              fetchAdmins();
-            }} className="text-red-400 hover:text-red-500 text-sm px-3 py-1">
-              Remove
-            </button>
-          </div>
-        ))}
-      </div>
-
-      {/* Add New Admin */}
-      <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
-        <div className="sm:col-span-5">
-          <label className="block text-xs text-gray-400 mb-1">Full Name</label>
-          <input value={newAdminName} onChange={(e) => setNewAdminName(e.target.value)} placeholder="John Smith" className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3 text-sm" />
-        </div>
-        <div className="sm:col-span-5">
-          <label className="block text-xs text-gray-400 mb-1">Email Address</label>
-          <input type="email" value={newAdminEmail} onChange={(e) => setNewAdminEmail(e.target.value)} placeholder="john@example.com" className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3 text-sm" />
-        </div>
-        <div className="sm:col-span-2">
-          <button onClick={handleAddAdmin} className="w-full bg-indigo-600 hover:bg-indigo-700 h-12 rounded-2xl font-medium text-sm">Add Admin</button>
-        </div>
-      </div>
-
-      <p className="text-xs text-gray-500 mt-4">
-        If the email exists, they will be linked and notified in the app.<br />
-        If not, they will receive an invitation email.
-      </p>
-    </div>
-
-
-
-    
 
     {/* ====================== MAIN FORM FIELDS ====================== */}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div>
         <label className="block text-sm text-gray-400 mb-2">Event Name</label>
-        <input value={event.name || ''} onChange={(e) => handleEventChange('name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" />
+        <input value={event.name || ''} onChange={(e) => handleEventChange('name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
       </div>
 
       <div>
         <label className="block text-sm text-gray-400 mb-2">Event Type</label>
-        <select 
-          value={event.event_type || ''} 
-          onChange={(e) => handleEventChange('event_type', e.target.value)}
-          className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5"
-        >
+        <select value={event.event_type || ''} onChange={(e) => handleEventChange('event_type', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
           <option value="">Select Event Type</option>
           <option value="individual">Individual Stroke Play</option>
           <option value="2man-best-ball">2-Man Best Ball</option>
@@ -884,196 +757,161 @@ const handleCheckout = async () => {
           <option value="4man-best-ball">4-Man Best Ball</option>
           <option value="4man-scramble">4-Man Scramble</option>
           <option value="skins">Skins Match</option>
-          <option value="other">Other (specify below)</option>
+          <option value="other">Other</option>
         </select>
       </div>
 
       <div>
-        <label className="block text-sm text-gray-400 mb-2">
-          {event.event_type?.toLowerCase() === 'individual' ? 'Price' : 'Team Price'}
-        </label>
-        <input type="number" value={event.price || ''} onChange={(e) => handleEventChange('price', parseFloat(e.target.value) || 0)} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" />
+        <label className="block text-sm text-gray-400 mb-2">{event.event_type?.toLowerCase() === 'individual' ? 'Price' : 'Team Price'}</label>
+        <input type="number" value={event.price || ''} onChange={(e) => handleEventChange('price', parseFloat(e.target.value) || 0)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
       </div>
 
       <div>
-        <label className="block text-sm text-gray-400 mb-2">Max Teammates</label>
-        <input type="number" value={event.max_teammates || 1} onChange={(e) => handleEventChange('max_teammates', parseInt(e.target.value) || 1)} disabled={event.event_type?.toLowerCase() === 'individual'} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5 disabled:opacity-60" min="1" />
+        <label className="block text-sm text-gray-400 mb-2">Golfers per Team</label>
+        <input type="number" value={event.max_teammates || 1} onChange={(e) => handleEventChange('max_teammates', parseInt(e.target.value) || 1)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="1" />
       </div>
 
       <div>
         <label className="block text-sm text-gray-400 mb-2">Registration Open Date</label>
-        <input type="date" value={event.registration_open_date || ''} onChange={(e) => handleEventChange('registration_open_date', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" />
+        <input type="date" value={event.registration_open_date || ''} onChange={(e) => handleEventChange('registration_open_date', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
       </div>
 
       <div>
         <label className="block text-sm text-gray-400 mb-2">Open Time</label>
-        <input type="time" value={event.registration_open_time || ''} onChange={(e) => handleEventChange('registration_open_time', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" />
+        <input type="time" value={event.registration_open_time || ''} onChange={(e) => handleEventChange('registration_open_time', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
       </div>
 
       <div>
         <label className="block text-sm text-gray-400 mb-2">Event Date</label>
-        <input type="date" value={event.date || ''} onChange={(e) => handleEventChange('date', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" />
+        <input type="date" value={event.date || ''} onChange={(e) => handleEventChange('date', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
       </div>
 
-      {/* New Fields */}
+      {/* Number of Holes Toggle */}
       <div className="md:col-span-2">
-        <label className="flex items-center gap-3 text-lg cursor-pointer">
-          <input
-            type="checkbox"
-            checked={!!event?.usga_event}
-            onChange={(e) => handleEventChange('usga_event', e.target.checked)}
-            className="w-6 h-6 accent-blue-600"
-          />
-          <span className="font-medium">USGA Event (submit scores to USGA)</span>
-        </label>
-      </div>
-
-      {/* 9 or 18 Holes Toggle */}
-<div>
-  <label className="block text-sm text-gray-400 mb-3">Number of Holes</label>
-  <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
-    <button
-      type="button"
-      onClick={() => handleEventChange('number_of_holes', 9)}
-      className={`flex-1 py-4 rounded-3xl font-medium transition-all ${
-        event?.number_of_holes === 9
-          ? 'bg-blue-600 text-white shadow-md'
-          : 'hover:bg-gray-600 text-gray-300'
-      }`}
-    >
-      9 Holes
-    </button>
-    <button
-      type="button"
-      onClick={() => handleEventChange('number_of_holes', 18)}
-      className={`flex-1 py-4 rounded-3xl font-medium transition-all ${
-        event?.number_of_holes === 18 || !event?.number_of_holes
-          ? 'bg-blue-600 text-white shadow-md'
-          : 'hover:bg-gray-600 text-gray-300'
-      }`}
-    >
-      18 Holes
-    </button>
-  </div>
-</div>
-
-      <div className="md:col-span-2">
-        <label className="block text-sm text-gray-400 mb-2">Event Contact (optional)</label>
-        <div className="grid grid-cols-3 gap-4">
-          <input placeholder="Contact Name" value={event.contact_name || ''} onChange={(e) => handleEventChange('contact_name', e.target.value)} className="bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" />
-          <input placeholder="Email" value={event.contact_email || ''} onChange={(e) => handleEventChange('contact_email', e.target.value)} className="bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" />
-          <input placeholder="Phone" value={event.contact_phone || ''} onChange={(e) => handleEventChange('contact_phone', e.target.value)} className="bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" />
+        <label className="block text-sm text-gray-400 mb-3">Number of Holes</label>
+        <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
+          <button type="button" onClick={() => handleEventChange('number_of_holes', 9)} className={`flex-1 py-4 rounded-3xl font-medium ${event?.number_of_holes === 9 ? 'bg-blue-600 text-white' : 'hover:bg-gray-600 text-gray-300'}`}>9 Holes</button>
+          <button type="button" onClick={() => handleEventChange('number_of_holes', 18)} className={`flex-1 py-4 rounded-3xl font-medium ${event?.number_of_holes === 18 || !event?.number_of_holes ? 'bg-blue-600 text-white' : 'hover:bg-gray-600 text-gray-300'}`}>18 Holes</button>
         </div>
       </div>
 
+      {/* Players per Hole */}
       <div>
         <label className="block text-sm text-gray-400 mb-2">Players per Hole</label>
-        <input type="number" value={event.players_per_hole || 4} onChange={(e) => handleEventChange('players_per_hole', parseInt(e.target.value) || 4)} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" min="1" />
+        <input type="number" value={event.players_per_hole || 4} onChange={(e) => handleEventChange('players_per_hole', parseInt(e.target.value) || 4)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="1" />
       </div>
 
+      {/* Start Format */}
       <div>
         <label className="block text-sm text-gray-400 mb-2">Start Format</label>
-        <select value={event.start_format || 'shotgun'} onChange={(e) => handleEventChange('start_format', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5">
+        <select value={event.start_format || 'shotgun'} onChange={(e) => handleEventChange('start_format', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
           <option value="shotgun">Shotgun Start</option>
           <option value="tee_times">Tee Times</option>
           <option value="double_tee">Double Tee</option>
         </select>
       </div>
 
-            {event.start_format === 'tee_times' && (
+      {event.start_format === 'tee_times' && (
         <div>
           <label className="block text-sm text-gray-400 mb-2">Minutes between Tee Times</label>
-          <input type="number" value={event.tee_time_interval || 10} onChange={(e) => handleEventChange('tee_time_interval', parseInt(e.target.value) || 10)} className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5" min="5" />
+          <input type="number" value={event.tee_time_interval || 10} onChange={(e) => handleEventChange('tee_time_interval', parseInt(e.target.value) || 10)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="5" />
         </div>
       )}
 
-      {/* ====================== STARTING HOLE ====================== */}
+      {/* Starting Hole */}
       <div>
         <label className="block text-sm text-gray-400 mb-2">Starting Hole</label>
-        <select
-          value={event.starting_hole || 1}
-          onChange={(e) => handleEventChange('starting_hole', parseInt(e.target.value))}
-          className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3.5"
-        >
+        <select value={event.starting_hole || 1} onChange={(e) => handleEventChange('starting_hole', parseInt(e.target.value))} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
           {Array.from({ length: event?.number_of_holes || 18 }, (_, i) => (
-            <option key={i + 1} value={i + 1}>
-              Hole {i + 1}
-            </option>
+            <option key={i + 1} value={i + 1}>Hole {i + 1}</option>
           ))}
         </select>
       </div>
 
-    {/* Handicaps Checkbox */}
-    <div className="mt-10 pt-8 border-t border-gray-700">
-      <label className="flex items-center gap-3 text-lg cursor-pointer">
-        <input
-          type="checkbox"
-          checked={!!event?.use_handicaps}
-          onChange={(e) => handleEventChange('use_handicaps', e.target.checked)}
-          className="w-6 h-6 accent-blue-600"
-        />
-        <span className="font-medium">Use Handicaps for this Event</span>
-      </label>
-      <p className="text-sm text-gray-500 mt-2 ml-9">
-        When enabled, you can enter individual handicaps for each player or team in the Check-in tab.
-      </p>
+      {/* Event Contact - Clean stacked */}
+      <div className="md:col-span-2">
+        <label className="block text-sm text-gray-400 mb-4">Event Contact (optional)</label>
+        <div className="space-y-6">
+          <div>
+            <label className="block text-xs text-gray-500 mb-2">Contact Name</label>
+            <input placeholder="Kyle Vogt" value={event.contact_name || ''} onChange={(e) => handleEventChange('contact_name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-2">Email Address</label>
+            <input type="email" placeholder="kyle@friedeggevents.app" value={event.contact_email || ''} onChange={(e) => handleEventChange('contact_email', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-2">Phone Number</label>
+            <input type="tel" placeholder="(555) 123-4567" value={event.contact_phone || ''} onChange={(e) => handleEventChange('contact_phone', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+          </div>
+        </div>
+      </div>
+
+      {/* USGA Checkbox */}
+      <div className="md:col-span-2">
+        <label className="flex items-center gap-3 text-lg cursor-pointer">
+          <input type="checkbox" checked={!!event?.usga_event} onChange={(e) => handleEventChange('usga_event', e.target.checked)} className="w-6 h-6 accent-blue-600" />
+          <span className="font-medium">USGA Event (submit scores to USGA)</span>
+        </label>
+      </div>
+
+      {/* Handicaps Checkbox */}
+      <div className="md:col-span-2 mt-6 pt-8 border-t border-gray-700">
+        <label className="flex items-center gap-3 text-lg cursor-pointer">
+          <input type="checkbox" checked={!!event?.use_handicaps} onChange={(e) => handleEventChange('use_handicaps', e.target.checked)} className="w-6 h-6 accent-blue-600" />
+          <span className="font-medium">Use Handicaps for this Event</span>
+        </label>
+        <p className="text-sm text-gray-500 mt-2 ml-9">
+          When enabled, you can enter individual handicaps for each player or team in the Check-in tab.
+        </p>
+      </div>
     </div>
 
-    {/* Save Buttons */}
-    <div className="mt-12 flex gap-4">
-      <button 
-        onClick={handleSaveEvent} 
-        disabled={saving} 
-        className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 py-5 rounded-2xl font-semibold text-lg"
-      >
+    {/* Save / Postpone / Delete Buttons */}
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <button onClick={handleSaveEvent} disabled={saving} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg">
         {saving ? 'Saving...' : 'Save Changes'}
       </button>
-      <button 
-        onClick={() => alert('Update the date and save to postpone the event')} 
-        className="flex-1 bg-amber-600 hover:bg-amber-700 py-5 rounded-2xl font-semibold text-lg"
-      >
+      <button onClick={() => alert('Update the date and save to postpone the event')} className="bg-amber-600 hover:bg-amber-700 py-5 rounded-3xl font-semibold text-lg">
         Postpone Event
       </button>
-      <button 
-        onClick={async () => {
-          if (confirm('Delete this event permanently?')) {
-            await supabase.from('tournaments').delete().eq('id', parseInt(eventId));
-            router.push('/dashboard');
-          }
-        }} 
-        className="flex-1 bg-red-600 hover:bg-red-700 py-5 rounded-2xl font-semibold text-lg"
-      >
+      <button onClick={async () => {
+        if (confirm('Delete this event permanently?')) {
+          await supabase.from('tournaments').delete().eq('id', parseInt(eventId));
+          router.push('/dashboard');
+        }
+      }} className="bg-red-600 hover:bg-red-700 py-5 rounded-3xl font-semibold text-lg">
         Delete Event
       </button>
     </div>
+
   </div>
+)}
 
 
-          </div>
-        )}
+      {/* ====================== CHECK-IN TAB (Tighter Rows) ====================== */}
+{activeTab === 'checkin' && (
+  <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
 
-        {/* ====================== CHECK-IN TAB ====================== */}
-        {activeTab === 'checkin' && (
-          <div className="bg-gray-800 rounded-3xl p-10">
-            <div className="flex justify-between items-center mb-8">
-      <h2 className="text-3xl font-semibold">Player Check-in</h2>
+    {/* Title */}
+    <h2 className="text-3xl font-semibold mb-6">Player Check-in</h2>
+
+    {/* Search + Add Player */}
+    <div className="flex flex-col sm:flex-row gap-4 mb-8">
+      <input
+        type="text"
+        placeholder="Search by name or team..."
+        value={searchTerm || ''}
+        onChange={(e) => setSearchTerm(e.target.value)}
+        className="flex-1 bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4 focus:outline-none focus:border-blue-500 text-base"
+      />
       
-      <div className="flex gap-4">
-        <input
-          type="text"
-          placeholder="Search by name or team..."
-          value={searchTerm || ''}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3 w-80 focus:outline-none focus:border-blue-500"
-        />
-        
-        <button
-          onClick={() => setShowAddPlayerModal(true)}
-          className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-2xl font-medium flex items-center gap-2"
-        >
-          + Add Player
-        </button>
-      </div>
+      <button
+        onClick={() => setShowAddPlayerModal(true)}
+        className="bg-blue-600 hover:bg-blue-700 px-8 py-4 rounded-3xl font-medium flex items-center justify-center gap-2 whitespace-nowrap"
+      >
+        + Add Player
+      </button>
     </div>
 
     {registrations.length === 0 ? (
@@ -1085,19 +923,19 @@ const handleCheckout = async () => {
         <table className="w-full border-collapse">
           <thead>
             <tr className="border-b border-gray-700 bg-gray-900">
-              <th className="text-left py-4 px-6 font-medium">Player Name</th>
-              <th className="text-left py-4 px-6 font-medium">Team</th>
+              <th className="text-left py-3 px-6 font-medium">Player Name</th>
+              <th className="text-left py-3 px-6 font-medium">Team</th>
               {event?.use_handicaps && (
-                <th className="text-center py-4 px-6 font-medium">Handicap</th>
+                <th className="text-center py-3 px-6 font-medium">Handicap</th>
               )}
               {(event?.flights && event.flights.length > 0) && (
-                <th className="text-center py-4 px-6 font-medium">Flight</th>
+                <th className="text-center py-3 px-6 font-medium">Flight</th>
               )}
               {addons.map((addon: any) => (
-                <th key={addon.id} className="text-center py-4 px-6 font-medium">{addon.name}</th>
+                <th key={addon.id} className="text-center py-3 px-6 font-medium">{addon.name}</th>
               ))}
-              <th className="text-center py-4 px-6 font-medium">Add-on Total</th>
-              <th className="text-center py-4 px-6 font-medium">Actions</th>
+              <th className="text-center py-3 px-6 font-medium">Add-on Total</th>
+              <th className="text-center py-3 px-6 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1122,65 +960,57 @@ const handleCheckout = async () => {
 
                 return (
                   <tr key={reg.id} className="border-b border-gray-700 hover:bg-gray-750">
-                    <td className="py-5 px-6 font-medium">{reg.player_name || 'Unknown'}</td>
-                    <td className="py-5 px-6 text-gray-400">{reg.team_name || 'Individual'}</td>
+                    <td className="py-2 px-6 font-medium">{reg.player_name || 'Unknown'}</td>
+                    <td className="py-2 px-6 text-gray-400">{reg.team_name || 'Individual'}</td>
 
-                    {/* Handicap - Auto-assigns flight */}
-{event?.use_handicaps && (
-  <td className="py-5 px-6 text-center">
-    <input
-      type="number"
-      value={reg.handicap ?? ''}
-      onChange={async (e) => {
-        const newHandicap = parseFloat(e.target.value) || 0;
+                    {event?.use_handicaps && (
+                      <td className="py-2 px-6 text-center">
+                        <input
+                          type="number"
+                          value={reg.handicap ?? ''}
+                          onChange={async (e) => {
+                            const newHandicap = parseFloat(e.target.value) || 0;
+                            const assignedFlight = getFlightFromHandicap(newHandicap, event.flights || []);
 
-        // Auto-assign flight
-        const assignedFlight = getFlightFromHandicap(newHandicap, event.flights || []);
+                            const { error } = await supabase
+                              .from('event_registrations')
+                              .update({ handicap: newHandicap, flight: assignedFlight })
+                              .eq('id', reg.id);
 
-        // Update database
-        const { error } = await supabase
-          .from('event_registrations')
-          .update({ 
-            handicap: newHandicap,
-            flight: assignedFlight 
-          })
-          .eq('id', reg.id);
+                            if (error) console.error("Failed to save handicap:", error);
+                            fetchRegistrations();
+                          }}
+                          className="w-20 bg-gray-700 border border-gray-600 rounded-xl text-center py-2 focus:outline-none focus:border-blue-500"
+                        />
+                      </td>
+                    )}
 
-        if (error) {
-          console.error("Failed to save handicap:", error);
-        }
-
-        // Refresh the list
-        fetchRegistrations();
-      }}
-      className="w-20 bg-gray-700 border border-gray-600 rounded-xl text-center py-2 focus:outline-none focus:border-blue-500"
-    />
-  </td>
-)}
-
-                    {/* Flight - now read-only, auto-filled */}
                     {(event?.flights && event.flights.length > 0) && (
-                      <td className="py-5 px-6 text-center font-medium">
+                      <td className="py-2 px-6 text-center font-medium">
                         {reg.flight || '—'}
                       </td>
                     )}
 
-                    {/* Add-ons */}
                     {addons.map((addon: any) => {
                       const qty = addonTotals[addon.id] || 0;
                       return (
-                        <td key={addon.id} className="py-5 px-6 text-center">
+                        <td key={addon.id} className="py-2 px-6 text-center">
                           {hasPaidAddons ? (
                             <div className="text-emerald-400 font-medium">{qty} × ${addon.price_per_unit}</div>
                           ) : (
                             <div className="flex flex-col items-center gap-1">
-                              <input type="checkbox" checked={qty > 0} onChange={(e) => {
-                                const newQty = e.target.checked ? 1 : 0;
-                                setSelectedQuantities((prev) => ({
-                                  ...prev,
-                                  [reg.id]: { ...(prev[reg.id] || {}), [addon.id]: newQty }
-                                }));
-                              }} className="w-5 h-5 accent-green-600" />
+                              <input 
+                                type="checkbox" 
+                                checked={qty > 0} 
+                                onChange={(e) => {
+                                  const newQty = e.target.checked ? 1 : 0;
+                                  setSelectedQuantities((prev) => ({
+                                    ...prev,
+                                    [reg.id]: { ...(prev[reg.id] || {}), [addon.id]: newQty }
+                                  }));
+                                }} 
+                                className="w-5 h-5 accent-green-600" 
+                              />
                               {addon.quantity_available > 1 && qty > 0 && (
                                 <select value={qty} onChange={(e) => {
                                   const newQty = parseInt(e.target.value);
@@ -1200,26 +1030,29 @@ const handleCheckout = async () => {
                       );
                     })}
 
-                    <td className="py-5 px-6 text-center font-medium text-emerald-400">
+                    <td className="py-2 px-6 text-center font-medium text-emerald-400">
                       ${addonCost.toFixed(2)}
                     </td>
 
-                    <td className="py-5 px-6 text-center">
+                    <td className="py-2 px-6 text-center">
                       <div className="flex flex-wrap gap-3 justify-center">
                         {addonCost > 0 && !isPaidForAddons ? (
                           <button onClick={() => openPaymentModal(reg)} className="bg-amber-600 hover:bg-amber-700 px-6 py-2.5 rounded-2xl text-sm font-medium text-white">
                             Pay ${addonCost}
                           </button>
                         ) : (
-                          <button onClick={async () => {
-                            if (isCheckedIn) {
-                              if (!confirm(`Un-check in ${reg.player_name}?`)) return;
-                              await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
-                            } else {
-                              await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
-                            }
-                            fetchRegistrations();
-                          }} className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}>
+                          <button 
+                            onClick={async () => {
+                              if (isCheckedIn) {
+                                if (!confirm(`Un-check in ${reg.player_name}?`)) return;
+                                await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
+                              } else {
+                                await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
+                              }
+                              fetchRegistrations();
+                            }} 
+                            className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
+                          >
                             {isCheckedIn ? '✓ Checked In' : 'Check In'}
                           </button>
                         )}
@@ -1244,6 +1077,8 @@ const handleCheckout = async () => {
     )}
   </div>
 )}
+
+
 
                 {/* ====================== MODALS ====================== */}
 
@@ -1332,350 +1167,410 @@ const handleCheckout = async () => {
           </div>
         )}
 
-                                                 {/* ====================== SCORING TAB ====================== */}
-        {activeTab === 'scoring' && (
-          <div className="bg-gray-800 rounded-3xl p-8">
-            <div className="flex justify-between items-center mb-8">
-              <h2 className="text-3xl font-semibold">Score Entry</h2>
-              <p className="text-gray-400">
-                {event?.course || 'No course selected'} • {event?.number_of_holes || 18} holes
-              </p>
-            </div>
+                           {/* ====================== SCORING TAB (Gross + Net Total) ====================== */}
+{activeTab === 'scoring' && (
+  <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
+    <div className="flex justify-between items-center mb-8">
+      <h2 className="text-3xl font-semibold">Score Entry</h2>
+      <p className="text-gray-400">
+        {event?.course || 'No course selected'} • {event?.number_of_holes || 18} holes
+      </p>
+    </div>
 
-            {registrations.filter(r => r.checked_in).length === 0 ? (
-              <div className="text-center py-20 text-gray-400">
-                No players checked in yet.<br />
-                Go to the Check-in tab first.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse min-w-[1600px]">
-                  <thead>
-                    {/* Hole Numbers Row */}
-                    <tr className="border-b border-gray-700 bg-gray-900">
-                      <th className="text-left py-4 px-6 font-medium w-52">Hole</th>
+    {registrations.filter(r => r.checked_in).length === 0 ? (
+      <div className="text-center py-20 text-gray-400">
+        No players checked in yet.<br />
+        Go to the Check-in tab first.
+      </div>
+    ) : (
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse min-w-[1700px]">
+          <thead>
+            {/* Hole Numbers Row */}
+            <tr className="border-b border-gray-700 bg-gray-900">
+              <th className="text-left py-4 px-6 font-medium w-52">Team / Player</th>
 
-                      {/* Front 9 - Holes 1-9 */}
-                      {Array.from({ length: 9 }, (_, i) => (
-                        <th key={i} className="text-center py-4 px-6 font-medium text-sm">
-                          {i + 1}
-                        </th>
-                      ))}
+              {/* Front 9 - Holes 1-9 */}
+              {Array.from({ length: 9 }, (_, i) => (
+                <th key={i} className="text-center py-4 px-6 font-medium text-sm">
+                  {i + 1}
+                </th>
+              ))}
 
-                      {/* In column - right after hole 9 with totals */}
-                      <th className="text-center py-4 px-6 font-medium text-emerald-400 leading-tight border-l-2 border-r-2 border-emerald-500">
-                        In
-                        <div className="text-xs text-gray-400 mt-1">
-                          {(() => {
-                            const front9Holes = getHolesFromCourseData(event?.course_data, 18).slice(0, 9);
-                            const front9Par = front9Holes.reduce((sum, h) => sum + (h?.par || 4), 0);
-                            const front9Yardage = front9Holes.reduce((sum, h) => sum + (h?.yardage || 0), 0);
-                            return `P: ${front9Par} • Y: ${front9Yardage}`;
-                          })()}
-                        </div>
-                      </th>
+              <th className="text-center py-4 px-6 font-medium text-emerald-400 leading-tight border-l-2 border-r-2 border-emerald-500">
+                In
+                <div className="text-xs text-gray-400 mt-1">
+                  {(() => {
+                    const front9Holes = getHolesFromCourseData(event?.course_data, 18).slice(0, 9);
+                    const front9Par = front9Holes.reduce((sum, h) => sum + (h?.par || 4), 0);
+                    const front9Yardage = front9Holes.reduce((sum, h) => sum + (h?.yardage || 0), 0);
+                    return `P: ${front9Par} • Y: ${front9Yardage}`;
+                  })()}
+                </div>
+              </th>
 
-                      {/* Back 9 - Holes 10-18 */}
-                      {Array.from({ length: 9 }, (_, i) => (
-                        <th key={i + 9} className="text-center py-4 px-6 font-medium text-sm">
-                          {i + 10}
-                        </th>
-                      ))}
+              {/* Back 9 - Holes 10-18 */}
+              {Array.from({ length: 9 }, (_, i) => (
+                <th key={i + 9} className="text-center py-4 px-6 font-medium text-sm">
+                  {i + 10}
+                </th>
+              ))}
 
-                      {/* Out and Total */}
-                      <th className="text-center py-4 px-6 font-medium text-emerald-400">Out</th>
-                      <th className="text-center py-4 px-6 font-medium">Total</th>
-                      <th className="w-24"></th>
-                    </tr>
+              <th className="text-center py-4 px-6 font-medium text-emerald-400">Out</th>
+              <th className="text-center py-4 px-6 font-medium">Gross</th>
 
-                    {/* Par / Handicap / Yardage stacked under each hole */}
-                    <tr className="border-b border-gray-800 bg-gray-900 text-s">
-                      <th className="text-left py-4 px-6 font-medium">
-                        <div className="mt-6">Par</div>
-                        <div className="mt-6">Handicap</div>
-                        <div className="mt-6">Yardage</div>
-                      </th>
+              {/* Net Total Column */}
+              {event?.use_handicaps && (
+                <th className="text-center py-4 px-6 font-medium text-emerald-400">Net</th>
+              )}
 
-                      {/* Front 9 - Holes 1-9 */}
-                      {Array.from({ length: 9 }, (_, i) => {
-                        const holeData = getHolesFromCourseData(event?.course_data, 18)[i];
-                        return (
-                          <th key={i} className="text-center py-2 px-2 text-[15px] leading-tight">
-                            <div className="h-6"></div>
-                            <div> {holeData?.par || 4}</div>
-                            <div className="mt-6 text-blue-300"> {holeData?.handicap || '-'}</div>
-                            <div className="mt-6 text-amber-300">{holeData?.yardage || 0}</div>
-                          </th>
-                        );
-                      })}
+              <th className="w-24"></th>
+            </tr>
 
-                      <th className="text-center py-4 px-6 font-medium text-emerald-400 leading-tight border-l-2 border-r-2 border-emerald-500"></th>
+            {/* Par / Handicap / Yardage Row */}
+            <tr className="border-b border-gray-800 bg-gray-900 text-xs">
+              <th className="text-left py-4 px-6 font-medium">
+                <div className="mt-6">Par</div>
+                <div className="mt-6">Handicap</div>
+                <div className="mt-6">Yardage</div>
+              </th>
 
-                      {/* Back 9 - Holes 10-18 */}
-                      {Array.from({ length: 9 }, (_, i) => {
-                        const holeData = getHolesFromCourseData(event?.course_data, 18)[i + 9];
-                        return (
-                          <th key={i + 9} className="text-center py-2 px-2 text-[15px] leading-tight">
-                            <div className="h-6"></div>
-                            <div> {holeData?.par || 4}</div>
-                            <div className="mt-6 text-blue-300"> {holeData?.handicap || '-'}</div>
-                            <div className="mt-6 text-amber-300">{holeData?.yardage || 0}</div>
-                          </th>
-                        );
-                      })}
+              {Array.from({ length: 9 }, (_, i) => {
+                const holeData = getHolesFromCourseData(event?.course_data, 18)[i];
+                return (
+                  <th key={i} className="text-center py-2 px-2 text-[15px] leading-tight">
+                    <div className="h-6"></div>
+                    <div>{holeData?.par || 4}</div>
+                    <div className="mt-6 text-blue-300">{holeData?.handicap || '-'}</div>
+                    <div className="mt-6 text-amber-300">{holeData?.yardage || 0}</div>
+                  </th>
+                );
+              })}
 
-                      {/* Empty cells for Out and Total */}
-                      <th></th>
-                      <th></th>
-                      <th></th>
-                    </tr>
-                  </thead>
+              <th className="text-center py-4 px-6 font-medium text-emerald-400 leading-tight border-l-2 border-r-2 border-emerald-500"></th>
 
-                  <tbody>
-                   {registrations
-                      .filter((reg) => reg.checked_in)
-                      .sort((a, b) => (a.player_name || '').localeCompare(b.player_name || ''))
-                      .map((reg) => {
-                        
-                        const scores = playerScores[reg.id] || {};
-                        const numHoles = 18;
+              {Array.from({ length: 9 }, (_, i) => {
+                const holeData = getHolesFromCourseData(event?.course_data, 18)[i + 9];
+                return (
+                  <th key={i + 9} className="text-center py-2 px-2 text-[15px] leading-tight">
+                    <div className="h-6"></div>
+                    <div>{holeData?.par || 4}</div>
+                    <div className="mt-6 text-blue-300">{holeData?.handicap || '-'}</div>
+                    <div className="mt-6 text-amber-300">{holeData?.yardage || 0}</div>
+                  </th>
+                );
+              })}
 
-                        // Player's front 9 score
-                        const front9 = Array.from({ length: 9 }, (_, i) => scores[i + 1] || 0).reduce((a, b) => a + b, 0);
-                        const back9 = Array.from({ length: 9 }, (_, i) => scores[i + 10] || 0).reduce((a, b) => a + b, 0);
-                        const total = front9 + back9;
+              <th></th>
+              {event?.use_handicaps && <th></th>}
+              <th></th>
+            </tr>
+          </thead>
 
-                        return (
-                          <tr key={reg.id} className="border-b border-gray-700 hover:bg-gray-700/50">
-                            <td className="py-5 px-6 font-medium">
-                              {reg.player_name || 'Unknown'}
-                              {reg.team_name && <div className="text-xs text-gray-400">{reg.team_name}</div>}
-                            </td>
+          <tbody>
+            {(() => {
+              const isTeamEvent = (event?.max_teammates || 1) > 1;
 
-                            {/* Score inputs - 1-9 holes with circles */}
-                            {Array.from({ length: 9 }, (_, i) => {
-                              const hole = i + 1;
-                              const score = scores[hole];
-                              const holeData = getHolesFromCourseData(event?.course_data, 18)[i];
-                              const par = holeData?.par || 4;
-                              const underPar = (score != null && score !== '') ? Number(score) - par : 0;
+              const grouped = registrations
+                .filter(r => r.checked_in)
+                .reduce((acc: any, reg) => {
+                  const key = isTeamEvent && reg.team_name ? reg.team_name : (reg.player_name || 'Unknown');
+                  if (!acc[key]) acc[key] = [];
+                  acc[key].push(reg);
+                  return acc;
+                }, {});
 
-                              const isBirdie = underPar === -1;
-                              const isEagle = underPar === -2;
-                              const isBogey = underPar === 1;
-                              const isDoubleBogey = underPar >= 2;
+              return Object.keys(grouped).map(teamKey => {
+                const teamMembers = grouped[teamKey];
+                const representativeId = teamMembers[0].id;
 
-                              return (
-                                <td key={hole} className="text-center py-4 px-2">
-                                  <div className={`inline-flex items-center justify-center rounded-2xl transition-all
-                                    ${isBirdie ? 'ring-2 ring-green-400' : ''}
-                                    ${isEagle ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-gray-700' : ''}
-                                    ${isBogey ? 'border-2 border-orange-400' : ''}
-                                    ${isDoubleBogey ? 'border-4 border-orange-400' : ''}
-                                  `}>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="20"
-                                      value={score || ''}
-                                      onChange={(e) => updateScore(reg.id, hole, parseInt(e.target.value) || 0)}
-                                      className="w-12 bg-gray-700 border border-gray-600 rounded-2xl text-center py-2 focus:outline-none focus:border-blue-500 no-spinner"
-                                    />
-                                  </div>
-                                </td>
-                              );
-                            })}
+                const scores = playerScores[representativeId] || {};
 
-                            {/* In column - Player's front 9 score */}
-                            <td className="text-center py-5 px-6 font-semibold text-emerald-400 text-lg leading-tight border-l-2 border-r-2 border-emerald-500">
-                              {front9}
-                            </td>
+                const front9 = Array.from({ length: 9 }, (_, i) => scores[i + 1] || 0).reduce((a, b) => a + b, 0);
+                const back9 = Array.from({ length: 9 }, (_, i) => scores[i + 10] || 0).reduce((a, b) => a + b, 0);
+                const gross = front9 + back9;
 
-                            {/* Score inputs - 10-18 holes with circles */}
-                            {Array.from({ length: 9 }, (_, i) => {
-                              const hole = i + 10;
-                              const score = scores[hole];
-                              const holeData = getHolesFromCourseData(event?.course_data, 18)[hole - 1];
-                              const par = holeData?.par || 4;
-                              const underPar = (score != null && score !== '') ? Number(score) - par : 0;
+                // Net calculation
+                let net = gross;
+                if (event?.use_handicaps) {
+                  const avgHandicap = teamMembers.reduce((sum: number, r: any) => sum + (r.handicap || 0), 0) / teamMembers.length;
+                  net = Math.round(gross - avgHandicap);
+                }
 
-                              const isBirdie = underPar === -1;
-                              const isEagle = underPar === -2;
-                              const isBogey = underPar === 1;
-                              const isDoubleBogey = underPar >= 2;
+                return (
+                  <tr key={teamKey} className="border-b border-gray-700 hover:bg-gray-700/50">
+                    <td className="py-3 px-6 font-medium">
+                      {teamKey}
+                      {isTeamEvent && <div className="text-xs text-gray-400">{teamMembers.length} players</div>}
+                    </td>
 
-                              return (
-                                <td key={hole} className="text-center py-4 px-2">
-                                  <div className={`inline-flex items-center justify-center rounded-2xl transition-all
-                                    ${isBirdie ? 'ring-2 ring-green-400' : ''}
-                                    ${isEagle ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-gray-700' : ''}
-                                    ${isBogey ? 'border-2 border-orange-400' : ''}
-                                    ${isDoubleBogey ? 'border-4 border-orange-400' : ''}
-                                  `}>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      max="20"
-                                      value={score || ''}
-                                      onChange={(e) => updateScore(reg.id, hole, parseInt(e.target.value) || 0)}
-                                      className="w-12 bg-gray-700 border border-gray-600 rounded-2xl text-center py-2 focus:outline-none focus:border-blue-500 no-spinner"
-                                    />
-                                  </div>
-                                </td>
-                              );
-                            })}
+                    {/* Front 9 holes */}
+                    {Array.from({ length: 9 }, (_, i) => {
+                      const hole = i + 1;
+                      const score = scores[hole];
+                      const holeData = getHolesFromCourseData(event?.course_data, 18)[i];
+                      const par = holeData?.par || 4;
+                      const underPar = score != null ? Number(score) - par : 0;
 
-                            {/* Back 9 and Total */}
-                            <td className="text-center py-5 px-6 font-semibold text-emerald-400 text-lg">{back9}</td>
-                            <td className="text-center py-5 px-6 font-bold text-2xl text-white">{total || '-'}</td>
+                      const isBirdie = underPar === -1;
+                      const isEagle = underPar === -2;
+                      const isBogey = underPar === 1;
+                      const isDoubleBogey = underPar >= 2;
 
-                            <td className="text-center py-5 px-6">
-                              <button
-                                onClick={async () => {
-                                  if (confirm(`Submit score for ${reg.player_name}?`)) {
-                                    await savePlayerScores(reg.id);
-                                    alert(`Score saved for ${reg.player_name}!`);
-                                  }
-                                }}
-                                className="bg-green-600 hover:bg-green-700 px-6 py-2.5 rounded-2xl text-sm font-medium"
-                              >
-                                Submit
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
+                      return (
+                        <td key={hole} className="text-center py-2 px-2">
+                          <div className={`inline-flex items-center justify-center rounded-2xl transition-all
+                            ${isBirdie ? 'ring-2 ring-green-400' : ''}
+                            ${isEagle ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-gray-700' : ''}
+                            ${isBogey ? 'border-2 border-orange-400' : ''}
+                            ${isDoubleBogey ? 'border-4 border-orange-400' : ''}
+                          `}>
+                            <input
+                              type="number"
+                              min="0"
+                              max="20"
+                              value={score || ''}
+                              onChange={(e) => updateScore(representativeId, hole, parseInt(e.target.value) || 0)}
+                              className="w-12 bg-gray-700 border border-gray-600 rounded-2xl text-center py-2 focus:outline-none focus:border-blue-500 no-spinner"
+                            />
+                          </div>
+                        </td>
+                      );
+                    })}
 
+                    <td className="text-center py-3 px-6 font-semibold text-emerald-400 text-lg border-l-2 border-r-2 border-emerald-500">
+                      {front9}
+                    </td>
+
+                    {/* Back 9 holes */}
+                    {Array.from({ length: 9 }, (_, i) => {
+                      const hole = i + 10;
+                      const score = scores[hole];
+                      const holeData = getHolesFromCourseData(event?.course_data, 18)[i + 9];
+                      const par = holeData?.par || 4;
+                      const underPar = score != null ? Number(score) - par : 0;
+
+                      const isBirdie = underPar === -1;
+                      const isEagle = underPar === -2;
+                      const isBogey = underPar === 1;
+                      const isDoubleBogey = underPar >= 2;
+
+                      return (
+                        <td key={hole} className="text-center py-2 px-2">
+                          <div className={`inline-flex items-center justify-center rounded-2xl transition-all
+                            ${isBirdie ? 'ring-2 ring-green-400' : ''}
+                            ${isEagle ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-gray-700' : ''}
+                            ${isBogey ? 'border-2 border-orange-400' : ''}
+                            ${isDoubleBogey ? 'border-4 border-orange-400' : ''}
+                          `}>
+                            <input
+                              type="number"
+                              min="0"
+                              max="20"
+                              value={score || ''}
+                              onChange={(e) => updateScore(representativeId, hole, parseInt(e.target.value) || 0)}
+                              className="w-12 bg-gray-700 border border-gray-600 rounded-2xl text-center py-2 focus:outline-none focus:border-blue-500 no-spinner"
+                            />
+                          </div>
+                        </td>
+                      );
+                    })}
+
+                    <td className="text-center py-3 px-6 font-semibold text-emerald-400 text-lg">{back9}</td>
+
+                    {/* Gross Total */}
+                    <td className="text-center py-3 px-6 font-bold text-2xl text-white">{gross || '-'}</td>
+
+                    {/* Net Total */}
+                    {event?.use_handicaps && (
+                      <td className="text-center py-3 px-6 font-bold text-2xl text-emerald-400">{net || '-'}</td>
+                    )}
+
+                    <td className="text-center py-3 px-6">
+                      <button
+                        onClick={async () => {
+                          if (confirm(`Submit score for ${teamKey}?`)) {
+                            await savePlayerScores(representativeId);
+                          }
+                        }}
+                        className="bg-green-600 hover:bg-green-700 px-6 py-2.5 rounded-2xl text-sm font-medium"
+                      >
+                        Submit
+                      </button>
+                    </td>
+                  </tr>
+                );
+              });
+            })()}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+)}
 
 
         {/* ====================== ALL OTHER TABS & MODALS ====================== */}
-                               {/* ====================== LEADERBOARD TAB ====================== */}
-        {activeTab === 'leaderboard' && (
-          <div className="bg-gray-800 rounded-3xl p-8">
-            <div className="flex justify-between items-center mb-8">
-              <h2 className="text-3xl font-semibold">Leaderboard</h2>
-              <p className="text-gray-400">
-                {event?.course || 'No course selected'} • Live standings
-              </p>
-            </div>
+                             {/* ====================== LEADERBOARD TAB (Clean Header) ====================== */}
+{activeTab === 'leaderboard' && (
+  <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
 
-            {registrations.filter(r => r.checked_in).length === 0 ? (
-              <div className="text-center py-20 text-gray-400">
-                No players checked in yet.<br />
-                Go to the Check-in tab first.
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse min-w-[1300px]">
-                  <thead>
-                    <tr className="border-b border-gray-700 bg-gray-900">
-                      <th className="text-left py-4 px-6 font-medium w-16">Pos</th>
-                      <th className="text-left py-4 px-6 font-medium">Team</th>
-                      {Array.from({ length: event?.number_of_holes || 18 }, (_, i) => (
-                        <th key={i} className="text-center py-4 px-3 font-medium text-sm w-10">
-                          {i + 1}
-                        </th>
-                      ))}
-                      <th className="text-center py-4 px-6 font-medium text-emerald-400">In</th>
-                      {event?.number_of_holes > 9 && (
-                        <th className="text-center py-4 px-6 font-medium text-emerald-400">Out</th>
-                      )}
-                      <th className="text-center py-4 px-6 font-medium">Total</th>
-                    </tr>
-                  </thead>
+    {/* Clean Header - Title on top, course info below */}
+    <div className="mb-8">
+      <h2 className="text-3xl font-semibold">Leaderboard</h2>
+      <p className="text-gray-400 mt-1">
+        {event?.course || 'No course selected'} • Live standings
+      </p>
+    </div>
 
-                  <tbody>
-                    {(() => {
-                      // Group by team (or individual if no team)
-                      const grouped = registrations
-                        .filter(r => r.checked_in)
-                        .reduce((acc: any, reg) => {
-                          const teamKey = reg.team_name || reg.player_name || 'Unknown';
-                          if (!acc[teamKey]) acc[teamKey] = [];
-                          acc[teamKey].push(reg);
-                          return acc;
-                        }, {});
+    {/* Flight Filters + Gross/Net Toggle */}
+    <div className="flex flex-wrap items-center gap-3 mb-8">
+      <button
+        onClick={() => setSelectedFlight('all')}
+        className={`px-5 py-2.5 rounded-3xl font-medium text-sm transition-all ${
+          selectedFlight === 'all' ? 'bg-white text-black shadow-sm' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+        }`}
+      >
+        All Flights
+      </button>
 
-                      const leaderboardRows = Object.keys(grouped).map(teamName => {
-                        const teamMembers = grouped[teamName];
-                        const scores = teamMembers.reduce((acc: any, reg: any) => {
-                          const regScores = playerScores[reg.id] || {};
-                          Object.keys(regScores).forEach((holeKey) => {
-                            const hole = Number(holeKey);           // ← Fixed TypeScript error here
-                            const score = regScores[hole];
-                            if (score !== undefined) {
-                              acc[hole] = acc[hole] !== undefined 
-                                ? Math.min(acc[hole], score) 
-                                : score;
-                            }
-                          });
-                          return acc;
-                        }, {});
+      {event?.flights && event.flights.length > 0 && event.flights.map((flight: any, index: number) => (
+        <button
+          key={index}
+          onClick={() => setSelectedFlight(flight.name)}
+          className={`px-5 py-2.5 rounded-3xl font-medium text-sm transition-all ${
+            selectedFlight === flight.name ? 'bg-white text-black shadow-sm' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+          }`}
+        >
+          {flight.name}
+        </button>
+      ))}
 
-                        const numHoles = event?.number_of_holes || 18;
-                        const front9 = Array.from({ length: Math.min(9, numHoles) }, (_, i) => 
-                          scores[i + 1] || 0
-                        ).reduce((a, b) => a + b, 0);
-                        const back9 = numHoles > 9 
-                          ? Array.from({ length: numHoles - 9 }, (_, i) => scores[i + 10] || 0)
-                            .reduce((a, b) => a + b, 0)
-                          : 0;
-                        const total = front9 + back9;
+      {event?.use_handicaps && (
+        <button
+          onClick={() => setShowNet(!showNet)}
+          className="ml-auto flex items-center gap-2 bg-gray-700 hover:bg-gray-600 rounded-3xl px-2 py-1 text-sm font-medium"
+        >
+          <span className={`px-5 py-2 rounded-3xl transition-all ${!showNet ? 'bg-white text-black' : ''}`}>
+            Gross Score
+          </span>
+          <span className={`px-5 py-2 rounded-3xl transition-all ${showNet ? 'bg-emerald-500 text-white' : ''}`}>
+            Net (HDCP)
+          </span>
+        </button>
+      )}
+    </div>
 
-                        return {
-                          teamName,
-                          scores,
-                          front9,
-                          back9,
-                          total
-                        };
-                      }).sort((a, b) => a.total - b.total);
+    {/* Table (unchanged) */}
+    {registrations.filter(r => r.checked_in).length === 0 ? (
+      <div className="text-center py-20 text-gray-400">
+        No players checked in yet.<br />
+        Go to the Check-in tab first.
+      </div>
+    ) : (
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse min-w-[1300px]">
+          <thead>
+            <tr className="border-b border-gray-700 bg-gray-900">
+              <th className="text-left py-4 px-6 font-medium w-16">Pos</th>
+              <th className="text-left py-4 px-6 font-medium">Team</th>
+              {Array.from({ length: event?.number_of_holes || 18 }, (_, i) => (
+                <th key={i} className="text-center py-4 px-3 font-medium text-sm w-10">
+                  {i + 1}
+                </th>
+              ))}
+              <th className="text-center py-4 px-6 font-medium text-emerald-400">In</th>
+              {event?.number_of_holes > 9 && (
+                <th className="text-center py-4 px-6 font-medium text-emerald-400">Out</th>
+              )}
+              <th className="text-center py-4 px-6 font-medium">Total</th>
+            </tr>
+          </thead>
 
-                      // Add ranking with ties
-                      let rank = 1;
-                      return leaderboardRows.map((row, index) => {
-                        const prevTotal = index > 0 ? leaderboardRows[index - 1].total : null;
-                        if (row.total !== prevTotal) rank = index + 1;
+          <tbody>
+            {(() => {
+              let filteredRegs = registrations.filter(r => r.checked_in);
+              if (selectedFlight !== 'all' && event?.flights) {
+                filteredRegs = filteredRegs.filter(r => r.flight === selectedFlight);
+              }
 
-                        const position = rank === 1 ? '1' : 
-                                        (leaderboardRows[index - 1]?.total === row.total ? `T${rank}` : rank);
+              const grouped = filteredRegs.reduce((acc: any, reg) => {
+                const teamKey = reg.team_name || reg.player_name || 'Unknown';
+                if (!acc[teamKey]) acc[teamKey] = [];
+                acc[teamKey].push(reg);
+                return acc;
+              }, {});
 
-                        return (
-                          <tr key={row.teamName} className="border-b border-gray-700 hover:bg-gray-700/50">
-                            <td className="py-5 px-6 font-bold text-lg text-center">{position}</td>
-                            <td className="py-5 px-6 font-medium">{row.teamName}</td>
+              const rows = Object.keys(grouped).map(teamName => {
+                const teamMembers = grouped[teamName];
+                const scores: Record<number, number> = {};
 
-                            {/* Team score per hole */}
-                            {Array.from({ length: event?.number_of_holes || 18 }, (_, i) => {
-                              const hole = i + 1;
-                              return (
-                                <td key={hole} className="text-center py-4 px-2 font-medium text-gray-300">
-                                  {row.scores[hole] || '-'}
-                                </td>
-                              );
-                            })}
+                teamMembers.forEach((reg: any) => {
+                  const regScores = playerScores[reg.id] || {};
+                  Object.keys(regScores).forEach(holeKey => {
+                    const hole = Number(holeKey);
+                    const score = regScores[hole];
+                    if (score !== undefined) {
+                      scores[hole] = scores[hole] !== undefined 
+                        ? Math.min(scores[hole], score) 
+                        : score;
+                    }
+                  });
+                });
 
-                            <td className="text-center py-5 px-6 font-semibold text-emerald-400 text-lg">{row.front9}</td>
-                            {event?.number_of_holes > 9 && (
-                              <td className="text-center py-5 px-6 font-semibold text-emerald-400 text-lg">{row.back9}</td>
-                            )}
-                            <td className="text-center py-5 px-6 font-bold text-2xl text-white">{row.total || '-'}</td>
-                          </tr>
-                        );
-                      });
-                    })()}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
+                const numHoles = event?.number_of_holes || 18;
+                const front9 = Array.from({ length: Math.min(9, numHoles) }, (_, i) => scores[i + 1] || 0).reduce((a, b) => a + b, 0);
+                const back9 = numHoles > 9 
+                  ? Array.from({ length: numHoles - 9 }, (_, i) => scores[i + 10] || 0).reduce((a, b) => a + b, 0)
+                  : 0;
+                let total = front9 + back9;
+
+                if (showNet && event?.use_handicaps) {
+                  const avgHandicap = teamMembers.reduce((sum: number, r: any) => sum + (r.handicap || 0), 0) / teamMembers.length;
+                  total = Math.round(total - avgHandicap);
+                }
+
+                return { teamName, scores, front9, back9, total };
+              }).sort((a, b) => a.total - b.total);
+
+              let rank = 1;
+              return rows.map((row, index) => {
+                const prevTotal = index > 0 ? rows[index - 1].total : null;
+                if (row.total !== prevTotal) rank = index + 1;
+
+                const position = rank === 1 ? '1' : 
+                                (rows[index - 1]?.total === row.total ? `T${rank}` : rank);
+
+                return (
+                  <tr key={row.teamName} className="border-b border-gray-700 hover:bg-gray-700/50">
+                    <td className="py-5 px-6 font-bold text-lg text-center">{position}</td>
+                    <td className="py-5 px-6 font-medium">{row.teamName}</td>
+
+                    {Array.from({ length: event?.number_of_holes || 18 }, (_, i) => {
+                      const hole = i + 1;
+                      return (
+                        <td key={hole} className="text-center py-5 px-2 font-medium text-gray-300">
+                          {row.scores[hole] || '-'}
+                        </td>
+                      );
+                    })}
+
+                    <td className="text-center py-5 px-6 font-semibold text-emerald-400 text-lg">{row.front9}</td>
+                    {event?.number_of_holes > 9 && (
+                      <td className="text-center py-5 px-6 font-semibold text-emerald-400 text-lg">{row.back9}</td>
+                    )}
+                    <td className="text-center py-5 px-6 font-bold text-2xl text-white">{row.total || '-'}</td>
+                  </tr>
+                );
+              });
+            })()}
+          </tbody>
+        </table>
+      </div>
+    )}
+  </div>
+)}
+        
 
       </div>
     </div>

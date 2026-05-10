@@ -14,7 +14,6 @@ export default function Navigation() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
-  // Listen to auth changes (this is the key fix)
   useEffect(() => {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -23,7 +22,6 @@ export default function Navigation() {
 
     getUser();
 
-    // Subscribe to auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setUser(session?.user ?? null);
     });
@@ -33,22 +31,22 @@ export default function Navigation() {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    router.push('/');           
-    // No need for router.refresh() anymore because of the listener above
+    router.push('/');
   };
 
   return (
     <nav className="bg-gray-900 border-b border-gray-800 py-5">
-      <div className="max-w-6xl mx-auto px-6 flex items-center justify-between">
-        {/* Left Side - Logo + Home */}
-        <div className="flex items-center gap-8">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between">
+        
+        {/* Left Side - Logo + Links */}
+        <div className="flex items-center gap-6 sm:gap-8">
           <Link href="/" className="text-2xl font-bold tracking-tight">
             Fried Egg Events
           </Link>
 
           <Link 
             href="/" 
-            className="text-sm font-medium text-gray-300 hover:text-white transition-colors"
+            className="text-sm font-medium text-gray-300 hover:text-white transition-colors hidden sm:block"
           >
             Home
           </Link>
@@ -56,15 +54,15 @@ export default function Navigation() {
           {user && (
             <Link 
               href="/dashboard"
-              className="text-sm font-medium text-gray-300 hover:text-white transition-colors"
+              className="text-sm font-medium text-gray-300 hover:text-white transition-colors hidden sm:block"
             >
               Dashboard
             </Link>
           )}
         </div>
 
-        {/* Right Side */}
-        <div className="flex items-center gap-6">
+        {/* Right Side - Single Button */}
+        <div className="flex items-center">
           {user ? (
             <>
               <Link 
@@ -81,7 +79,7 @@ export default function Navigation() {
 
               <button
                 onClick={handleSignOut}
-                className="text-sm text-gray-400 hover:text-white transition-colors"
+                className="ml-6 text-sm text-gray-400 hover:text-white transition-colors"
               >
                 Sign Out
               </button>
@@ -89,9 +87,9 @@ export default function Navigation() {
           ) : (
             <Link 
               href="/login"
-              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-sm font-medium transition-colors"
+              className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-2xl transition-colors flex items-center gap-1"
             >
-              Log In / Sign Up
+              Log In <span className="text-gray-300">/</span> Sign Up
             </Link>
           )}
         </div>

@@ -17,29 +17,21 @@ export default function EventDetailPage() {
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showRegisterModal, setShowRegisterModal] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   const [mode, setMode] = useState<'join' | 'create' | ''>('');
   const [selectedTeam, setSelectedTeam] = useState('');
   const [newTeamName, setNewTeamName] = useState('');
   const [additionalPlayers, setAdditionalPlayers] = useState<any[]>([]);
   const [submitting, setSubmitting] = useState(false);
+  const [isOrganizerOnly, setIsOrganizerOnly] = useState(false);
 
- 
-const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
-
-  // Handle payment success
-  useEffect(() => {
-    const paymentStatus = searchParams.get('payment');
-    if (paymentStatus === 'success') {
-      setShowSuccessMessage(true);
-      updatePaymentStatusToPaid();
-    }
-  }, [searchParams]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -58,7 +50,6 @@ const [showSuccessModal, setShowSuccessModal] = useState(false);
       .eq('event_id', parseInt(eventId));
 
     setRegistrations(regData || []);
-
     setLoading(false);
   };
 
@@ -66,48 +57,83 @@ const [showSuccessModal, setShowSuccessModal] = useState(false);
     fetchData();
   }, [eventId]);
 
+  // Handle payment success
+  useEffect(() => {
+    const paymentStatus = searchParams.get('payment');
+    if (paymentStatus === 'success') {
+      setShowSuccessMessage(true);
+      updatePaymentStatusToPaid();
+    }
+  }, [searchParams]);
 
-useEffect(() => {
-  const success = searchParams.get('success');
-  const registrationId = searchParams.get('registration_id');
-
-  if (success === 'addon' && registrationId) {
-    // Mark as paid (in case it didn't happen already)
-    const markAsPaid = async () => {
-      await supabase
-        .from('event_registrations')
-        .update({ paid_addons: true, checked_in: true })
-        .eq('id', registrationId);
-    };
-    markAsPaid();
-
-    // Show the nice dialog
-    setShowSuccessModal(true);
-
-    // Clean the URL
-    window.history.replaceState({}, document.title, window.location.pathname);
-  }
-}, [searchParams]);
-
-  // Update pending registrations to paid after successful payment
   const updatePaymentStatusToPaid = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     try {
-      const { error } = await supabase
+      await supabase
         .from('event_registrations')
-        .update({ paid: true })
+        .update({ paid: true, checked_in: true })
         .eq('event_id', parseInt(eventId))
         .eq('user_id', user.id)
         .eq('paid', false);
 
-      if (error) console.error("Failed to update paid status:", error);
-      else console.log("✅ Payment status updated to paid");
-
       await fetchData();
+      await sendRegistrationEmails();   // ← Sends emails to everyone
     } catch (err) {
       console.error("Error updating payment status:", err);
+    }
+  };
+
+  // ==================== SEND CONFIRMATION EMAILS ====================
+  const sendRegistrationEmails = async () => {
+    try {
+      const mainRegistrant = registrations.find(r => r.user_id && r.paid === true);
+      if (!mainRegistrant) return;
+
+      // Email to main registrant
+      await fetch('/api/send-registration-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: mainRegistrant.player_email,
+          name: mainRegistrant.player_name,
+          eventName: event.name,
+          eventDate: new Date(event.date).toLocaleDateString('en-US', { 
+            weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' 
+          }),
+          location: event.location,
+          course: event.course,
+          teamName: mainRegistrant.team_name || null,
+          isTeam: !isIndividual,
+          eventId: event.id,
+        }),
+      });
+
+      // Emails to additional teammates
+      const teammates = registrations.filter(r => !r.user_id && r.team_name === mainRegistrant.team_name);
+
+      for (const teammate of teammates) {
+        await fetch('/api/send-registration-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: teammate.player_email,
+            name: teammate.player_name,
+            eventName: event.name,
+            eventDate: new Date(event.date).toLocaleDateString('en-US', { 
+              weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' 
+            }),
+            location: event.location,
+            course: event.course,
+            teamName: teammate.team_name,
+            isTeam: true,
+            eventId: event.id,
+          }),
+        });
+      }
+    } catch (err) {
+      console.error("Failed to send registration emails:", err);
     }
   };
 
@@ -124,7 +150,9 @@ useEffect(() => {
     : event?.price || 0;
 
   const feePerPlayer = 3;
-  const totalPlayers = 1 + additionalPlayers.length;
+  const totalPlayers = isOrganizerOnly 
+    ? additionalPlayers.length 
+    : 1 + additionalPlayers.length;
   const totalCost = totalPlayers * (basePricePerPlayer + feePerPlayer);
 
   const existingTeams = Array.from(new Set(registrations.map(r => r.team_name).filter(Boolean)));
@@ -140,6 +168,11 @@ useEffect(() => {
     setAdditionalPlayers(updated);
   };
 
+  const removeExtraPlayer = (index: number) => {
+    const updated = additionalPlayers.filter((_, i) => i !== index);
+    setAdditionalPlayers(updated);
+  };
+
   const handleRegisterClick = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -147,6 +180,7 @@ useEffect(() => {
       return;
     }
     setShowRegisterModal(true);
+    setIsOrganizerOnly(false);
   };
 
   const handleRegister = async () => {
@@ -166,11 +200,12 @@ useEffect(() => {
     setSubmitting(true);
 
     try {
-      // 1. Create pending registration(s) first
       const mainInsert = {
         event_id: parseInt(eventId),
         user_id: user.id,
-        player_name: user.email?.split('@')[0] || 'Player',
+        player_name: isOrganizerOnly 
+          ? `${user.email?.split('@')[0] || 'Organizer'} (Organizer)` 
+          : user.email?.split('@')[0] || 'Player',
         player_email: user.email || '',
         team_name: finalTeamName || null,
         paid: false,
@@ -180,7 +215,6 @@ useEffect(() => {
 
       await supabase.from('event_registrations').insert(mainInsert);
 
-      // Additional players
       if (additionalPlayers.length > 0) {
         const inserts = additionalPlayers.map(p => ({
           event_id: parseInt(eventId),
@@ -196,7 +230,6 @@ useEffect(() => {
         await supabase.from('event_registrations').insert(inserts);
       }
 
-      // 2. Start Stripe checkout
       const response = await fetch('/api/create-checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -445,6 +478,28 @@ useEffect(() => {
                     </div>
                   </div>
 
+                  <div className="flex items-center gap-3 bg-gray-900 p-4 rounded-2xl">
+                    <input
+                      type="checkbox"
+                      id="organizer-only"
+                      checked={isOrganizerOnly}
+                      onChange={(e) => setIsOrganizerOnly(e.target.checked)}
+                      className="w-5 h-5 accent-blue-600"
+                    />
+                    <label htmlFor="organizer-only" className="text-sm cursor-pointer">
+                      I am not playing — just registering the team
+                    </label>
+                  </div>
+
+                  {!isOrganizerOnly && (
+                    <div className="bg-gray-900 p-5 rounded-2xl">
+                      <p className="text-sm text-gray-400 mb-2">You are registering as the first player</p>
+                      <p className="font-medium">
+                        {currentUser?.email?.split('@')[0] || 'You'}
+                      </p>
+                    </div>
+                  )}
+
                   {mode === 'join' && (
                     <div>
                       <label className="block text-sm text-gray-400 mb-2">Select Team</label>
@@ -488,29 +543,43 @@ useEffect(() => {
                     </div>
 
                     {additionalPlayers.map((player, index) => (
-                      <div key={index} className="bg-gray-900 p-5 rounded-2xl mb-4">
-                        <div className="grid grid-cols-2 gap-4">
+                      <div key={index} className="bg-gray-900 p-5 rounded-2xl mb-4 flex gap-4 items-end">
+                        <div className="flex-1">
                           <input
                             type="text"
                             value={player.name || ''}
                             onChange={(e) => updateExtraPlayer(index, 'name', e.target.value)}
                             placeholder="Player Name"
-                            className="bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
+                            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
                           />
+                        </div>
+                        <div className="flex-1">
                           <input
                             type="email"
                             value={player.email || ''}
                             onChange={(e) => updateExtraPlayer(index, 'email', e.target.value)}
                             placeholder="Email"
-                            className="bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
+                            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
                           />
                         </div>
+                        <button
+                          onClick={() => removeExtraPlayer(index)}
+                          className="w-10 h-10 flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-xl text-xl font-bold transition-colors"
+                        >
+                          −
+                        </button>
                       </div>
                     ))}
 
                     <button
-                      onClick={() => setAdditionalPlayers([...additionalPlayers, { name: '', email: '' }])}
-                      className="w-full py-4 border border-dashed border-gray-600 rounded-2xl text-gray-400 hover:text-white"
+                      onClick={() => {
+                        const maxAdditional = isOrganizerOnly ? maxTeamSize : maxTeamSize - 1;
+                        if (additionalPlayers.length < maxAdditional) {
+                          setAdditionalPlayers([...additionalPlayers, { name: '', email: '' }]);
+                        }
+                      }}
+                      disabled={additionalPlayers.length >= (isOrganizerOnly ? maxTeamSize : maxTeamSize - 1)}
+                      className="w-full py-4 border border-dashed border-gray-600 rounded-2xl text-gray-400 hover:text-white disabled:opacity-50"
                     >
                       + Add Another Player
                     </button>
@@ -543,52 +612,49 @@ useEffect(() => {
           </div>
         </div>
       )}
-    {/* ====================== ADD-ON PAYMENT SUCCESS MODAL ====================== */}
-{showSuccessModal && (
-  <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100]">
-    <div className="bg-gray-900 rounded-3xl p-10 max-w-md w-full mx-4 text-center">
-      <div className="mx-auto w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-6">
-        <span className="text-4xl">✅</span>
-      </div>
-      
-      <h2 className="text-3xl font-semibold mb-2">You are Checked In!</h2>
-      <p className="text-gray-400 mb-8">Your add-ons have been paid successfully.</p>
 
-      <div className="grid grid-cols-2 gap-4">
-        <button
-          onClick={() => {
-            setShowSuccessModal(false);
-            // TODO: Link to scoring tab when you build it
-            window.location.href = `/event/${eventId}#scoring`;
-          }}
-          className="bg-blue-600 hover:bg-blue-700 py-4 rounded-2xl font-medium"
-        >
-          Scorecard
-        </button>
-        
-        <button
-          onClick={() => {
-            setShowSuccessModal(false);
-            // TODO: Link to leaderboard tab when you build it
-            window.location.href = `/event/${eventId}#leaderboard`;
-          }}
-          className="bg-emerald-600 hover:bg-emerald-700 py-4 rounded-2xl font-medium"
-        >
-          Leaderboard
-        </button>
-      </div>
+      {/* Add-on Payment Success Modal */}
+      {showSuccessModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100]">
+          <div className="bg-gray-900 rounded-3xl p-10 max-w-md w-full mx-4 text-center">
+            <div className="mx-auto w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-6">
+              <span className="text-4xl">✅</span>
+            </div>
+            
+            <h2 className="text-3xl font-semibold mb-2">You are Checked In!</h2>
+            <p className="text-gray-400 mb-8">Your add-ons have been paid successfully.</p>
 
-      <button
-        onClick={() => setShowSuccessModal(false)}
-        className="mt-6 text-gray-400 hover:text-white text-sm"
-      >
-        Back to Event
-      </button>
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={() => {
+                  setShowSuccessModal(false);
+                  window.location.href = `/event/${eventId}#scoring`;
+                }}
+                className="bg-blue-600 hover:bg-blue-700 py-4 rounded-2xl font-medium"
+              >
+                Scorecard
+              </button>
+              
+              <button
+                onClick={() => {
+                  setShowSuccessModal(false);
+                  window.location.href = `/event/${eventId}#leaderboard`;
+                }}
+                className="bg-emerald-600 hover:bg-emerald-700 py-4 rounded-2xl font-medium"
+              >
+                Leaderboard
+              </button>
+            </div>
+
+            <button
+              onClick={() => setShowSuccessModal(false)}
+              className="mt-6 text-gray-400 hover:text-white text-sm"
+            >
+              Back to Event
+            </button>
+          </div>
+        </div>
+      )}
     </div>
-  </div>
-)}
-    </div>
-    
   );
-
 }

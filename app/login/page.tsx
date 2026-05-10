@@ -1,10 +1,12 @@
 'use client';
+export const dynamic = 'force-dynamic';
 
+import { Suspense } from 'react';
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
-export default function LoginPage() {
+function LoginContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -33,12 +35,9 @@ export default function LoginPage() {
       return;
     }
 
-    // Check if there was a redirect parameter (e.g., from clicking "Register")
     const redirectUrl = searchParams.get('redirect') || '/dashboard';
-
-    // Redirect to the original event or dashboard
     router.push(redirectUrl);
-    router.refresh();   // Ensures UI updates (important after auth)
+    router.refresh();
   };
 
   return (
@@ -86,5 +85,13 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-900 flex items-center justify-center">Loading...</div>}>
+      <LoginContent />
+    </Suspense>
   );
 }

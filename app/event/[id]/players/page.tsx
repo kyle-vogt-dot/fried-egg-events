@@ -11,12 +11,23 @@ export default function RegisteredPlayersPage() {
 
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);        // ← NEW
   const [loading, setLoading] = useState(true);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
+
+  // Get current user
+  useEffect(() => {
+    const getCurrentUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setCurrentUser(user);
+    };
+    getCurrentUser();
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -29,25 +40,35 @@ export default function RegisteredPlayersPage() {
 
       if (eventData) setEvent(eventData);
 
-      // Fetch registrations with new columns
-      const { data: regData, error } = await supabase
+      // Fetch registrations
+      const { data: regData } = await supabase
         .from('event_registrations')
         .select('*')
         .eq('event_id', parseInt(eventId))
         .order('created_at', { ascending: true });
 
-      if (error) {
-        console.error("Error fetching registrations:", error);
-      } else {
-        console.log("Fetched registrations:", regData);
-        setRegistrations(regData || []);
+      setRegistrations(regData || []);
+
+      // Check if current user has admin rights
+      if (currentUser && eventData) {
+        const isCreator = eventData.created_by === currentUser.id || eventData.user_id === currentUser.id;
+
+        // Check if user was added as admin (adjust table name if yours is different)
+        const { data: adminData } = await supabase
+          .from('event_admins')                    // ← Change this if your table name is different
+          .select('id')
+          .eq('event_id', parseInt(eventId))
+          .eq('user_id', currentUser.id)
+          .single();
+
+        setIsAdmin(isCreator || !!adminData);
       }
 
       setLoading(false);
     };
 
     fetchData();
-  }, [eventId]);
+  }, [eventId, currentUser]);
 
   if (loading) {
     return <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">Loading registered players...</div>;
@@ -80,12 +101,15 @@ export default function RegisteredPlayersPage() {
             <p className="text-gray-400">Registered Players ({registrations.length})</p>
           </div>
           
-          <button
-            onClick={() => router.push(`/event/${eventId}/admin`)}
-            className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-2xl font-medium"
-          >
-            Go to Full Admin
-          </button>
+          {/* Only visible to creator OR added admins */}
+          {isAdmin && (
+            <button
+              onClick={() => router.push(`/event/${eventId}/admin`)}
+              className="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-2xl font-medium"
+            >
+              Go to Full Admin
+            </button>
+          )}
         </div>
 
         {registrations.length === 0 ? (
