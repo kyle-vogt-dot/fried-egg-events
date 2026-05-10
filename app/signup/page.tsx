@@ -1,5 +1,4 @@
 'use client';
-
 export const dynamic = 'force-dynamic';
 
 import { useState } from 'react';
@@ -31,7 +30,6 @@ export default function SignupPage() {
       email,
       password,
       options: {
-        // This is where the confirmation email will redirect after clicking the link
         emailRedirectTo: `${window.location.origin}/login?redirect=${encodeURIComponent(redirect)}`,
       },
     });
@@ -46,17 +44,16 @@ export default function SignupPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white p-4">
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
         <div className="bg-gray-800 p-10 rounded-3xl w-full max-w-md text-center">
           <div className="text-6xl mb-6">📧</div>
-          <h1 className="text-3xl font-bold mb-4">Check your email!</h1>
+          <h2 className="text-3xl font-semibold mb-3">Check your email</h2>
           <p className="text-gray-400 mb-8">
-            We sent a confirmation link to <span className="font-medium text-white">{email}</span>.<br />
-            Click the link to finish creating your account.
+            We sent a confirmation link to <span className="font-medium text-white">{email}</span>
           </p>
           <button
             onClick={() => router.push('/login')}
-            className="w-full py-4 bg-blue-600 hover:bg-blue-700 rounded-2xl font-semibold transition-colors"
+            className="w-full py-4 bg-blue-600 hover:bg-blue-700 rounded-2xl font-semibold"
           >
             Go to Login
           </button>
@@ -66,7 +63,7 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white p-4">
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
       <div className="bg-gray-800 p-10 rounded-3xl w-full max-w-md">
         <h1 className="text-4xl font-bold mb-8 text-center">Create Account</h1>
 
@@ -79,7 +76,6 @@ export default function SignupPage() {
               onChange={(e) => setEmail(e.target.value)}
               required
               className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
-              placeholder="you@example.com"
             />
           </div>
 
@@ -91,11 +87,10 @@ export default function SignupPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
-              placeholder="••••••••"
             />
           </div>
 
-          {error && <p className="text-red-500 text-center text-sm">{error}</p>}
+          {error && <p className="text-red-500 text-center">{error}</p>}
 
           <button
             type="submit"
