@@ -184,7 +184,7 @@ export default function EventDetailPage() {
     setAdditionalPlayers([]);
   };
 
-  // ==================== FIXED handleRegister ====================
+  // ==================== FIXED handleRegister - Uses correct production URL ====================
   const handleRegister = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -202,6 +202,7 @@ export default function EventDetailPage() {
         return;
       }
 
+      // === INSERT REGISTRATIONS FIRST (same as before) ===
       if (isIndividual) {
         const mainInsert = {
           event_id: parseInt(eventId),
@@ -260,6 +261,9 @@ export default function EventDetailPage() {
         }
       }
 
+      // === FIXED CHECKOUT - Uses NEXT_PUBLIC_APP_URL ===
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+
       const response = await fetch('/api/create-checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -271,6 +275,9 @@ export default function EventDetailPage() {
           event_name: event.name,
           event_id: event.id,
           type: 'registration',
+          // ←←← This is the fix
+          success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration`,
+          cancel_url: `${baseUrl}/event/${eventId}`,
         }),
       });
 
