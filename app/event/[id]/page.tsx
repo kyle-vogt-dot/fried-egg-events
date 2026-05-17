@@ -184,7 +184,7 @@ export default function EventDetailPage() {
     setAdditionalPlayers([]);
   };
 
-  // ==================== FIXED handleRegister - Uses correct production URL ====================
+    // ==================== FIXED handleRegister - Mobile-friendly redirect ====================
   const handleRegister = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -202,7 +202,7 @@ export default function EventDetailPage() {
         return;
       }
 
-      // === INSERT REGISTRATIONS FIRST (same as before) ===
+      // Insert registrations first
       if (isIndividual) {
         const mainInsert = {
           event_id: parseInt(eventId),
@@ -261,7 +261,7 @@ export default function EventDetailPage() {
         }
       }
 
-      // === FIXED CHECKOUT - Uses NEXT_PUBLIC_APP_URL ===
+      // === FIXED: Use direct redirect instead of window.open (much more reliable on mobile) ===
       const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
 
       const response = await fetch('/api/create-checkout-session', {
@@ -275,7 +275,6 @@ export default function EventDetailPage() {
           event_name: event.name,
           event_id: event.id,
           type: 'registration',
-          // ←←← This is the fix
           success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration`,
           cancel_url: `${baseUrl}/event/${eventId}`,
         }),
@@ -284,9 +283,9 @@ export default function EventDetailPage() {
       const { url } = await response.json();
 
       if (url) {
-        window.open(url, '_blank');
+        // This is the key change for mobile
+        window.location.href = url;
         setShowRegisterModal(false);
-        await fetchData();
       } else {
         alert('Failed to create payment link');
       }
