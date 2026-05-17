@@ -79,19 +79,17 @@ export default function EventDetailPage() {
         .eq('paid', false);
 
       await fetchData();
-      await sendRegistrationEmails();   // ← Sends emails to everyone
+      await sendRegistrationEmails();
     } catch (err) {
       console.error("Error updating payment status:", err);
     }
   };
 
-  // ==================== SEND CONFIRMATION EMAILS ====================
   const sendRegistrationEmails = async () => {
     try {
       const mainRegistrant = registrations.find(r => r.user_id && r.paid === true);
       if (!mainRegistrant) return;
 
-      // Email to main registrant
       await fetch('/api/send-registration-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -110,7 +108,6 @@ export default function EventDetailPage() {
         }),
       });
 
-      // Emails to additional teammates
       const teammates = registrations.filter(r => !r.user_id && r.team_name === mainRegistrant.team_name);
 
       for (const teammate of teammates) {
@@ -181,8 +178,13 @@ export default function EventDetailPage() {
     }
     setShowRegisterModal(true);
     setIsOrganizerOnly(false);
+    setMode('');
+    setSelectedTeam('');
+    setNewTeamName('');
+    setAdditionalPlayers([]);
   };
 
+  // ==================== FIXED handleRegister ====================
   const handleRegister = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -190,44 +192,72 @@ export default function EventDetailPage() {
       return;
     }
 
-    const finalTeamName = mode === 'create' ? newTeamName : selectedTeam;
-
-    if (!isIndividual && !finalTeamName) {
-      alert("Please select or create a team name");
-      return;
-    }
-
     setSubmitting(true);
 
     try {
-      const mainInsert = {
-        event_id: parseInt(eventId),
-        user_id: user.id,
-        player_name: isOrganizerOnly 
-          ? `${user.email?.split('@')[0] || 'Organizer'} (Organizer)` 
-          : user.email?.split('@')[0] || 'Player',
-        player_email: user.email || '',
-        team_name: finalTeamName || null,
-        paid: false,
-        checked_in: false,
-        addons_selected: {}
-      };
+      const finalTeamName = mode === 'create' ? newTeamName : selectedTeam;
 
-      await supabase.from('event_registrations').insert(mainInsert);
+      if (!isIndividual && !finalTeamName) {
+        alert("Please select or create a team name");
+        return;
+      }
 
-      if (additionalPlayers.length > 0) {
-        const inserts = additionalPlayers.map(p => ({
+      if (isIndividual) {
+        const mainInsert = {
           event_id: parseInt(eventId),
-          user_id: null,
-          player_name: p.name,
-          player_email: p.email,
-          team_name: finalTeamName || null,
+          user_id: user.id,
+          player_name: user.email?.split('@')[0] || 'Player',
+          player_email: user.email || '',
+          team_name: null,
           paid: false,
           checked_in: false,
           addons_selected: {}
-        }));
+        };
+        await supabase.from('event_registrations').insert(mainInsert);
+      } 
+      else {
+        if (mode === 'join' && selectedTeam) {
+          const joinInsert = {
+            event_id: parseInt(eventId),
+            user_id: user.id,
+            player_name: user.email?.split('@')[0] || 'Player',
+            player_email: user.email || '',
+            team_name: selectedTeam,
+            paid: false,
+            checked_in: false,
+            addons_selected: {}
+          };
+          await supabase.from('event_registrations').insert(joinInsert);
+        } 
+        else if (mode === 'create' && newTeamName) {
+          if (!isOrganizerOnly) {
+            const mainInsert = {
+              event_id: parseInt(eventId),
+              user_id: user.id,
+              player_name: user.email?.split('@')[0] || 'Player',
+              player_email: user.email || '',
+              team_name: newTeamName,
+              paid: false,
+              checked_in: false,
+              addons_selected: {}
+            };
+            await supabase.from('event_registrations').insert(mainInsert);
+          }
+        }
 
-        await supabase.from('event_registrations').insert(inserts);
+        if (additionalPlayers.length > 0) {
+          const inserts = additionalPlayers.map(p => ({
+            event_id: parseInt(eventId),
+            user_id: null,
+            player_name: p.name,
+            player_email: p.email,
+            team_name: finalTeamName,
+            paid: false,
+            checked_in: false,
+            addons_selected: {}
+          }));
+          await supabase.from('event_registrations').insert(inserts);
+        }
       }
 
       const response = await fetch('/api/create-checkout-session', {
@@ -248,6 +278,8 @@ export default function EventDetailPage() {
 
       if (url) {
         window.open(url, '_blank');
+        setShowRegisterModal(false);
+        await fetchData();
       } else {
         alert('Failed to create payment link');
       }
@@ -436,7 +468,7 @@ export default function EventDetailPage() {
         </div>
       )}
 
-      {/* Registration Modal */}
+      {/* Registration Modal - Updated */}
       {showRegisterModal && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -491,10 +523,11 @@ export default function EventDetailPage() {
                     </label>
                   </div>
 
+                  {/* Prominent "You are playing" box */}
                   {!isOrganizerOnly && (
-                    <div className="bg-gray-900 p-5 rounded-2xl">
-                      <p className="text-sm text-gray-400 mb-2">You are registering as the first player</p>
-                      <p className="font-medium">
+                    <div className="bg-emerald-900/30 border border-emerald-500 p-5 rounded-2xl">
+                      <p className="text-sm text-emerald-400 mb-1">You are playing as the first player</p>
+                      <p className="font-medium text-white">
                         {currentUser?.email?.split('@')[0] || 'You'}
                       </p>
                     </div>
@@ -573,12 +606,26 @@ export default function EventDetailPage() {
 
                     <button
                       onClick={() => {
-                        const maxAdditional = isOrganizerOnly ? maxTeamSize : maxTeamSize - 1;
+                        let maxAdditional = maxTeamSize;
+                        if (mode === 'join' && selectedTeam) {
+                          const spotsLeft = getSpotsLeft(selectedTeam);
+                          maxAdditional = isOrganizerOnly ? spotsLeft : spotsLeft - 1;
+                        } else if (mode === 'create') {
+                          maxAdditional = isOrganizerOnly ? maxTeamSize : maxTeamSize - 1;
+                        }
+
                         if (additionalPlayers.length < maxAdditional) {
                           setAdditionalPlayers([...additionalPlayers, { name: '', email: '' }]);
                         }
                       }}
-                      disabled={additionalPlayers.length >= (isOrganizerOnly ? maxTeamSize : maxTeamSize - 1)}
+                      disabled={
+                        (mode === 'join' && !selectedTeam) ||
+                        (mode === 'create' && !newTeamName) ||
+                        additionalPlayers.length >= 
+                          (mode === 'join' && selectedTeam 
+                            ? (isOrganizerOnly ? getSpotsLeft(selectedTeam) : getSpotsLeft(selectedTeam) - 1)
+                            : (isOrganizerOnly ? maxTeamSize : maxTeamSize - 1))
+                      }
                       className="w-full py-4 border border-dashed border-gray-600 rounded-2xl text-gray-400 hover:text-white disabled:opacity-50"
                     >
                       + Add Another Player

@@ -17,15 +17,24 @@ export async function POST(request: NextRequest) {
       event_name, 
       event_id,
       type = 'addon_payment',
-      success_url,           // ← NEW: allow custom success URL from frontend
+      success_url,     // Custom success URL sent from frontend (preferred)
+      cancel_url,      // Optional custom cancel URL
     } = body;
 
     if (!amount || !email || !event_id) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
-    // Default success URL (for normal registrations)
-    const defaultSuccessUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/event/${event_id}?payment=success&type=${type}`;
+    // ←←← PRODUCTION URL PRIORITY ←←←
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL 
+      || process.env.NEXT_PUBLIC_SITE_URL 
+      || 'http://localhost:3000';
+
+    // Default success URL (used for normal registrations)
+    const defaultSuccessUrl = `${baseUrl}/event/${event_id}?payment=success&type=${type}`;
+
+    // Default cancel URL
+    const defaultCancelUrl = `${baseUrl}/event/${event_id}?payment=cancelled`;
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -43,9 +52,9 @@ export async function POST(request: NextRequest) {
           quantity: 1,
         },
       ],
-      // Use custom success_url if provided (for add-on payments), otherwise default
+      // Use custom success_url from frontend if provided (this is what fixes your issue)
       success_url: success_url || defaultSuccessUrl,
-      cancel_url: `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/event/${event_id}?payment=cancelled`,
+      cancel_url: cancel_url || defaultCancelUrl,
       metadata: {
         registration_id: registration_id || '',
         event_id,

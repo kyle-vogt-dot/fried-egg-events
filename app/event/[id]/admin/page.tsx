@@ -1,9 +1,12 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import ReactEasyCrop from 'react-easy-crop';
+import { QRCodeCanvas } from 'qrcode.react';
+import { Document, Page, Text, View, StyleSheet, PDFDownloadLink, Image } from '@react-pdf/renderer';
+
 
 export default function EventAdminPage() {
   const params = useParams();
@@ -22,7 +25,7 @@ export default function EventAdminPage() {
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
   const [addons, setAddons] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'manage' | 'checkin' | 'scoring' | 'leaderboard' | 'pairings' | 'income' | 'addons' | 'flights'>('manage');
+  const [activeTab, setActiveTab] = useState<'manage' | 'checkin' | 'scoring' | 'leaderboard' | 'scorecards' | 'pairings' | 'income' | 'addons' | 'flights'>('manage');
   const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -87,6 +90,31 @@ export default function EventAdminPage() {
     return flat;
   })();
 
+    // ====================== DERIVED TEAMS FOR SCORECARDS ======================
+  const teams = useMemo(() => {
+    if (!registrations || registrations.length === 0) return [];
+
+    const grouped = registrations
+      .filter((r: any) => r.checked_in) // only show checked-in teams/players
+      .reduce((acc: any, reg: any) => {
+        const teamName = (reg.team_name || reg.player_name || 'Solo Player').trim();
+        
+        if (!acc[teamName]) {
+          acc[teamName] = {
+            id: reg.id || `team-${teamName}`,
+            name: teamName,
+            players: [] as string[],
+          };
+        }
+        if (reg.player_name) {
+          acc[teamName].players.push(reg.player_name);
+        }
+        return acc;
+      }, {} as any);
+
+    return Object.values(grouped);
+  }, [registrations]);
+
   // ====================== FETCH DATA ======================
 
   // ====================== FETCH ADMINS ======================
@@ -132,6 +160,9 @@ export default function EventAdminPage() {
   };
 
   // ====================== HANDLERS ======================
+
+  
+
   const handleEventChange = (field: string, value: any) => {
     setEvent((prev: any) => ({ ...prev, [field]: value }));
   };
@@ -433,6 +464,9 @@ const savePlayerScores = async (registrationId: number) => {
   }
 };
 
+
+
+
   // ====================== COURSE SEARCH ======================
   const searchCourses = async (query: string) => {
     if (query.length < 3) {
@@ -490,8 +524,398 @@ const savePlayerScores = async (registrationId: number) => {
   return holes.length > 0 ? holes.slice(0, numHoles) : 
          Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
 };
-  
 
+
+                    // ====================== SCORECARD PDF COMPONENT (Shorter OTHER TEAM row) ======================
+  const ScorecardPDF = ({ team }: { team: any }) => {
+    const teamMembers = registrations
+      .filter((r: any) => r.checked_in && 
+        (r.team_name === team.name || r.player_name === team.name))
+      .map((r: any) => r.player_name || 'Player');
+
+    const numHoles = event?.number_of_holes || 18;
+    const holes = getHolesFromCourseData(event?.course_data, numHoles);
+
+    const frontHoles = holes.slice(0, 9);
+    const backHoles = holes.slice(9, 18);
+
+    const calculateSum = (holeList: any[], key: string) => 
+      holeList.reduce((sum: number, h: any) => sum + (Number(h?.[key]) || 0), 0);
+
+    const frontPar = calculateSum(frontHoles, 'par');
+    const frontYds = calculateSum(frontHoles, 'yardage');
+    const backPar = calculateSum(backHoles, 'par');
+    const backYds = calculateSum(backHoles, 'yardage');
+
+    return (
+      <Document>
+        <Page size="A4" orientation="landscape" style={styles.page}>
+          
+          <View style={styles.frontHalf}>
+
+            <View style={styles.topHeaderRow}>
+              <View style={styles.headerLeft}>
+                <Text style={styles.title}>{team.name}</Text>
+                <Text style={styles.subtitle}>
+                  {event?.course || 'Tournament'} • {numHoles} Holes
+                </Text>
+                <View style={styles.players}>
+                  {teamMembers.map((name, i) => (
+                    <Text key={i} style={styles.playerName}>{i + 1}. {name}</Text>
+                  ))}
+                </View>
+              </View>
+
+                          {/* REAL SCANNABLE QR CODE - Top Right */}
+            <View style={styles.qrContainer}>
+              <Image 
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
+                  `${window.location.origin}/event/${eventId}/live?team=${team.id}`
+                )}`} 
+                style={styles.qrImage} 
+              />
+            </View>
+            </View>
+
+            <View style={styles.scorecardTable}>
+              
+              <View style={styles.tableRow}>
+                <View style={styles.labelCell}><Text style={styles.tableLabel}>HOLE</Text></View>
+                {Array.from({ length: 9 }, (_, i) => (
+                  <View key={i} style={styles.holeCell}>
+                    <Text style={styles.holeNumber}>{i + 1}</Text>
+                  </View>
+                ))}
+                <View style={styles.summaryCell}><Text style={styles.summaryLabel}>OUT</Text></View>
+                {Array.from({ length: 9 }, (_, i) => (
+                  <View key={i} style={styles.holeCell}>
+                    <Text style={styles.holeNumber}>{i + 10}</Text>
+                  </View>
+                ))}
+                <View style={styles.summaryCell}><Text style={styles.summaryLabel}>IN</Text></View>
+                <View style={styles.totalCell}><Text style={styles.summaryLabel}>TOTAL</Text></View>
+              </View>
+
+              {/* PAR, YDS, HCP rows (unchanged) */}
+              <View style={styles.tableRow}>
+                <View style={styles.labelCell}><Text style={styles.tableLabel}>PAR</Text></View>
+                {frontHoles.map((hole: any, i: number) => <View key={i} style={styles.holeCell}><Text style={styles.dataText}>{hole?.par || 4}</Text></View>)}
+                <View style={styles.summaryCell}><Text style={styles.dataText}>{frontPar}</Text></View>
+                {backHoles.map((hole: any, i: number) => <View key={i} style={styles.holeCell}><Text style={styles.dataText}>{hole?.par || 4}</Text></View>)}
+                <View style={styles.summaryCell}><Text style={styles.dataText}>{backPar}</Text></View>
+                <View style={styles.totalCell}><Text style={styles.dataText}>{frontPar + backPar}</Text></View>
+              </View>
+
+              <View style={styles.tableRow}>
+                <View style={styles.labelCell}><Text style={styles.tableLabel}>YDS</Text></View>
+                {frontHoles.map((hole: any, i: number) => <View key={i} style={styles.holeCell}><Text style={styles.dataText}>{hole?.yardage || '-'}</Text></View>)}
+                <View style={styles.summaryCell}><Text style={styles.dataText}>{frontYds}</Text></View>
+                {backHoles.map((hole: any, i: number) => <View key={i} style={styles.holeCell}><Text style={styles.dataText}>{hole?.yardage || '-'}</Text></View>)}
+                <View style={styles.summaryCell}><Text style={styles.dataText}>{backYds}</Text></View>
+                <View style={styles.totalCell}><Text style={styles.dataText}>{frontYds + backYds}</Text></View>
+              </View>
+
+              <View style={styles.tableRow}>
+                <View style={styles.labelCell}><Text style={styles.tableLabel}>HCP</Text></View>
+                {frontHoles.map((hole: any, i: number) => <View key={i} style={styles.holeCell}><Text style={styles.dataText}>{hole?.handicap || '-'}</Text></View>)}
+                <View style={styles.summaryCell}><Text style={styles.dataText}> </Text></View>
+                {backHoles.map((hole: any, i: number) => <View key={i} style={styles.holeCell}><Text style={styles.dataText}>{hole?.handicap || '-'}</Text></View>)}
+                <View style={styles.summaryCell}><Text style={styles.dataText}> </Text></View>
+                <View style={styles.totalCell}><Text style={styles.dataText}> </Text></View>
+              </View>
+
+                            {/* YOUR SCORE - tall row */}
+              <View style={styles.scoreRow}>
+                <View style={styles.scoreLabelCell}>
+                  <Text style={styles.scoreLabel}>YOUR SCORE</Text>
+                </View>
+                {Array.from({ length: 9 }, (_, i) => (
+                  <View key={i} style={styles.scoreCell}>
+                    <Text style={styles.emptyScore}> </Text>
+                  </View>
+                ))}
+                <View style={styles.summaryCellScore}><Text style={styles.emptyScore}> </Text></View>
+                {Array.from({ length: 9 }, (_, i) => (
+                  <View key={i} style={styles.scoreCell}>
+                    <Text style={styles.emptyScore}> </Text>
+                  </View>
+                ))}
+                <View style={styles.summaryCellScore}><Text style={styles.emptyScore}> </Text></View>
+                <View style={styles.totalCellScore}><Text style={styles.emptyScore}> </Text></View>
+              </View>
+
+              {/* OTHER TEAM - much shorter */}
+              <View style={styles.otherTeamScoreRow}>
+                <View style={styles.otherTeamLabelCell}>
+                  <Text style={styles.scoreLabel}>OTHER TEAM</Text>
+                </View>
+                {Array.from({ length: 9 }, (_, i) => (
+                  <View key={i} style={styles.otherTeamScoreCell}>
+                    <Text style={styles.emptyScore}> </Text>
+                  </View>
+                ))}
+                <View style={styles.otherTeamSummaryCell}><Text style={styles.emptyScore}> </Text></View>
+                {Array.from({ length: 9 }, (_, i) => (
+                  <View key={i} style={styles.otherTeamScoreCell}>
+                    <Text style={styles.emptyScore}> </Text>
+                  </View>
+                ))}
+                <View style={styles.otherTeamSummaryCell}><Text style={styles.emptyScore}> </Text></View>
+                <View style={styles.otherTeamTotalCell}><Text style={styles.emptyScore}> </Text></View>
+              </View>
+
+            </View>
+
+          </View>
+
+          <View style={styles.backHalf}>
+            <View style={styles.backHeader}>
+              <Text style={styles.backTitle}>Tournament Rules &amp; Information</Text>
+            </View>
+            <Text style={styles.rulesText}>
+              {event?.rules || "• Play ready golf\n• Max score per hole is double par\n• Repair ball marks and rake bunkers\n• Please rake bunkers and fix ball marks"}
+            </Text>
+            
+            <Text style={styles.sponsorTitle}>Thank You To Our Sponsors</Text>
+            <View style={styles.sponsorArea}>
+              <Text style={{ fontSize: 14, textAlign: 'center', color: '#666', marginTop: 40 }}>
+                [Sponsor Logos Will Go Here]
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.footer}>Powered by Fried Egg Events • Printed {new Date().toLocaleDateString()}</Text>
+        </Page>
+      </Document>
+    );
+  };
+
+                // PDF Styles - OTHER TEAM row now much shorter
+  const styles = StyleSheet.create({
+    page: { 
+      padding: 25, 
+      backgroundColor: '#f8f8f8',
+      flexDirection: 'column',
+      justifyContent: 'space-between'
+    },
+
+    frontHalf: {
+      height: '54%',
+      borderBottom: '2px dashed #ccc',
+      paddingBottom: 15,
+    },
+
+    topHeaderRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      marginBottom: 8,
+    },
+    headerLeft: { flex: 1 },
+    title: { fontSize: 34, fontWeight: 'bold', color: '#111', marginBottom: 4 },
+    subtitle: { fontSize: 14, color: '#555' },
+    players: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
+    playerName: { fontSize: 13.5, color: '#222' },
+
+        qrContainer: { 
+      alignItems: 'flex-end', 
+      marginTop: -8 
+    },
+    qrImage: { 
+      width: 100, 
+      height: 100 
+    },
+
+    scorecardTable: {
+      border: '1px solid #333',
+      backgroundColor: '#fff',
+    },
+    tableRow: {
+      flexDirection: 'row',
+      borderBottom: '1px solid #ccc',
+    },
+    labelCell: {
+      width: 82,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#f1f1f1',
+      borderRight: '1px solid #333',
+      paddingVertical: 6,
+    },
+    tableLabel: {
+      fontSize: 9.5,
+      fontWeight: 'bold',
+      color: '#333',
+      textAlign: 'center',
+    },
+    holeCell: {
+      width: 37,
+      height: 36,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderRight: '1px solid #333',
+    },
+    holeNumber: { fontSize: 15, fontWeight: 'bold', color: '#111' },
+    dataText: { fontSize: 11.5, color: '#222' },
+
+    summaryCell: {
+      width: 52,
+      height: 36,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderRight: '1px solid #333',
+      backgroundColor: '#f1f1f1',
+    },
+    summaryLabel: {
+      fontSize: 9.5,
+      fontWeight: 'bold',
+      color: '#333',
+      textAlign: 'center',
+    },
+    totalCell: {
+      width: 58,
+      height: 36,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#f1f1f1',
+    },
+
+        /* Scoring rows */
+    scoreRow: {
+      flexDirection: 'row',
+      borderTop: '3px solid #333',
+    },
+    scoreLabelCell: {
+      width: 82,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#f1f1f1',
+      borderRight: '1px solid #333',
+      paddingVertical: 12,
+      minHeight: 54,
+    },
+    scoreLabel: {                    // ← this was causing the red underline
+      fontSize: 8.5,
+      fontWeight: 'bold',
+      color: '#333',
+      textAlign: 'center',
+    },
+    scoreCell: {
+      width: 37,
+      height: 54,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderRight: '1px solid #333',
+      backgroundColor: '#fafafa',
+    },
+    summaryCellScore: {
+      width: 52,
+      height: 54,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderRight: '1px solid #333',
+      backgroundColor: '#fafafa',
+    },
+    totalCellScore: {
+      width: 58,
+      height: 54,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#fafafa',
+    },
+    emptyScore: {
+      fontSize: 18,
+      color: '#ddd',
+    },
+
+    /* OTHER TEAM - shorter row */
+    otherTeamScoreRow: {
+      flexDirection: 'row',
+      borderTop: '2px solid #ccc',
+    },
+    otherTeamLabelCell: {
+      width: 82,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#f1f1f1',
+      borderRight: '1px solid #333',
+      paddingVertical: 8,
+      minHeight: 38,
+    },
+    otherTeamScoreCell: {
+      width: 37,
+      height: 38,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderRight: '1px solid #333',
+      backgroundColor: '#fafafa',
+    },
+    otherTeamSummaryCell: {
+      width: 52,
+      height: 38,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderRight: '1px solid #333',
+      backgroundColor: '#fafafa',
+    },
+    otherTeamTotalCell: {
+      width: 58,
+      height: 38,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#fafafa',
+    },
+
+    backHalf: {
+      height: '42%',
+      paddingTop: 15,
+    },
+    backHeader: { marginBottom: 10 },
+    backTitle: { fontSize: 20, fontWeight: 'bold', textAlign: 'center', color: '#111' },
+    rulesText: { 
+      fontSize: 10.5, 
+      lineHeight: 1.45, 
+      color: '#333',
+      marginBottom: 18 
+    },
+    sponsorTitle: { 
+      fontSize: 15, 
+      textAlign: 'center', 
+      marginBottom: 10,
+      color: '#222' 
+    },
+    sponsorArea: { 
+      height: 145, 
+      border: '2px dashed #ccc', 
+      justifyContent: 'center', 
+      alignItems: 'center',
+      backgroundColor: '#fff'
+    },
+
+    footer: { 
+      position: 'absolute', 
+      bottom: 12, 
+      left: 30, 
+      right: 30, 
+      textAlign: 'center', 
+      fontSize: 9, 
+      color: '#999' 
+    }
+  });
+
+   // ==================== GENERATE ALL SCORECARDS ====================
+  const generateAllScorecards = async () => {
+    try {
+      const teamCount = teams.length;
+      alert(`Generating scorecards for all ${teamCount} teams...`);
+      console.log("✅ All scorecards generation triggered for", teams);
+      
+      // TODO Phase 2: real multi-team PDF
+    } catch (error) {
+      console.error("Failed to generate all scorecards:", error);
+      alert("Error generating scorecards. Check console.");
+    }
+  };
   // ====================== RENDER ======================
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
@@ -507,7 +931,7 @@ const savePlayerScores = async (registrationId: number) => {
 
         {/* Tab Navigation */}
         <div className="flex gap-2 mb-8 border-b border-gray-700 pb-4 overflow-x-auto">
-          {(['manage', 'checkin', 'scoring', 'leaderboard', 'pairings', 'income', 'addons', 'flights'] as const).map((tab) => (
+          {(['manage', 'checkin', 'scoring', 'leaderboard', 'scorecards', 'pairings', 'income', 'addons', 'flights'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -519,6 +943,7 @@ const savePlayerScores = async (registrationId: number) => {
             </button>
           ))}
         </div>
+        
 
        {/* ====================== MANAGE TAB (Mobile-Friendly + All Original Fields) ====================== */}
 {activeTab === 'manage' && event && (
@@ -1566,6 +1991,74 @@ const savePlayerScores = async (registrationId: number) => {
             })()}
           </tbody>
         </table>
+      </div>
+    )}
+  </div>
+)}
+
+
+{/* ====================== SCORECARDS TAB (REAL PDF DOWNLOAD) ====================== */}
+{activeTab === 'scorecards' && (
+  <div className="space-y-6">
+    {/* Header with Generate All button */}
+    <div className="flex justify-between items-center">
+      <div>
+        <h2 className="text-2xl font-bold">Scorecards</h2>
+        <p className="text-gray-500">Download individual or all team scorecards as PDF</p>
+      </div>
+      
+      <button
+        onClick={generateAllScorecards}
+        className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium flex items-center gap-2 transition-colors"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2" />
+        </svg>
+        Generate All Scorecards
+      </button>
+    </div>
+
+    {/* Team Cards */}
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      {teams.map((team: any) => (
+        <div key={team.id} className="border border-gray-200 rounded-xl p-6 hover:shadow-md transition-shadow">
+          <div className="flex justify-between items-start mb-4">
+            <div>
+              <h3 className="font-semibold text-lg">{team.name}</h3>
+              <p className="text-sm text-gray-500">{team.players?.length || 0} players</p>
+            </div>
+            <div className="text-right">
+              <span className="inline-block px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
+                Team {team.id.slice(0,4)}
+              </span>
+            </div>
+          </div>
+
+          {/* QR Code Placeholder (will be real later) */}
+          <div className="bg-gray-100 border-2 border-dashed border-gray-300 rounded-lg h-32 flex items-center justify-center mb-4">
+            <div className="text-center">
+              <div className="text-4xl mb-1">📱</div>
+              <p className="text-xs text-gray-500">QR Code for Live Scoring</p>
+            </div>
+          </div>
+
+          {/* Download Button */}
+          <PDFDownloadLink
+            document={<ScorecardPDF team={team} />}
+            fileName={`${team.name.replace(/\s+/g, '-')}-scorecard.pdf`}
+            className="block w-full text-center bg-black hover:bg-gray-800 text-white py-3 rounded-lg font-medium transition-colors"
+          >
+            {({ loading }) => 
+              loading ? "Generating PDF..." : "📄 Download PDF Scorecard"
+            }
+          </PDFDownloadLink>
+        </div>
+      ))}
+    </div>
+
+    {teams.length === 0 && (
+      <div className="text-center py-12 text-gray-400">
+        No teams found. Add teams in the Manage tab.
       </div>
     )}
   </div>
