@@ -21,6 +21,7 @@ export default function LiveEventPage() {
   const [playerScores, setPlayerScores] = useState<Record<string, Record<number, number>>>({});
   const [activeTab, setActiveTab] = useState<'scorecard' | 'leaderboard'>('scorecard');
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -52,27 +53,59 @@ export default function LiveEventPage() {
   const updateScore = (playerId: number, hole: number, score: number) => {
     setPlayerScores(prev => ({
       ...prev,
-      [playerId]: {
-        ...(prev[playerId] || {}),
-        [hole]: score
-      }
+      [playerId]: { ...(prev[playerId] || {}), [hole]: score }
     }));
   };
 
-  const getTeamMembers = () => {
-    return registrations.filter(r => 
-      r.checked_in && 
-      (r.team_name === team?.name || String(r.id) === teamParam)
-    );
+  const getTeamMembers = () => registrations.filter(r => 
+    r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
+  );
+
+  const saveScores = async () => {
+    setSaving(true);
+    const teamMembers = getTeamMembers();
+    try {
+      const allScores: { registration_id: number; hole: number; score: number }[] = [];
+
+      for (const player of teamMembers) {
+        const scoresForPlayer = playerScores[player.id] || {};
+        Object.entries(scoresForPlayer).forEach(([hole, score]) => {
+          allScores.push({
+            registration_id: player.id,
+            hole: parseInt(hole),
+            score: score,
+          });
+        });
+      }
+
+      if (allScores.length === 0) {
+        alert("No scores to save");
+        return;
+      }
+
+      const { error } = await supabase
+        .from('scores')
+        .upsert(allScores, { onConflict: 'registration_id,hole' });
+
+      if (error) throw error;
+      alert("✅ Scores saved successfully!");
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to save scores");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const numHoles = event?.number_of_holes || 18;
+  const holes = event?.course_data?.holes || [];
 
   if (loading) return <div className="p-12 text-center text-xl">Loading live scorecard...</div>;
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-4 md:p-8">
       <div className="max-w-6xl mx-auto">
+        {/* Team Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-4xl font-bold">{team?.name || 'Live Scorecard'}</h1>
@@ -97,13 +130,12 @@ export default function LiveEventPage() {
           </button>
         </div>
 
-        {/* SCORECARD TAB - FIXED INPUTS */}
         {activeTab === 'scorecard' && (
           <div className="bg-gray-900 rounded-3xl p-6 overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-800">
-                  <th className="text-left py-5 px-6 font-medium">Player</th>
+                  <th className="text-left py-5 px-6 font-medium">HOLE</th>
                   {Array.from({ length: numHoles }, (_, i) => (
                     <th key={i} className="text-center py-5 px-3 font-bold text-sm">{i + 1}</th>
                   ))}
@@ -113,52 +145,89 @@ export default function LiveEventPage() {
                 </tr>
               </thead>
               <tbody>
-                {getTeamMembers().map((player: any) => {
-                  const scores = playerScores[player.id] || {};
-                  const frontTotal = Array.from({ length: 9 }, (_, i) => scores[i + 1] || 0).reduce((a, b) => a + b, 0);
-                  const backTotal = Array.from({ length: 9 }, (_, i) => scores[i + 10] || 0).reduce((a, b) => a + b, 0);
-                  const grandTotal = frontTotal + backTotal;
+                {/* PAR Row */}
+                <tr className="border-b border-gray-700">
+                  <td className="py-4 px-6 font-bold bg-gray-800 text-gray-300">PAR</td>
+                  {holes.slice(0, numHoles).map((hole: any, i: number) => (
+                    <td key={i} className="text-center py-4 font-medium">{hole?.par || 4}</td>
+                  ))}
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                </tr>
 
-                  return (
-                    <tr key={player.id} className="border-b border-gray-700 hover:bg-gray-800">
-                      <td className="py-5 px-6 font-medium">{player.player_name}</td>
-                      {Array.from({ length: numHoles }, (_, i) => {
-                        const hole = i + 1;
-                        return (
-                          <td key={hole} className="text-center">
-                            <input
-                              type="number"
-                              min="0"
-                              max="20"
-                              value={scores[hole] ?? ''}
-                              onChange={(e) => updateScore(player.id, hole, parseInt(e.target.value) || 0)}
-                              className="w-14 bg-gray-800 border border-gray-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-blue-500"
-                            />
-                          </td>
-                        );
-                      })}
-                      <td className="text-center font-bold text-emerald-400">{frontTotal || '-'}</td>
-                      <td className="text-center font-bold text-emerald-400">{backTotal || '-'}</td>
-                      <td className="text-center font-bold text-2xl text-white">{grandTotal || '-'}</td>
-                    </tr>
-                  );
-                })}
+                {/* YDS Row */}
+                <tr className="border-b border-gray-700">
+                  <td className="py-4 px-6 font-bold bg-gray-800 text-gray-300">YDS</td>
+                  {holes.slice(0, numHoles).map((hole: any, i: number) => (
+                    <td key={i} className="text-center py-4 text-sm">{hole?.yardage || '—'}</td>
+                  ))}
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                </tr>
+
+                {/* HCP Row */}
+                <tr className="border-b border-gray-700">
+                  <td className="py-4 px-6 font-bold bg-gray-800 text-gray-300">HCP</td>
+                  {holes.slice(0, numHoles).map((hole: any, i: number) => (
+                    <td key={i} className="text-center py-4 text-sm">{hole?.handicap || '—'}</td>
+                  ))}
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                </tr>
+
+                {/* YOUR SCORE Row */}
+                <tr className="border-b border-gray-700 bg-emerald-900/20">
+                  <td className="py-5 px-6 font-bold bg-emerald-900/30">YOUR SCORE</td>
+                  {Array.from({ length: numHoles }, (_, i) => {
+                    const hole = i + 1;
+                    const score = playerScores[team?.id]?.[hole] ?? '';
+                    return (
+                      <td key={hole} className="text-center">
+                        <input
+                          type="number"
+                          min="0"
+                          max="20"
+                          value={score}
+                          onChange={(e) => updateScore(team?.id || 0, hole, parseInt(e.target.value) || 0)}
+                          className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
+                        />
+                      </td>
+                    );
+                  })}
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                  <td className="text-center font-bold text-emerald-400">—</td>
+                  <td className="text-center font-bold text-2xl text-white">—</td>
+                </tr>
+
+                {/* OTHER TEAM Row */}
+                <tr className="border-b border-gray-700">
+                  <td className="py-4 px-6 font-bold bg-gray-800 text-gray-300">OTHER TEAM</td>
+                  {Array.from({ length: numHoles }, () => (
+                    <td key={Math.random()} className="text-center py-4 text-gray-400">—</td>
+                  ))}
+                  <td className="text-center font-bold text-gray-400">—</td>
+                  <td className="text-center font-bold text-gray-400">—</td>
+                  <td className="text-center font-bold text-gray-400">—</td>
+                </tr>
               </tbody>
             </table>
 
             <button
-              onClick={() => alert('Scores saved! (Supabase save coming in next step)')}
-              className="mt-8 w-full bg-green-600 hover:bg-green-700 py-5 rounded-3xl text-xl font-semibold"
+              onClick={saveScores}
+              disabled={saving}
+              className="mt-10 w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-6 rounded-3xl text-2xl font-semibold flex items-center justify-center gap-3"
             >
-              Save Scores
+              {saving ? 'Saving...' : '💾 Save All Scores'}
             </button>
           </div>
         )}
 
-        {/* LEADERBOARD TAB (placeholder for now) */}
         {activeTab === 'leaderboard' && (
-          <div className="bg-gray-900 rounded-3xl p-10 text-center text-gray-400">
-            Leaderboard coming in the next update (with flight filter)
+          <div className="bg-gray-900 rounded-3xl p-10 text-center text-gray-400 py-20">
+            Leaderboard tab coming next!
           </div>
         )}
       </div>

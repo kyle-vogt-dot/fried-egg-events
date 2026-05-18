@@ -25,7 +25,7 @@ export default function EventAdminPage() {
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
   const [addons, setAddons] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'manage' | 'checkin' | 'scoring' | 'leaderboard' | 'scorecards' | 'pairings' | 'income' | 'addons' | 'flights'>('manage');
+  const [activeTab, setActiveTab] = useState<'manage' | 'checkin' | 'scoring' | 'leaderboard' | 'scorecards' | 'pairings' | 'income'>('manage');
   const [saving, setSaving] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -566,15 +566,14 @@ const savePlayerScores = async (registrationId: number) => {
                 </View>
               </View>
 
-                          {/* REAL SCANNABLE QR CODE - Top Right */}
-            <View style={styles.qrContainer}>
-              <Image 
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
-                  `${window.location.origin}/event/${eventId}/live?team=${team.id}`
-                )}`} 
-                style={styles.qrImage} 
-              />
-            </View>
+                                       <View style={styles.qrContainer}>
+                <Image 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
+                    `${process.env.NEXT_PUBLIC_APP_URL || 'https://friedeggevents.app'}/event/${eventId}/live?team=${team.id}`
+                  )}`} 
+                  style={styles.qrImage} 
+                />
+              </View>
             </View>
 
             <View style={styles.scorecardTable}>
@@ -709,7 +708,7 @@ const savePlayerScores = async (registrationId: number) => {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'flex-start',
-      marginBottom: 8,
+      marginBottom: 18,
     },
     headerLeft: { flex: 1 },
     title: { fontSize: 34, fontWeight: 'bold', color: '#111', marginBottom: 4 },
@@ -717,13 +716,13 @@ const savePlayerScores = async (registrationId: number) => {
     players: { marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', gap: 14 },
     playerName: { fontSize: 13.5, color: '#222' },
 
-        qrContainer: { 
+            qrContainer: { 
       alignItems: 'flex-end', 
-      marginTop: -8 
+      marginTop: -20   // raised higher
     },
     qrImage: { 
-      width: 100, 
-      height: 100 
+      width: 88, 
+      height: 88     // made smaller
     },
 
     scorecardTable: {
@@ -931,7 +930,7 @@ const savePlayerScores = async (registrationId: number) => {
 
         {/* Tab Navigation */}
         <div className="flex gap-2 mb-8 border-b border-gray-700 pb-4 overflow-x-auto">
-          {(['manage', 'checkin', 'scoring', 'leaderboard', 'scorecards', 'pairings', 'income', 'addons', 'flights'] as const).map((tab) => (
+          {(['manage', 'checkin', 'scoring', 'leaderboard', 'scorecards', 'pairings', 'income', ] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
