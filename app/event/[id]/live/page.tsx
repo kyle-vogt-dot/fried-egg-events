@@ -69,9 +69,9 @@ export default function LiveEventPage() {
     if (courseData.holes && Array.isArray(courseData.holes)) holes = courseData.holes;
     else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) holes = courseData.course.holes;
     else if (courseData.tees) {
-      const allTees = Object.values(courseData.tees).flat();
-      const firstTee = allTees[0];
-      if ((firstTee as any)?.holes && Array.isArray((firstTee as any).holes)) holes = (firstTee as any).holes;
+      const allTees: any[] = Object.values(courseData.tees).flat();
+      const firstTee: any = allTees[0];
+      if (firstTee && Array.isArray(firstTee.holes)) holes = firstTee.holes;
     }
 
     return holes.length > 0 ? holes.slice(0, 18) : Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
@@ -80,7 +80,7 @@ export default function LiveEventPage() {
   const holes = useMemo(() => getHolesFromCourseData(event?.course_data), [event?.course_data]);
   const numHoles = event?.number_of_holes || 18;
 
-  // Calculate totals
+  // Live totals calculation
   const frontHoles = holes.slice(0, 9);
   const backHoles = holes.slice(9, 18);
 
@@ -89,16 +89,27 @@ export default function LiveEventPage() {
   const frontYds = frontHoles.reduce((sum, h) => sum + (h?.yardage || 0), 0);
   const backYds = backHoles.reduce((sum, h) => sum + (h?.yardage || 0), 0);
 
+  const teamId = team?.id || 'team';
+  const currentScores = playerScores[teamId] || {};
+
+  const frontScore = Array.from({ length: 9 }, (_, i) => currentScores[i + 1] || 0).reduce((a, b) => a + b, 0);
+  const backScore = Array.from({ length: 9 }, (_, i) => currentScores[i + 10] || 0).reduce((a, b) => a + b, 0);
+  const totalScore = frontScore + backScore;
+
   const saveScores = async () => {
     setSaving(true);
     const teamMembers = getTeamMembers();
     try {
-      const allScores: { registration_id: number; hole: number; score: number }[] = [];
+      const allScores: any[] = [];
 
       for (const player of teamMembers) {
         const scoresForPlayer = playerScores[player.id] || {};
         Object.entries(scoresForPlayer).forEach(([hole, score]) => {
-          allScores.push({ registration_id: player.id, hole: parseInt(hole), score });
+          allScores.push({
+            registration_id: player.id,
+            hole: parseInt(hole),
+            score: score,
+          });
         });
       }
 
@@ -181,7 +192,7 @@ export default function LiveEventPage() {
                   <td className="text-center font-bold text-emerald-400">—</td>
                 </tr>
 
-                {/* YOUR SCORE (Team Name) */}
+                {/* TEAM SCORE ROW */}
                 <tr className="border-b border-gray-700 bg-emerald-900/20">
                   <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name}</td>
                   {Array.from({ length: numHoles }, (_, i) => {
@@ -200,9 +211,9 @@ export default function LiveEventPage() {
                       </td>
                     );
                   })}
-                  <td className="text-center font-bold text-emerald-400">—</td>
-                  <td className="text-center font-bold text-emerald-400">—</td>
-                  <td className="text-center font-bold text-2xl text-white">—</td>
+                  <td className="text-center font-bold text-emerald-400">{frontScore}</td>
+                  <td className="text-center font-bold text-emerald-400">{backScore}</td>
+                  <td className="text-center font-bold text-2xl text-white">{totalScore}</td>
                 </tr>
               </tbody>
             </table>
@@ -219,7 +230,7 @@ export default function LiveEventPage() {
 
         {activeTab === 'leaderboard' && (
           <div className="bg-gray-900 rounded-3xl p-10 text-center text-gray-400 py-20">
-            Leaderboard coming next!
+            Leaderboard tab coming next!
           </div>
         )}
       </div>
