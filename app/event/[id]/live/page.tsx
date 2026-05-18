@@ -61,6 +61,24 @@ export default function LiveEventPage() {
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
   );
 
+  // Robust course data extraction (same as PDF)
+  const getHolesFromCourseData = (courseData: any) => {
+    if (!courseData) return Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+
+    let holes: any[] = [];
+
+    if (courseData.holes && Array.isArray(courseData.holes)) {
+      holes = courseData.holes;
+    } else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) {
+      holes = courseData.course.holes;
+    }
+
+    return holes.length > 0 ? holes : Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+  };
+
+  const holes = getHolesFromCourseData(event?.course_data);
+  const numHoles = event?.number_of_holes || 18;
+
   const saveScores = async () => {
     setSaving(true);
     const teamMembers = getTeamMembers();
@@ -97,15 +115,11 @@ export default function LiveEventPage() {
     }
   };
 
-  const numHoles = event?.number_of_holes || 18;
-  const holes = event?.course_data?.holes || [];
-
   if (loading) return <div className="p-12 text-center text-xl">Loading live scorecard...</div>;
 
   return (
     <div className="min-h-screen bg-gray-950 text-white p-4 md:p-8">
       <div className="max-w-6xl mx-auto">
-        {/* Team Header */}
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-4xl font-bold">{team?.name || 'Live Scorecard'}</h1>
@@ -114,7 +128,6 @@ export default function LiveEventPage() {
           <div className="text-sm bg-green-600 px-6 py-3 rounded-3xl">LIVE</div>
         </div>
 
-        {/* Tabs */}
         <div className="flex border-b border-gray-700 mb-8">
           <button
             onClick={() => setActiveTab('scorecard')}
@@ -178,7 +191,7 @@ export default function LiveEventPage() {
                   <td className="text-center font-bold text-emerald-400">—</td>
                 </tr>
 
-                {/* YOUR SCORE Row */}
+                {/* YOUR SCORE Row - only row now */}
                 <tr className="border-b border-gray-700 bg-emerald-900/20">
                   <td className="py-5 px-6 font-bold bg-emerald-900/30">YOUR SCORE</td>
                   {Array.from({ length: numHoles }, (_, i) => {
@@ -200,17 +213,6 @@ export default function LiveEventPage() {
                   <td className="text-center font-bold text-emerald-400">—</td>
                   <td className="text-center font-bold text-emerald-400">—</td>
                   <td className="text-center font-bold text-2xl text-white">—</td>
-                </tr>
-
-                {/* OTHER TEAM Row */}
-                <tr className="border-b border-gray-700">
-                  <td className="py-4 px-6 font-bold bg-gray-800 text-gray-300">OTHER TEAM</td>
-                  {Array.from({ length: numHoles }, () => (
-                    <td key={Math.random()} className="text-center py-4 text-gray-400">—</td>
-                  ))}
-                  <td className="text-center font-bold text-gray-400">—</td>
-                  <td className="text-center font-bold text-gray-400">—</td>
-                  <td className="text-center font-bold text-gray-400">—</td>
                 </tr>
               </tbody>
             </table>
