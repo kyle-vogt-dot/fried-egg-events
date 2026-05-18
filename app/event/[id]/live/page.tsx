@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
@@ -61,22 +61,37 @@ export default function LiveEventPage() {
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
   );
 
-  // Robust course data extraction (same as PDF)
+    // Robust course data extraction - Fixed TypeScript issues
   const getHolesFromCourseData = (courseData: any) => {
-    if (!courseData) return Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+    if (!courseData) {
+      return Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+    }
 
     let holes: any[] = [];
 
     if (courseData.holes && Array.isArray(courseData.holes)) {
       holes = courseData.holes;
-    } else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) {
+    } 
+    else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) {
       holes = courseData.course.holes;
+    } 
+    else if (courseData.tees) {
+      const allTees = Object.values(courseData.tees).flat();
+      const firstTee = allTees[0];
+      
+      // firstTee can be an arbitrary object; cast to any to avoid TS errors
+      if (firstTee && (firstTee as any).holes && Array.isArray((firstTee as any).holes)) {
+        holes = (firstTee as any).holes;
+      }
     }
 
-    return holes.length > 0 ? holes : Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+    return holes.length > 0 
+      ? holes.slice(0, 18) 
+      : Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
   };
 
-  const holes = getHolesFromCourseData(event?.course_data);
+  // Use useMemo to fix red underline and make it reactive
+  const holes = useMemo(() => getHolesFromCourseData(event?.course_data), [event?.course_data]);
   const numHoles = event?.number_of_holes || 18;
 
   const saveScores = async () => {
@@ -191,9 +206,9 @@ export default function LiveEventPage() {
                   <td className="text-center font-bold text-emerald-400">—</td>
                 </tr>
 
-                {/* YOUR SCORE Row - only row now */}
+                {/* TEAM SCORE ROW */}
                 <tr className="border-b border-gray-700 bg-emerald-900/20">
-                  <td className="py-5 px-6 font-bold bg-emerald-900/30">YOUR SCORE</td>
+                  <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name || 'YOUR SCORE'}</td>
                   {Array.from({ length: numHoles }, (_, i) => {
                     const hole = i + 1;
                     const score = playerScores[team?.id]?.[hole] ?? '';
