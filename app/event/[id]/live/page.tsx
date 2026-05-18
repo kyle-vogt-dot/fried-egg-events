@@ -61,38 +61,33 @@ export default function LiveEventPage() {
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
   );
 
-    // Robust course data extraction - Fixed TypeScript issues
-  const getHolesFromCourseData = (courseData: any) => {
-    if (!courseData) {
-      return Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
-    }
+  const getHolesFromCourseData = (courseData: any): any[] => {
+    if (!courseData) return Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
 
     let holes: any[] = [];
 
-    if (courseData.holes && Array.isArray(courseData.holes)) {
-      holes = courseData.holes;
-    } 
-    else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) {
-      holes = courseData.course.holes;
-    } 
+    if (courseData.holes && Array.isArray(courseData.holes)) holes = courseData.holes;
+    else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) holes = courseData.course.holes;
     else if (courseData.tees) {
       const allTees = Object.values(courseData.tees).flat();
       const firstTee = allTees[0];
-      
-      // firstTee can be an arbitrary object; cast to any to avoid TS errors
-      if (firstTee && (firstTee as any).holes && Array.isArray((firstTee as any).holes)) {
-        holes = (firstTee as any).holes;
-      }
+      if ((firstTee as any)?.holes && Array.isArray((firstTee as any).holes)) holes = (firstTee as any).holes;
     }
 
-    return holes.length > 0 
-      ? holes.slice(0, 18) 
-      : Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+    return holes.length > 0 ? holes.slice(0, 18) : Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
   };
 
-  // Use useMemo to fix red underline and make it reactive
   const holes = useMemo(() => getHolesFromCourseData(event?.course_data), [event?.course_data]);
   const numHoles = event?.number_of_holes || 18;
+
+  // Calculate totals
+  const frontHoles = holes.slice(0, 9);
+  const backHoles = holes.slice(9, 18);
+
+  const frontPar = frontHoles.reduce((sum, h) => sum + (h?.par || 4), 0);
+  const backPar = backHoles.reduce((sum, h) => sum + (h?.par || 4), 0);
+  const frontYds = frontHoles.reduce((sum, h) => sum + (h?.yardage || 0), 0);
+  const backYds = backHoles.reduce((sum, h) => sum + (h?.yardage || 0), 0);
 
   const saveScores = async () => {
     setSaving(true);
@@ -103,11 +98,7 @@ export default function LiveEventPage() {
       for (const player of teamMembers) {
         const scoresForPlayer = playerScores[player.id] || {};
         Object.entries(scoresForPlayer).forEach(([hole, score]) => {
-          allScores.push({
-            registration_id: player.id,
-            hole: parseInt(hole),
-            score: score,
-          });
+          allScores.push({ registration_id: player.id, hole: parseInt(hole), score });
         });
       }
 
@@ -116,11 +107,9 @@ export default function LiveEventPage() {
         return;
       }
 
-      const { error } = await supabase
-        .from('scores')
-        .upsert(allScores, { onConflict: 'registration_id,hole' });
-
+      const { error } = await supabase.from('scores').upsert(allScores, { onConflict: 'registration_id,hole' });
       if (error) throw error;
+
       alert("✅ Scores saved successfully!");
     } catch (err: any) {
       console.error(err);
@@ -137,25 +126,15 @@ export default function LiveEventPage() {
       <div className="max-w-6xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <div>
-            <h1 className="text-4xl font-bold">{team?.name || 'Live Scorecard'}</h1>
+            <h1 className="text-4xl font-bold">{team?.name}</h1>
             <p className="text-gray-400">{event?.course || 'Tournament'} • {numHoles} Holes</p>
           </div>
           <div className="text-sm bg-green-600 px-6 py-3 rounded-3xl">LIVE</div>
         </div>
 
         <div className="flex border-b border-gray-700 mb-8">
-          <button
-            onClick={() => setActiveTab('scorecard')}
-            className={`flex-1 md:flex-none px-8 py-4 text-lg font-medium ${activeTab === 'scorecard' ? 'border-b-4 border-blue-500 text-white' : 'text-gray-400'}`}
-          >
-            My Scorecard
-          </button>
-          <button
-            onClick={() => setActiveTab('leaderboard')}
-            className={`flex-1 md:flex-none px-8 py-4 text-lg font-medium ${activeTab === 'leaderboard' ? 'border-b-4 border-blue-500 text-white' : 'text-gray-400'}`}
-          >
-            Leaderboard
-          </button>
+          <button onClick={() => setActiveTab('scorecard')} className={`flex-1 md:flex-none px-8 py-4 text-lg font-medium ${activeTab === 'scorecard' ? 'border-b-4 border-blue-500 text-white' : 'text-gray-400'}`}>My Scorecard</button>
+          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 md:flex-none px-8 py-4 text-lg font-medium ${activeTab === 'leaderboard' ? 'border-b-4 border-blue-500 text-white' : 'text-gray-400'}`}>Leaderboard</button>
         </div>
 
         {activeTab === 'scorecard' && (
@@ -164,51 +143,47 @@ export default function LiveEventPage() {
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-800">
                   <th className="text-left py-5 px-6 font-medium">HOLE</th>
-                  {Array.from({ length: numHoles }, (_, i) => (
-                    <th key={i} className="text-center py-5 px-3 font-bold text-sm">{i + 1}</th>
-                  ))}
-                  <th className="text-center py-5 px-6 font-bold">OUT</th>
-                  <th className="text-center py-5 px-6 font-bold">IN</th>
-                  <th className="text-center py-5 px-6 font-bold">TOTAL</th>
+                  {Array.from({ length: 9 }, (_, i) => <th key={i} className="text-center py-5 px-3 font-bold text-sm">{i+1}</th>)}
+                  <th className="text-center py-5 px-6 font-bold bg-gray-700">OUT</th>
+                  {Array.from({ length: 9 }, (_, i) => <th key={i} className="text-center py-5 px-3 font-bold text-sm">{i+10}</th>)}
+                  <th className="text-center py-5 px-6 font-bold bg-gray-700">IN</th>
+                  <th className="text-center py-5 px-6 font-bold bg-gray-700">TOTAL</th>
                 </tr>
               </thead>
               <tbody>
-                {/* PAR Row */}
+                {/* PAR */}
                 <tr className="border-b border-gray-700">
                   <td className="py-4 px-6 font-bold bg-gray-800 text-gray-300">PAR</td>
-                  {holes.slice(0, numHoles).map((hole: any, i: number) => (
-                    <td key={i} className="text-center py-4 font-medium">{hole?.par || 4}</td>
-                  ))}
-                  <td className="text-center font-bold text-emerald-400">—</td>
-                  <td className="text-center font-bold text-emerald-400">—</td>
-                  <td className="text-center font-bold text-emerald-400">—</td>
+                  {holes.slice(0,9).map((h,i) => <td key={i} className="text-center py-4">{h?.par||4}</td>)}
+                  <td className="text-center font-bold text-emerald-400">{frontPar}</td>
+                  {holes.slice(9,18).map((h,i) => <td key={i} className="text-center py-4">{h?.par||4}</td>)}
+                  <td className="text-center font-bold text-emerald-400">{backPar}</td>
+                  <td className="text-center font-bold text-emerald-400">{frontPar + backPar}</td>
                 </tr>
 
-                {/* YDS Row */}
+                {/* YDS */}
                 <tr className="border-b border-gray-700">
                   <td className="py-4 px-6 font-bold bg-gray-800 text-gray-300">YDS</td>
-                  {holes.slice(0, numHoles).map((hole: any, i: number) => (
-                    <td key={i} className="text-center py-4 text-sm">{hole?.yardage || '—'}</td>
-                  ))}
-                  <td className="text-center font-bold text-emerald-400">—</td>
-                  <td className="text-center font-bold text-emerald-400">—</td>
-                  <td className="text-center font-bold text-emerald-400">—</td>
+                  {holes.slice(0,9).map((h,i) => <td key={i} className="text-center py-4 text-sm">{h?.yardage||'—'}</td>)}
+                  <td className="text-center font-bold text-emerald-400">{frontYds}</td>
+                  {holes.slice(9,18).map((h,i) => <td key={i} className="text-center py-4 text-sm">{h?.yardage||'—'}</td>)}
+                  <td className="text-center font-bold text-emerald-400">{backYds}</td>
+                  <td className="text-center font-bold text-emerald-400">{frontYds + backYds}</td>
                 </tr>
 
-                {/* HCP Row */}
+                {/* HCP */}
                 <tr className="border-b border-gray-700">
                   <td className="py-4 px-6 font-bold bg-gray-800 text-gray-300">HCP</td>
-                  {holes.slice(0, numHoles).map((hole: any, i: number) => (
-                    <td key={i} className="text-center py-4 text-sm">{hole?.handicap || '—'}</td>
-                  ))}
+                  {holes.slice(0,9).map((h,i) => <td key={i} className="text-center py-4 text-sm">{h?.handicap||'—'}</td>)}
                   <td className="text-center font-bold text-emerald-400">—</td>
+                  {holes.slice(9,18).map((h,i) => <td key={i} className="text-center py-4 text-sm">{h?.handicap||'—'}</td>)}
                   <td className="text-center font-bold text-emerald-400">—</td>
                   <td className="text-center font-bold text-emerald-400">—</td>
                 </tr>
 
-                {/* TEAM SCORE ROW */}
+                {/* YOUR SCORE (Team Name) */}
                 <tr className="border-b border-gray-700 bg-emerald-900/20">
-                  <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name || 'YOUR SCORE'}</td>
+                  <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name}</td>
                   {Array.from({ length: numHoles }, (_, i) => {
                     const hole = i + 1;
                     const score = playerScores[team?.id]?.[hole] ?? '';
@@ -235,7 +210,7 @@ export default function LiveEventPage() {
             <button
               onClick={saveScores}
               disabled={saving}
-              className="mt-10 w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-6 rounded-3xl text-2xl font-semibold flex items-center justify-center gap-3"
+              className="mt-10 w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-6 rounded-3xl text-2xl font-semibold"
             >
               {saving ? 'Saving...' : '💾 Save All Scores'}
             </button>
@@ -244,7 +219,7 @@ export default function LiveEventPage() {
 
         {activeTab === 'leaderboard' && (
           <div className="bg-gray-900 rounded-3xl p-10 text-center text-gray-400 py-20">
-            Leaderboard tab coming next!
+            Leaderboard coming next!
           </div>
         )}
       </div>
