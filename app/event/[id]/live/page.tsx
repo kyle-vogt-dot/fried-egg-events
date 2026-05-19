@@ -69,9 +69,9 @@ export default function LiveEventPage() {
     if (courseData.holes && Array.isArray(courseData.holes)) holes = courseData.holes;
     else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) holes = courseData.course.holes;
     else if (courseData.tees) {
-      const allTees: any[] = Object.values(courseData.tees).flat();
-      const firstTee: any = allTees[0];
-      if (firstTee && Array.isArray(firstTee.holes)) holes = firstTee.holes;
+      const allTees = Object.values(courseData.tees).flat();
+      const firstTee = allTees[0] as any;
+      if (firstTee?.holes && Array.isArray(firstTee.holes)) holes = firstTee.holes;
     }
 
     return holes.length > 0 ? holes.slice(0, 18) : Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
@@ -80,7 +80,6 @@ export default function LiveEventPage() {
   const holes = useMemo(() => getHolesFromCourseData(event?.course_data), [event?.course_data]);
   const numHoles = event?.number_of_holes || 18;
 
-  // Live totals calculation
   const frontHoles = holes.slice(0, 9);
   const backHoles = holes.slice(9, 18);
 
@@ -135,6 +134,7 @@ export default function LiveEventPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-white p-4 md:p-8">
       <div className="max-w-6xl mx-auto">
+        {/* Team Name at Top */}
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-4xl font-bold">{team?.name}</h1>
@@ -192,7 +192,7 @@ export default function LiveEventPage() {
                   <td className="text-center font-bold text-emerald-400">—</td>
                 </tr>
 
-                {/* TEAM SCORE ROW */}
+                {/* YOUR SCORE ROW */}
                 <tr className="border-b border-gray-700 bg-emerald-900/20">
                   <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name}</td>
                   {Array.from({ length: numHoles }, (_, i) => {

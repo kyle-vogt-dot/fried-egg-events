@@ -303,9 +303,9 @@ const handlePaidCash = async () => {
   if (error) {
     alert("Error marking add-ons as paid: " + error.message);
   } else {
-    alert(`${currentPayReg.player_name} add-ons marked as paid cash and checked in.`);
+    alert(`${currentPayReg.player_name} add-ons marked as paid and checked in.`);
     setShowPaymentModal(false);
-    fetchRegistrations();
+    await fetchRegistrations();   // ← Force refresh the table
   }
 };
 
@@ -1466,19 +1466,19 @@ const savePlayerScores = async (registrationId: number) => {
                           </button>
                         ) : (
                           <button 
-                            onClick={async () => {
-                              if (isCheckedIn) {
-                                if (!confirm(`Un-check in ${reg.player_name}?`)) return;
-                                await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
-                              } else {
-                                await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
-                              }
-                              fetchRegistrations();
-                            }} 
-                            className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
-                          >
-                            {isCheckedIn ? '✓ Checked In' : 'Check In'}
-                          </button>
+  onClick={async () => {
+    if (isCheckedIn) {
+      if (!confirm(`Un-check in ${reg.player_name}?`)) return;
+      await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
+    } else {
+      await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
+    }
+    fetchRegistrations();   // ← This forces a fresh reload
+  }} 
+  className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
+>
+  {isCheckedIn ? '✓ Checked In' : 'Check In'}
+</button>
                         )}
 
                         <div className="flex gap-2">
