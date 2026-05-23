@@ -1568,7 +1568,7 @@ const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
                       );
                     })}
 
-                                        <td className="py-2 px-6 text-center">
+                                                            <td className="py-2 px-6 text-center">
                       <div className="flex flex-wrap gap-3 justify-center">
                         {addonCost > 0 && !isPaidForAddons ? (
                           <button 
