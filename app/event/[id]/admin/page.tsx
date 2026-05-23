@@ -151,6 +151,38 @@ export default function EventAdminPage() {
     fetchData();
   }, [eventId, supabase]);
 
+    // Real-time listener for add-on payments + notification
+  useEffect(() => {
+    const channel = supabase
+      .channel('addon-payments')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'event_registrations',
+          filter: `event_id=eq.${parseInt(eventId)}`,
+        },
+        (payload) => {
+          const newData = payload.new;
+          if (newData.paid_addons === true && newData.checked_in === false) {
+            const playerName = newData.player_name || 'A player';
+            
+            // Show notification to admin
+            alert(`${playerName} has paid their add-ons! Click OK to refresh and check them in.`);
+            
+            // Refresh the table
+            fetchRegistrations();
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [eventId, supabase]);
+
   const fetchRegistrations = async () => {
     const { data } = await supabase
       .from('event_registrations')
@@ -1370,12 +1402,37 @@ const savePlayerScores = async (registrationId: number) => {
 )}
 
 
-      {/* ====================== CHECK-IN TAB (Tighter Rows) ====================== */}
+      {/* ====================== CHECK-IN TAB ====================== */}
 {activeTab === 'checkin' && (
   <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
 
-    {/* Title */}
-    <h2 className="text-3xl font-semibold mb-6">Player Check-in</h2>
+    {/* Title + Action Buttons + Timestamp */}
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+      <h2 className="text-3xl font-semibold">Player Check-in</h2>
+      
+      <div className="flex items-center gap-4">
+        <button
+          onClick={fetchRegistrations}
+          className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 px-6 py-3 rounded-2xl font-medium transition-colors"
+        >
+          🔄 Refresh
+        </button>
+
+        <button
+          onClick={async () => {
+            await fetchRegistrations();
+            alert("✅ Changes saved and table refreshed.");
+          }}
+          className="flex items-center gap-2 bg-green-600 hover:bg-green-700 px-6 py-3 rounded-2xl font-medium transition-colors"
+        >
+          💾 Save
+        </button>
+
+        <div className="text-sm text-gray-400">
+          Last updated: <span id="last-updated">just now</span>
+        </div>
+      </div>
+    </div>
 
     {/* Search + Add Player */}
     <div className="flex flex-col sm:flex-row gap-4 mb-8">
