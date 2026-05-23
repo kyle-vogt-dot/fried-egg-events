@@ -151,10 +151,14 @@ export default function EventAdminPage() {
     fetchData();
   }, [eventId, supabase]);
 
-    // Real-time listener for add-on payments + notification
+        // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
   useEffect(() => {
+    if (!eventId) return;
+
+    console.log(`🔄 Setting up real-time listener for event ${eventId}`);
+
     const channel = supabase
-      .channel('addon-payments')
+      .channel(`addon-payments-${eventId}`)
       .on(
         'postgres_changes',
         {
@@ -164,21 +168,36 @@ export default function EventAdminPage() {
           filter: `event_id=eq.${parseInt(eventId)}`,
         },
         (payload) => {
-          const newData = payload.new;
-          if (newData.paid_addons === true && newData.checked_in === false) {
+          console.log('📡 Real-time update received!', payload);
+          
+          const newData = payload.new as any;
+          
+          console.log('New data:', {
+            paid_addons: newData.paid_addons,
+            checked_in: newData.checked_in,
+            player_name: newData.player_name
+          });
+
+          if (newData.paid_addons === true && newData.checked_in !== true) {
             const playerName = newData.player_name || 'A player';
+            console.log(`✅ Triggering notification for ${playerName}`);
             
-            // Show notification to admin
-            alert(`${playerName} has paid their add-ons! Click OK to refresh and check them in.`);
+            const confirmed = window.confirm(
+              `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table.`
+            );
             
-            // Refresh the table
-            fetchRegistrations();
+            if (confirmed) {
+              fetchRegistrations();
+            }
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log('🔄 Listener subscription status:', status);
+      });
 
     return () => {
+      console.log('🧹 Cleaning up real-time listener');
       supabase.removeChannel(channel);
     };
   }, [eventId, supabase]);
