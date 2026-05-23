@@ -58,7 +58,7 @@ export default function EventDetailPage() {
   }, [eventId]);
 
     
-      // Handle payment success (main registration OR add-ons)
+        // Handle payment success (main registration OR add-ons)
   useEffect(() => {
     const paymentStatus = searchParams.get('payment');
     const successType = searchParams.get('success');
@@ -68,50 +68,49 @@ export default function EventDetailPage() {
       const isAddonPayment = successType === 'addon';
       const regId = regIdParam ? parseInt(regIdParam) : null;
 
+      // Show appropriate success message
       if (isAddonPayment) {
-        setShowSuccessModal(true);
+        setShowSuccessModal(true);        // "You are Checked In!" modal (player side)
       } else {
-        setShowSuccessMessage(true);
+        setShowSuccessMessage(true);      // Main registration success
       }
 
       const handleSuccess = async () => {
         if (isAddonPayment && regId) {
-          console.log("🔄 Updating add-on payment for reg ID:", regId);
+          console.log(`🔄 Add-on payment received for reg ${regId} — marking paid_addons only`);
 
           const { error } = await supabase
             .from('event_registrations')
             .update({ 
-              paid_addons: true, 
-              checked_in: true 
+              paid_addons: true 
+              // ← IMPORTANT: Do NOT set checked_in here (admin will do it manually)
             })
             .eq('id', regId);
 
           if (error) {
             console.error("Failed to update add-on status:", error);
-            alert("Payment successful, but check-in update failed. Please ask admin to check you in.");
           } else {
-            console.log("✅ Add-on payment processed and checked in");
+            console.log("✅ paid_addons = true");
+            await fetchData(); // Refresh admin view if open
           }
         } else {
-          // Main registration
+          // Main registration path
           await updatePaymentStatusToPaid();
         }
-
-        await fetchData(); // Refresh registrations
       };
 
       handleSuccess();
     }
   }, [searchParams, supabase]);
 
-     const updatePaymentStatusToPaid = async () => {
+       const updatePaymentStatusToPaid = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     try {
       await supabase
         .from('event_registrations')
-        .update({ paid_addons: true })
+        .update({ paid: true })
         .eq('event_id', parseInt(eventId))
         .eq('user_id', user.id);
 
@@ -702,7 +701,7 @@ export default function EventDetailPage() {
         </div>
       )}
 
-      {/* Add-on Payment Success Modal */}
+            {/* Add-on Payment Success Modal */}
       {showSuccessModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100]">
           <div className="bg-gray-900 rounded-3xl p-10 max-w-md w-full mx-4 text-center">
@@ -710,8 +709,11 @@ export default function EventDetailPage() {
               <span className="text-4xl">✅</span>
             </div>
             
-            <h2 className="text-3xl font-semibold mb-2">You are Checked In!</h2>
-            <p className="text-gray-400 mb-8">Your add-ons have been paid successfully.</p>
+            <h2 className="text-3xl font-semibold mb-2">Add-ons Paid Successfully</h2>
+            <p className="text-gray-400 mb-8">
+              Your add-ons have been paid.<br />
+              <strong>Awaiting Admin Check-In</strong>
+            </p>
 
             <div className="grid grid-cols-2 gap-4">
               <button
