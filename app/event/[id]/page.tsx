@@ -57,31 +57,67 @@ export default function EventDetailPage() {
     fetchData();
   }, [eventId]);
 
-  // Handle payment success
+    
+      // Handle payment success (main registration OR add-ons)
   useEffect(() => {
     const paymentStatus = searchParams.get('payment');
-    if (paymentStatus === 'success') {
-      setShowSuccessMessage(true);
-      updatePaymentStatusToPaid();
-    }
-  }, [searchParams]);
+    const successType = searchParams.get('success');
+    const regIdParam = searchParams.get('registration_id');
 
-  const updatePaymentStatusToPaid = async () => {
+    if (paymentStatus === 'success' || successType === 'addon') {
+      const isAddonPayment = successType === 'addon';
+      const regId = regIdParam ? parseInt(regIdParam) : null;
+
+      if (isAddonPayment) {
+        setShowSuccessModal(true);
+      } else {
+        setShowSuccessMessage(true);
+      }
+
+      const handleSuccess = async () => {
+        if (isAddonPayment && regId) {
+          console.log("🔄 Updating add-on payment for reg ID:", regId);
+
+          const { error } = await supabase
+            .from('event_registrations')
+            .update({ 
+              paid_addons: true, 
+              checked_in: true 
+            })
+            .eq('id', regId);
+
+          if (error) {
+            console.error("Failed to update add-on status:", error);
+            alert("Payment successful, but check-in update failed. Please ask admin to check you in.");
+          } else {
+            console.log("✅ Add-on payment processed and checked in");
+          }
+        } else {
+          // Main registration
+          await updatePaymentStatusToPaid();
+        }
+
+        await fetchData(); // Refresh registrations
+      };
+
+      handleSuccess();
+    }
+  }, [searchParams, supabase]);
+
+     const updatePaymentStatusToPaid = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     try {
       await supabase
         .from('event_registrations')
-        .update({ paid: true, checked_in: true })
+        .update({ paid_addons: true })
         .eq('event_id', parseInt(eventId))
-        .eq('user_id', user.id)
-        .eq('paid', false);
+        .eq('user_id', user.id);
 
-      await fetchData();
-      await sendRegistrationEmails();
+      console.log("✅ Main registration marked as paid");
     } catch (err) {
-      console.error("Error updating payment status:", err);
+      console.error("Error updating main payment status:", err);
     }
   };
 

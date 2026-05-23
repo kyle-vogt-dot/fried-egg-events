@@ -161,7 +161,68 @@ export default function EventAdminPage() {
 
   // ====================== HANDLERS ======================
 
-  
+  const handleSendAddonPaymentEmail = async () => {
+  if (!currentPayReg) return;
+
+  const addonTotals = selectedQuantities[currentPayReg.id] || {};
+  const addonCost = addons.reduce((sum: number, addon: any) => {
+    const qty = addonTotals[addon.id] || 0;
+    return sum + qty * (addon.price_per_unit || 0);
+  }, 0);
+
+  if (addonCost <= 0) return alert("No add-ons selected");
+
+  try {
+    // Save quantities first
+    await supabase
+      .from('event_registrations')
+      .update({ addon_quantities: addonTotals })
+      .eq('id', currentPayReg.id);
+
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+
+    // Create checkout session (but don't open it)
+    const response = await fetch('/api/create-checkout-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        registration_id: currentPayReg.id,
+        amount: addonCost,
+        player_name: currentPayReg.player_name,
+        email: currentPayReg.player_email,
+        description: `Add-ons for ${event?.name}`,
+        event_name: event?.name,
+        event_id: event?.id,
+        type: 'addon_payment',
+        success_url: `${baseUrl}/event/${eventId}?success=addon&registration_id=${currentPayReg.id}`,
+      }),
+    });
+
+    const { url } = await response.json();
+
+    if (!url) throw new Error("Failed to create payment link");
+
+    // Send email with payment link
+    await fetch('/api/send-addon-payment-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: currentPayReg.player_email,
+        name: currentPayReg.player_name,
+        eventName: event?.name,
+        amount: addonCost,
+        paymentUrl: url,
+      }),
+    });
+
+    alert(`✅ Payment link sent to ${currentPayReg.player_email}`);
+    setShowPaymentModal(false);
+
+  } catch (err) {
+    console.error(err);
+    alert("Failed to send payment email. Please try again.");
+  }
+};
 
   const handleEventChange = (field: string, value: any) => {
     setEvent((prev: any) => ({ ...prev, [field]: value }));
@@ -301,11 +362,11 @@ const handlePaidCash = async () => {
     .eq('id', currentPayReg.id);
 
   if (error) {
-    alert("Error marking add-ons as paid: " + error.message);
+    alert("Error marking as paid: " + error.message);
   } else {
-    alert(`${currentPayReg.player_name} add-ons marked as paid and checked in.`);
+    alert(`${currentPayReg.player_name} add-ons paid and checked in.`);
     setShowPaymentModal(false);
-    await fetchRegistrations();   // ← Force refresh the table
+    await fetchRegistrations();
   }
 };
 
@@ -321,19 +382,14 @@ const handleCheckout = async () => {
   if (addonCost <= 0) return;
 
   try {
-    // 1. Save the selected quantities to the database BEFORE opening Stripe
-    const { error: saveError } = await supabase
+    // Save selected quantities
+    await supabase
       .from('event_registrations')
-      .update({
-        addon_quantities: addonTotals,   // ← Saves the exact quantities chosen
-      })
+      .update({ addon_quantities: addonTotals })
       .eq('id', currentPayReg.id);
 
-    if (saveError) {
-      console.error('Failed to save addon quantities:', saveError);
-    }
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
 
-    // 2. Create Stripe checkout session
     const response = await fetch('/api/create-checkout-session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -346,7 +402,8 @@ const handleCheckout = async () => {
         event_name: event?.name,
         event_id: event?.id,
         type: 'addon_payment',
-        success_url: `${window.location.origin}/event/${eventId}?success=addon&registration_id=${currentPayReg.id}`,
+        success_url: `${baseUrl}/event/${eventId}?success=addon&registration_id=${currentPayReg.id}`,
+        cancel_url: `${baseUrl}/event/${eventId}`,
       }),
     });
 
@@ -1372,15 +1429,15 @@ const savePlayerScores = async (registrationId: number) => {
               .sort((a: any, b: any) => (a.player_name || '').localeCompare(b.player_name || ''))
               .map((reg: any) => {
                 const isCheckedIn = reg.checked_in || false;
-                const isPaidForAddons = reg.paid_addons || false;
-                const addonTotals = reg.addon_quantities || selectedQuantities[reg.id] || {};
+const isPaidForAddons = reg.paid_addons || false;     // ← This is the correct column
+const addonTotals = reg.addon_quantities || selectedQuantities[reg.id] || {};
 
-                const addonCost = addons.reduce((sum: number, addon: any) => {
-                  const qty = addonTotals[addon.id] || 0;
-                  return sum + qty * (addon.price_per_unit || 0);
-                }, 0);
+const addonCost = addons.reduce((sum: number, addon: any) => {
+  const qty = addonTotals[addon.id] || 0;
+  return sum + qty * (addon.price_per_unit || 0);
+}, 0);
 
-                const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
+const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
 
                 return (
                   <tr key={reg.id} className="border-b border-gray-700 hover:bg-gray-750">
@@ -1454,31 +1511,30 @@ const savePlayerScores = async (registrationId: number) => {
                       );
                     })}
 
-                    <td className="py-2 px-6 text-center font-medium text-emerald-400">
-                      ${addonCost.toFixed(2)}
-                    </td>
-
-                    <td className="py-2 px-6 text-center">
+                                        <td className="py-2 px-6 text-center">
                       <div className="flex flex-wrap gap-3 justify-center">
                         {addonCost > 0 && !isPaidForAddons ? (
-                          <button onClick={() => openPaymentModal(reg)} className="bg-amber-600 hover:bg-amber-700 px-6 py-2.5 rounded-2xl text-sm font-medium text-white">
+                          <button 
+                            onClick={() => openPaymentModal(reg)} 
+                            className="bg-amber-600 hover:bg-amber-700 px-6 py-2.5 rounded-2xl text-sm font-medium text-white"
+                          >
                             Pay ${addonCost}
                           </button>
                         ) : (
                           <button 
-  onClick={async () => {
-    if (isCheckedIn) {
-      if (!confirm(`Un-check in ${reg.player_name}?`)) return;
-      await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
-    } else {
-      await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
-    }
-    fetchRegistrations();   // ← This forces a fresh reload
-  }} 
-  className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
->
-  {isCheckedIn ? '✓ Checked In' : 'Check In'}
-</button>
+                            onClick={async () => {
+                              if (isCheckedIn) {
+                                if (!confirm(`Un-check in ${reg.player_name}?`)) return;
+                                await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
+                              } else {
+                                await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
+                              }
+                              fetchRegistrations();   // ← This forces a fresh reload
+                            }} 
+                            className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
+                          >
+                            {isCheckedIn ? '✓ Checked In' : 'Check In'}
+                          </button>
                         )}
 
                         <div className="flex gap-2">
@@ -1558,38 +1614,38 @@ const savePlayerScores = async (registrationId: number) => {
         )}
 
         {/* ====================== PAYMENT MODAL ====================== */}
-        {showPaymentModal && currentPayReg && (
-          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
-            <div className="bg-gray-900 rounded-3xl p-10 max-w-md w-full mx-4">
-              <h3 className="text-2xl font-semibold mb-8 text-center">
-                Payment for {currentPayReg.player_name}
-              </h3>
+{showPaymentModal && currentPayReg && (
+  <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+    <div className="bg-gray-900 rounded-3xl p-10 max-w-md w-full mx-4">
+      <h3 className="text-2xl font-semibold mb-8 text-center">
+        Add-ons for {currentPayReg.player_name}
+      </h3>
 
-              <div className="grid grid-cols-1 gap-4">
-                <button
-                  onClick={handleCheckout}
-                  className="bg-green-600 hover:bg-green-700 py-5 rounded-2xl text-lg font-semibold"
-                >
-                  💳 Checkout with Card
-                </button>
+      <div className="grid grid-cols-1 gap-4">
+        <button
+          onClick={handleSendAddonPaymentEmail}   // ← New function
+          className="bg-blue-600 hover:bg-blue-700 py-5 rounded-2xl text-lg font-semibold"
+        >
+          📧 Send Payment Link by Email
+        </button>
 
-                <button
-                  onClick={handlePaidCash}
-                  className="bg-emerald-600 hover:bg-emerald-700 py-5 rounded-2xl text-lg font-semibold"
-                >
-                  💵 Paid Cash / Check In
-                </button>
-              </div>
+        <button
+          onClick={handlePaidCash}
+          className="bg-emerald-600 hover:bg-emerald-700 py-5 rounded-2xl text-lg font-semibold"
+        >
+          💵 Paid Cash / Check In
+        </button>
+      </div>
 
-              <button
-                onClick={() => setShowPaymentModal(false)}
-                className="w-full mt-6 py-4 text-gray-400 hover:text-white"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
+      <button
+        onClick={() => setShowPaymentModal(false)}
+        className="w-full mt-6 py-4 text-gray-400 hover:text-white"
+      >
+        Cancel
+      </button>
+    </div>
+  </div>
+)}
 
                            {/* ====================== SCORING TAB (Gross + Net Total) ====================== */}
 {activeTab === 'scoring' && (
