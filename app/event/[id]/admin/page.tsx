@@ -151,9 +151,7 @@ export default function EventAdminPage() {
     fetchData();
   }, [eventId, supabase]);
   
-                     // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
-  const notifiedRegs = useRef(new Set<number>());
-
+                         // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
   useEffect(() => {
     if (!eventId) return;
 
@@ -172,15 +170,10 @@ export default function EventAdminPage() {
         (payload) => {
           const newData = payload.new as any;
           
-          if (newData?.paid_addons === true && newData.checked_in !== true) {
-            const regId = newData.id;
+          if (newData?.paid_addons === true) {
             const playerName = newData.player_name || 'A player';
-
-            // Prevent duplicate notifications for the same registration
-            if (notifiedRegs.current.has(regId)) return;
-            notifiedRegs.current.add(regId);
-
-            console.log(`✅ Payment detected for ${playerName} (ID: ${regId})`);
+            
+            console.log(`✅ Add-on payment detected for ${playerName}`);
 
             window.confirm(
               `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table.`
@@ -193,7 +186,6 @@ export default function EventAdminPage() {
       .subscribe();
 
     return () => {
-      notifiedRegs.current.clear();
       supabase.removeChannel(channel);
     };
   }, [eventId, supabase]);
