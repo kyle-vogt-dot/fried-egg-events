@@ -151,8 +151,8 @@ export default function EventAdminPage() {
     fetchData();
   }, [eventId, supabase]);
   
-                 // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
-  const lastNotificationRef = useRef<number>(0);
+                     // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
+  const notifiedRegs = useRef(new Set<number>());
 
   useEffect(() => {
     if (!eventId) return;
@@ -173,30 +173,27 @@ export default function EventAdminPage() {
           const newData = payload.new as any;
           
           if (newData?.paid_addons === true && newData.checked_in !== true) {
+            const regId = newData.id;
             const playerName = newData.player_name || 'A player';
+
+            // Prevent duplicate notifications for the same registration
+            if (notifiedRegs.current.has(regId)) return;
+            notifiedRegs.current.add(regId);
+
+            console.log(`✅ Payment detected for ${playerName} (ID: ${regId})`);
+
+            window.confirm(
+              `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table.`
+            );
             
-            const now = Date.now();
-            
-            // Stronger debounce (only trigger once every 5 seconds)
-            if (now - lastNotificationRef.current > 5000) {
-              lastNotificationRef.current = now;
-              
-              console.log(`✅ Triggering notification for ${playerName}`);
-              
-              const confirmed = window.confirm(
-                `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table.`
-              );
-              
-              if (confirmed) {
-                fetchRegistrations();
-              }
-            }
+            fetchRegistrations();
           }
         }
       )
       .subscribe();
 
     return () => {
+      notifiedRegs.current.clear();
       supabase.removeChannel(channel);
     };
   }, [eventId, supabase]);
