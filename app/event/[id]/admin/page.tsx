@@ -150,14 +150,17 @@ export default function EventAdminPage() {
 
     fetchData();
   }, [eventId, supabase]);
-  // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
+  
+         // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
+  const lastNotificationRef = useRef<number>(0);
+
   useEffect(() => {
     if (!eventId) return;
 
     console.log(`🔄 Setting up real-time listener for event ${eventId}`);
 
     const channel = supabase
-      .channel(`realtime-addon-${eventId}`)
+      .channel(`addon-payments-${eventId}`)
       .on(
         'postgres_changes',
         {
@@ -167,34 +170,37 @@ export default function EventAdminPage() {
           filter: `event_id=eq.${parseInt(eventId)}`,
         },
         (payload) => {
-          console.log('📡 Real-time UPDATE received!', payload);
-
           const newData = payload.new as any;
           
-          if (newData?.paid_addons === true) {
+          if (newData?.paid_addons === true && newData.checked_in !== true) {
             const playerName = newData.player_name || 'A player';
             
-            console.log(`✅ Triggering notification for ${playerName}`);
-            
-            const confirmed = window.confirm(
-              `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table and check them in.`
-            );
-            
-            if (confirmed) {
-              fetchRegistrations();
+            console.log(`✅ Add-on payment detected for ${playerName}`);
+
+            // Debounce using React ref
+            const now = Date.now();
+            if (now - lastNotificationRef.current > 3000) {
+              lastNotificationRef.current = now;
+              
+              const confirmed = window.confirm(
+                `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table.`
+              );
+              
+              if (confirmed) {
+                fetchRegistrations();
+              }
             }
           }
         }
       )
       .subscribe((status) => {
-        console.log('🔄 Subscription status:', status);
+        console.log('🔄 Listener status:', status);
       });
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, [eventId, supabase]);
-
   const fetchRegistrations = async () => {
     const { data } = await supabase
       .from('event_registrations')
@@ -1497,16 +1503,17 @@ const savePlayerScores = async (registrationId: number) => {
               )
               .sort((a: any, b: any) => (a.player_name || '').localeCompare(b.player_name || ''))
               .map((reg: any) => {
-                const isCheckedIn = reg.checked_in || false;
-const isPaidForAddons = reg.paid_addons || false;     // ← This is the correct column
-const addonTotals = reg.addon_quantities || selectedQuantities[reg.id] || {};
+                                const isCheckedIn = reg.checked_in || false;
+                const isPaidForAddons = reg.paid_addons || false;     // ← This must say paid_addons
+                const addonTotals = reg.addon_quantities || selectedQuantities[reg.id] || {};
 
-const addonCost = addons.reduce((sum: number, addon: any) => {
-  const qty = addonTotals[addon.id] || 0;
-  return sum + qty * (addon.price_per_unit || 0);
-}, 0);
+                const addonCost = addons.reduce((sum: number, addon: any) => {
+                  const qty = addonTotals[addon.id] || 0;
+                  return sum + qty * (addon.price_per_unit || 0);
+                }, 0);
 
 const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
+
 
                 return (
                   <tr key={reg.id} className="border-b border-gray-700 hover:bg-gray-750">
@@ -1581,41 +1588,41 @@ const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
                     })}
 
                                                             <td className="py-2 px-6 text-center">
-                      <div className="flex flex-wrap gap-3 justify-center">
-                        {addonCost > 0 && !isPaidForAddons ? (
-                          <button 
-                            onClick={() => openPaymentModal(reg)} 
-                            className="bg-amber-600 hover:bg-amber-700 px-6 py-2.5 rounded-2xl text-sm font-medium text-white"
-                          >
-                            Pay ${addonCost}
-                          </button>
-                        ) : (
-                          <button 
-                            onClick={async () => {
-                              if (isCheckedIn) {
-                                if (!confirm(`Un-check in ${reg.player_name}?`)) return;
-                                await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
-                              } else {
-                                await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
-                              }
-                              fetchRegistrations();   // ← This forces a fresh reload
-                            }} 
-                            className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
-                          >
-                            {isCheckedIn ? '✓ Checked In' : 'Check In'}
-                          </button>
-                        )}
+                                              <div className="flex flex-wrap gap-3 justify-center">
+                          {addonCost > 0 && !isPaidForAddons ? (
+                            <button 
+                              onClick={() => openPaymentModal(reg)} 
+                              className="bg-amber-600 hover:bg-amber-700 px-6 py-2.5 rounded-2xl text-sm font-medium text-white"
+                            >
+                              Pay ${addonCost}
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={async () => {
+                                if (isCheckedIn) {
+                                  if (!confirm(`Un-check in ${reg.player_name}?`)) return;
+                                  await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
+                                } else {
+                                  await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
+                                }
+                                fetchRegistrations();   // Force fresh reload
+                              }} 
+                              className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
+                            >
+                              {isCheckedIn ? '✓ Checked In' : 'Check In'}
+                            </button>
+                          )}
 
-                        <div className="flex gap-2">
-                          <button onClick={() => handleRemovePlayer(reg)} className="text-red-400 hover:text-red-500 text-sm font-medium px-4 py-2">Remove</button>
-                          <button onClick={() => {
-                            setSubPlayerReg(reg);
-                            setSubName('');
-                            setSubEmail('');
-                            setShowSubModal(true);
-                          }} className="text-blue-400 hover:text-blue-500 text-sm font-medium px-4 py-2">Sub Player</button>
+                          <div className="flex gap-2">
+                            <button onClick={() => handleRemovePlayer(reg)} className="text-red-400 hover:text-red-500 text-sm font-medium px-4 py-2">Remove</button>
+                            <button onClick={() => {
+                              setSubPlayerReg(reg);
+                              setSubName('');
+                              setSubEmail('');
+                              setShowSubModal(true);
+                            }} className="text-blue-400 hover:text-blue-500 text-sm font-medium px-4 py-2">Sub Player</button>
+                          </div>
                         </div>
-                      </div>
                     </td>
                   </tr>
                 );
