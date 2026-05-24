@@ -151,16 +151,14 @@ export default function EventAdminPage() {
     fetchData();
   }, [eventId, supabase]);
   
-         // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
-  const lastNotificationRef = useRef<number>(0);
-
+             // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
   useEffect(() => {
     if (!eventId) return;
 
     console.log(`🔄 Setting up real-time listener for event ${eventId}`);
 
     const channel = supabase
-      .channel(`addon-payments-${eventId}`)
+      .channel(`realtime-addon-${eventId}`)
       .on(
         'postgres_changes',
         {
@@ -170,37 +168,34 @@ export default function EventAdminPage() {
           filter: `event_id=eq.${parseInt(eventId)}`,
         },
         (payload) => {
+          console.log('📡 Real-time UPDATE received!', payload);
+
           const newData = payload.new as any;
           
-          if (newData?.paid_addons === true && newData.checked_in !== true) {
+          if (newData?.paid_addons === true) {
             const playerName = newData.player_name || 'A player';
             
-            console.log(`✅ Add-on payment detected for ${playerName}`);
-
-            // Debounce using React ref
-            const now = Date.now();
-            if (now - lastNotificationRef.current > 3000) {
-              lastNotificationRef.current = now;
-              
-              const confirmed = window.confirm(
-                `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table.`
-              );
-              
-              if (confirmed) {
-                fetchRegistrations();
-              }
+            console.log(`✅ Triggering notification for ${playerName}`);
+            
+            const confirmed = window.confirm(
+              `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table and check them in.`
+            );
+            
+            if (confirmed) {
+              fetchRegistrations();
             }
           }
         }
       )
       .subscribe((status) => {
-        console.log('🔄 Listener status:', status);
+        console.log('🔄 Subscription status:', status);
       });
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, [eventId, supabase]);
+  
   const fetchRegistrations = async () => {
     const { data } = await supabase
       .from('event_registrations')
