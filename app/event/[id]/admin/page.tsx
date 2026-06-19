@@ -150,8 +150,16 @@ export default function EventAdminPage() {
 
     fetchData();
   }, [eventId, supabase]);
-  
+    const fetchRegistrations = async () => {
+    const { data } = await supabase
+      .from('event_registrations')
+      .select('*')
+      .eq('event_id', parseInt(eventId));
+    setRegistrations(data || []);
+  };
                          // ====================== REAL-TIME NOTIFICATION FOR ADD-ON PAYMENTS ======================
+  const lastNotificationRef = useRef<number>(0);
+
   useEffect(() => {
     if (!eventId) return;
 
@@ -170,16 +178,23 @@ export default function EventAdminPage() {
         (payload) => {
           const newData = payload.new as any;
           
-          if (newData?.paid_addons === true) {
+          if (newData?.paid_addons === true && newData.checked_in !== true) {
             const playerName = newData.player_name || 'A player';
-            
-            console.log(`✅ Add-on payment detected for ${playerName}`);
+            const now = Date.now();
 
-            window.confirm(
-              `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table.`
-            );
-            
-            fetchRegistrations();
+            if (now - lastNotificationRef.current > 4000) {
+              lastNotificationRef.current = now;
+
+              console.log(`✅ Triggering notification for ${playerName}`);
+
+              const confirmed = window.confirm(
+                `✅ ${playerName} has paid their add-ons!\n\nClick OK to refresh the table.`
+              );
+              
+              if (confirmed) {
+                fetchRegistrations();
+              }
+            }
           }
         }
       )
@@ -189,16 +204,37 @@ export default function EventAdminPage() {
       supabase.removeChannel(channel);
     };
   }, [eventId, supabase]);
-  
-  const fetchRegistrations = async () => {
-    const { data } = await supabase
-      .from('event_registrations')
-      .select('*')
-      .eq('event_id', parseInt(eventId));
-    setRegistrations(data || []);
-  };
 
   // ====================== HANDLERS ======================
+    // Load existing scores from database when registrations load
+  useEffect(() => {
+    const loadScores = async () => {
+      if (registrations.length === 0) return;
+
+      const { data: scoreData, error } = await supabase
+        .from('scores')
+        .select('*')
+        .in('registration_id', registrations.map(r => r.id));
+
+      if (error) {
+        console.error('Failed to load scores:', error);
+        return;
+      }
+
+      const loadedScores: Record<number, Record<number, number>> = {};
+
+      scoreData.forEach((score: any) => {
+        if (!loadedScores[score.registration_id]) {
+          loadedScores[score.registration_id] = {};
+        }
+        loadedScores[score.registration_id][score.hole] = score.score;
+      });
+
+      setPlayerScores(loadedScores);
+    };
+
+    loadScores();
+  }, [registrations, supabase]);
 
   const handleSendAddonPaymentEmail = async () => {
   if (!currentPayReg) return;
@@ -1712,7 +1748,8 @@ const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
   </div>
 )}
 
-                           {/* ====================== SCORING TAB (Gross + Net Total) ====================== */}
+ 
+  {/* ====================== SCORING TAB (Gross + Net Total) ====================== */}
 {activeTab === 'scoring' && (
   <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
     <div className="flex justify-between items-center mb-8">
@@ -1954,8 +1991,7 @@ const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
   </div>
 )}
 
-
-        {/* ====================== ALL OTHER TABS & MODALS ====================== */}
+        
                              {/* ====================== LEADERBOARD TAB (Clean Header) ====================== */}
 {activeTab === 'leaderboard' && (
   <div className="bg-gray-800 rounded-3xl p-6 md:p-8">

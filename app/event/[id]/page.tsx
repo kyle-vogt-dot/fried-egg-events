@@ -4,7 +4,9 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
+
 export default function EventDetailPage() {
+  const [agreedToWaiver, setAgreedToWaiver] = useState(false);
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -58,44 +60,30 @@ export default function EventDetailPage() {
   }, [eventId]);
 
     
-        // Handle payment success (main registration OR add-ons)
+          // Handle payment success (main registration OR add-ons)
   useEffect(() => {
-    const paymentStatus = searchParams.get('payment');
     const successType = searchParams.get('success');
     const regIdParam = searchParams.get('registration_id');
 
-    if (paymentStatus === 'success' || successType === 'addon') {
-      const isAddonPayment = successType === 'addon';
-      const regId = regIdParam ? parseInt(regIdParam) : null;
+    if (successType === 'addon' && regIdParam) {
+      const regId = parseInt(regIdParam);
 
-      // Show appropriate success message
-      if (isAddonPayment) {
-        setShowSuccessModal(true);        // "You are Checked In!" modal (player side)
-      } else {
-        setShowSuccessMessage(true);      // Main registration success
-      }
+      console.log(`🔄 Add-on payment success detected for reg ${regId}`);
 
       const handleSuccess = async () => {
-        if (isAddonPayment && regId) {
-          console.log(`🔄 Add-on payment received for reg ${regId} — marking paid_addons only`);
+        const { error } = await supabase
+          .from('event_registrations')
+          .update({ 
+            paid_addons: true 
+            // Do NOT set checked_in here - admin does it manually
+          })
+          .eq('id', regId);
 
-          const { error } = await supabase
-            .from('event_registrations')
-            .update({ 
-              paid_addons: true 
-              // ← IMPORTANT: Do NOT set checked_in here (admin will do it manually)
-            })
-            .eq('id', regId);
-
-          if (error) {
-            console.error("Failed to update add-on status:", error);
-          } else {
-            console.log("✅ paid_addons = true");
-            await fetchData(); // Refresh admin view if open
-          }
+        if (error) {
+          console.error("Failed to update add-on status:", error);
         } else {
-          // Main registration path
-          await updatePaymentStatusToPaid();
+          console.log("✅ paid_addons = true");
+          setShowSuccessModal(true);
         }
       };
 
@@ -679,10 +667,24 @@ export default function EventDetailPage() {
                       <span>${totalCost.toFixed(2)}</span>
                     </div>
                   </div>
+                  
+                     <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
+                    <input
+                      type="checkbox"
+                      id="waiver"
+                      checked={agreedToWaiver}
+                      onChange={(e) => setAgreedToWaiver(e.target.checked)}
+                      className="mt-1 w-5 h-5 accent-blue-600"
+                    />
+                    <label htmlFor="waiver" className="text-sm text-gray-300 cursor-pointer">
+                      I have read and agree to the <strong>Waiver & Release of Liability</strong>.
+                      <a href="/waiver" target="_blank" className="text-blue-400 hover:underline ml-1">(View Document)</a>
+                    </label>
+                  </div>
 
                   <button
                     onClick={handleRegister}
-                    disabled={submitting || (mode === '' || (mode === 'create' && !newTeamName) || (mode === 'join' && !selectedTeam))}
+                    disabled={submitting || !agreedToWaiver ||(mode === '' || (mode === 'create' && !newTeamName) || (mode === 'join' && !selectedTeam))}
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
                     {submitting ? 'Processing Payment...' : `Complete Registration — $${totalCost.toFixed(2)}`}
