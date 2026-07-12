@@ -61,23 +61,28 @@ export default function LiveEventPage() {
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
   );
 
-  const getHolesFromCourseData = (courseData: any): any[] => {
-    if (!courseData) return Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+ const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
+  if (!courseData) {
+    return Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+  }
 
-    let holes: any[] = [];
+  let holes: any[] = [];
 
-    if (courseData.holes && Array.isArray(courseData.holes)) holes = courseData.holes;
-    else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) holes = courseData.course.holes;
-    else if (courseData.tees) {
-      const allTees = Object.values(courseData.tees).flat();
-      const firstTee = allTees[0] as any;
-      if (firstTee?.holes && Array.isArray(firstTee.holes)) holes = firstTee.holes;
-    }
+  if (courseData.scorecard && Array.isArray(courseData.scorecard)) {
+    holes = courseData.scorecard.map((h: any) => ({
+      par: Number(h.Par) || 4,
+      yardage: Number(h.yardage) || Number(h.distance) || 0,
+      handicap: Number(h.Handicap) || 0,
+      hole: Number(h.Hole) || 0
+    }));
+  } else if (courseData.holes && Array.isArray(courseData.holes)) {
+    holes = courseData.holes;
+  }
 
-    return holes.length > 0 ? holes.slice(0, 18) : Array.from({ length: 18 }, () => ({ par: 4, yardage: 0, handicap: 0 }));
-  };
-
-  const holes = useMemo(() => getHolesFromCourseData(event?.course_data), [event?.course_data]);
+  return holes.length > 0 ? holes.slice(0, numHoles) : 
+         Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+};
+const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes || 18);
   const numHoles = event?.number_of_holes || 18;
 
   const frontHoles = holes.slice(0, 9);

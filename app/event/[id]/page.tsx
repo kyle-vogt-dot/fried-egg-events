@@ -497,7 +497,7 @@ export default function EventDetailPage() {
         </div>
       )}
 
-      {/* Registration Modal - Updated */}
+            {/* Registration Modal - Updated with Waiver Checkbox */}
       {showRegisterModal && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -511,9 +511,24 @@ export default function EventDetailPage() {
                     <p className="text-3xl font-semibold mt-2">${event.price || 'TBD'}</p>
                   </div>
 
+                  {/* Waiver Checkbox for Individual */}
+                  <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
+                    <input
+                      type="checkbox"
+                      id="waiver-individual"
+                      checked={agreedToWaiver}
+                      onChange={(e) => setAgreedToWaiver(e.target.checked)}
+                      className="mt-1 w-5 h-5 accent-blue-600"
+                    />
+                    <label htmlFor="waiver-individual" className="text-sm text-gray-300 cursor-pointer">
+                      I have read and agree to the <strong>Waiver & Release of Liability</strong>.
+                      <a href="/waiver" target="_blank" className="text-blue-400 hover:underline ml-1">(View Document)</a>
+                    </label>
+                  </div>
+
                   <button
                     onClick={handleRegister}
-                    disabled={submitting}
+                    disabled={submitting || !agreedToWaiver}
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
                     {submitting ? 'Processing Payment...' : `Complete Registration — $${(event.price || 0).toFixed(2)}`}
@@ -667,16 +682,17 @@ export default function EventDetailPage() {
                       <span>${totalCost.toFixed(2)}</span>
                     </div>
                   </div>
-                  
-                     <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
+
+                  {/* Waiver Checkbox for Team Registration */}
+                  <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
                     <input
                       type="checkbox"
-                      id="waiver"
+                      id="waiver-team"
                       checked={agreedToWaiver}
                       onChange={(e) => setAgreedToWaiver(e.target.checked)}
                       className="mt-1 w-5 h-5 accent-blue-600"
                     />
-                    <label htmlFor="waiver" className="text-sm text-gray-300 cursor-pointer">
+                    <label htmlFor="waiver-team" className="text-sm text-gray-300 cursor-pointer">
                       I have read and agree to the <strong>Waiver & Release of Liability</strong>.
                       <a href="/waiver" target="_blank" className="text-blue-400 hover:underline ml-1">(View Document)</a>
                     </label>

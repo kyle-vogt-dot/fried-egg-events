@@ -20,6 +20,9 @@ export default function EventAdminPage() {
 
   // ====================== STATE ======================
 
+    const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [selectedCourse, setSelectedCourse] = useState<any>(null);
+
   const [selectedFlight, setSelectedFlight] = useState<string | 'all'>('all');
   const [showNet, setShowNet] = useState(false);
   const [event, setEvent] = useState<any>(null);
@@ -64,7 +67,7 @@ export default function EventAdminPage() {
   // Course search
   const [courseSearch, setCourseSearch] = useState('');
   const [courseResults, setCourseResults] = useState<any[]>([]);
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
   
 
   // Scores
@@ -597,65 +600,32 @@ const savePlayerScores = async (registrationId: number) => {
 };
 
 
-
-
-  // ====================== COURSE SEARCH ======================
-  const searchCourses = async (query: string) => {
-    if (query.length < 3) {
-      setCourseResults([]);
-      return;
-    }
-    try {
-      const res = await fetch(
-        `https://api.golfcourseapi.com/v1/search?search_query=${encodeURIComponent(query)}`,
-        { headers: { 'Authorization': `Key ${process.env.NEXT_PUBLIC_GOLF_COURSE_API_KEY}` } }
-      );
-      if (!res.ok) throw new Error(`API returned status ${res.status}`);
-      const data = await res.json();
-      setCourseResults(data.courses || data || []);
-    } catch (err) {
-      console.error('Course search error:', err);
-      setCourseResults([]);
-    }
-  };
-
-  const selectCourse = (course: any) => {
-    const courseName = course.course_name || course.club_name || course.name || '';
-    handleEventChange('course', courseName);
-    handleEventChange('course_data', course);
-    setCourseSearch(courseName);
-    setCourseResults([]);
-  };
-
+  
   // ====================== SCORING HELPERS ======================
-  const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
-  if (!courseData) {
-    return Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
-  }
-
-  let holes: any[] = [];
-
-  // GolfAPI common paths
-  if (courseData.holes && Array.isArray(courseData.holes)) {
-    holes = courseData.holes;
-  } 
-  else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) {
-    holes = courseData.course.holes;
-  } 
-  else if (courseData.tees) {
-    const teeSets = Object.values(courseData.tees).flat();
-    const firstTee = teeSets[0];
-
-    // Stronger type guard to satisfy TypeScript
-    if (firstTee && typeof firstTee === 'object' && 'holes' in firstTee && Array.isArray(firstTee.holes)) {
-      holes = firstTee.holes;
+                  const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
+    if (!courseData) {
+      return Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
     }
-  }
 
-  // Return only the requested number of holes
-  return holes.length > 0 ? holes.slice(0, numHoles) : 
-         Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
-};
+    let holes: any[] = [];
+
+    // RapidAPI scorecard structure
+    if (courseData.scorecard && Array.isArray(courseData.scorecard)) {
+      holes = courseData.scorecard.map((h: any) => ({
+        par: Number(h.Par) || 4,
+        yardage: Number(h.yardage) || 0,
+        handicap: Number(h.Handicap) || 0,
+        hole: Number(h.Hole) || 0
+      }));
+    } else if (courseData.holes && Array.isArray(courseData.holes)) {
+      holes = courseData.holes;
+    } else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) {
+      holes = courseData.course.holes;
+    }
+
+    return holes.length > 0 ? holes.slice(0, numHoles) : 
+           Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+  };
 
 
                     // ====================== SCORECARD PDF COMPONENT (Shorter OTHER TEAM row) ======================
@@ -666,7 +636,9 @@ const savePlayerScores = async (registrationId: number) => {
       .map((r: any) => r.player_name || 'Player');
 
     const numHoles = event?.number_of_holes || 18;
-    const holes = getHolesFromCourseData(event?.course_data, numHoles);
+    console.log("Holes extracted:", getHolesFromCourseData(event?.course_data, numHoles));
+      const holes = getHolesFromCourseData(event?.course_data, numHoles);
+      console.log("Extracted holes for PDF:", holes);
 
     const frontHoles = holes.slice(0, 9);
     const backHoles = holes.slice(9, 18);
@@ -1047,6 +1019,68 @@ const savePlayerScores = async (registrationId: number) => {
       alert("Error generating scorecards. Check console.");
     }
   };
+
+    // ====================== COURSE SEARCH ======================
+
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+    const debouncedSearch = (query: string) => {
+    console.log("Debounced search called with:", query); // Debug
+
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    searchTimeoutRef.current = setTimeout(() => {
+      console.log("Calling searchCourses with:", query); // Debug
+      searchCourses(query);
+    }, 500);
+  };
+
+      const searchCourses = async (query: string) => {
+    if (query.length < 3) {
+      setCourseResults([]);
+      return;
+    }
+
+    console.log("Fetching for query:", query);
+
+    // Mock results so you can continue
+    setCourseResults([
+      { id: 1, name: "TPC Sawgrass", location: "Ponte Vedra Beach, FL" },
+      { id: 2, name: "The Manor Golf Club", location: "Farmville, VA" },
+      { id: 3, name: "Sugarloaf Golf Club", location: "Duluth, GA" },
+      { id: 4, name: "TPC Sawgrass - Valley", location: "Ponte Vedra Beach, FL" },
+    ].filter(course => 
+      course.name.toLowerCase().includes(query.toLowerCase())
+    ));
+  };
+
+    const selectCourse = async (basicCourse: any) => {
+    const courseName = basicCourse.name || '';
+    setCourseSearch(courseName);
+
+    // Mock full course data for now
+    const mockFullCourse = {
+      name: courseName,
+      course_name: courseName,
+      scorecard: Array.from({ length: 18 }, (_, i) => ({
+        Hole: i + 1,
+        Par: [4,5,4,4,3,4,5,4,4,4,5,4,3,4,5,4,3,4][i % 18],
+        yardage: [450, 520, 380, 410, 190, 430, 550, 390, 420, 460, 530, 400, 210, 440, 560, 380, 220, 450][i % 18],
+        Handicap: (i % 18) + 1
+      })),
+      location: basicCourse.location || "Unknown"
+    };
+
+    handleEventChange('course', courseName);
+    handleEventChange('course_data', mockFullCourse);
+    setSelectedCourse(mockFullCourse);
+
+    setCourseResults([]);
+
+    alert(`Selected course: ${courseName} (mock data loaded)`);
+  };
   // ====================== RENDER ======================
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
@@ -1077,6 +1111,7 @@ const savePlayerScores = async (registrationId: number) => {
         
 
        {/* ====================== MANAGE TAB (Mobile-Friendly + All Original Fields) ====================== */}
+       
 {activeTab === 'manage' && event && (
   <div className="bg-gray-800 rounded-3xl p-6 md:p-10 space-y-12">
 
@@ -1131,33 +1166,32 @@ const savePlayerScores = async (registrationId: number) => {
       </div>
     </div>
 
-    {/* Golf Course Search */}
+            {/* Golf Course Search */}
     <div>
       <h3 className="text-xl font-medium mb-4">Golf Course</h3>
       <div className="relative">
         <input
-          type="text"
-          value={courseSearch}
-          onChange={(e) => {
-            setCourseSearch(e.target.value);
-            if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-            searchTimeoutRef.current = setTimeout(() => searchCourses(e.target.value), 400);
-          }}
-          placeholder="Search courses (e.g. TPC Sugarloaf, Pebble Beach...)"
-          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500"
-        />
+  type="text"
+  value={courseSearch}
+  onChange={(e) => {
+    setCourseSearch(e.target.value);
+    debouncedSearch(e.target.value);
+  }}
+  placeholder="Start typing course name..."
+  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500"
+/>
 
         {courseResults.length > 0 && (
           <div className="absolute z-50 w-full mt-2 bg-gray-800 border border-gray-700 rounded-3xl shadow-2xl max-h-80 overflow-auto">
             {courseResults.map((course, idx) => (
               <div
                 key={idx}
-                onClick={() => selectCourse(course)}
+                onClick={async () => await selectCourse(course)}
                 className="px-6 py-5 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none"
               >
-                <div className="font-medium">{course.course_name || course.name}</div>
+                <div className="font-medium">{course.name || course.course_name}</div>
                 <div className="text-sm text-gray-400">
-                  {course.club_name} • {course.location?.city}, {course.location?.state}
+                  {course.club_name || ''} • {course.location || ''}
                 </div>
               </div>
             ))}
@@ -1165,7 +1199,7 @@ const savePlayerScores = async (registrationId: number) => {
         )}
       </div>
 
-      {(event.course || event.course_data?.course_name || event.course_data?.name) && (
+                      {event && (event.course || event.course_data?.course_name || event.course_data?.name) && (
         <p className="text-green-400 mt-3 text-sm">
           Current course: <span className="font-medium">
             {event.course || event.course_data?.course_name || event.course_data?.name}
@@ -1173,7 +1207,6 @@ const savePlayerScores = async (registrationId: number) => {
         </p>
       )}
     </div>
-
     {/* THREE BUTTONS ROW - Below Golf Course */}
     <div className="flex flex-wrap gap-3">
       <button 
@@ -1422,6 +1455,19 @@ const savePlayerScores = async (registrationId: number) => {
         </p>
       </div>
     </div>
+          {/* Waiver / Terms Checkbox for Event Creation */}
+      <div className="md:col-span-2 flex items-start gap-3 bg-gray-900 p-5 rounded-2xl mt-6">
+        <input
+          type="checkbox"
+          id="event-terms"
+          checked={agreedToTerms}
+          onChange={(e) => setAgreedToTerms(e.target.checked)}
+          className="mt-1 w-5 h-5 accent-blue-600"
+        />
+        <label htmlFor="event-terms" className="text-sm text-gray-300 cursor-pointer">
+          I agree to Fried Egg Events Terms of Service and will ensure all participants sign the Waiver & Release of Liability.
+        </label>
+      </div>
 
     {/* Save / Postpone / Delete Buttons */}
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1779,13 +1825,13 @@ const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
                 </th>
               ))}
 
-              <th className="text-center py-4 px-6 font-medium text-emerald-400 leading-tight border-l-2 border-r-2 border-emerald-500">
+                                          <th className="text-center py-4 px-6 font-medium text-emerald-400 leading-tight border-l-2 border-r-2 border-emerald-500">
                 In
                 <div className="text-xs text-gray-400 mt-1">
                   {(() => {
                     const front9Holes = getHolesFromCourseData(event?.course_data, 18).slice(0, 9);
-                    const front9Par = front9Holes.reduce((sum, h) => sum + (h?.par || 4), 0);
-                    const front9Yardage = front9Holes.reduce((sum, h) => sum + (h?.yardage || 0), 0);
+                    const front9Par = front9Holes.reduce((sum: number, h: any) => sum + (Number(h?.par) || 4), 0);
+                    const front9Yardage = front9Holes.reduce((sum: number, h: any) => sum + (Number(h?.yardage) || 0), 0);
                     return `P: ${front9Par} • Y: ${front9Yardage}`;
                   })()}
                 </div>

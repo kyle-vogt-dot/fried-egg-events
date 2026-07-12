@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
@@ -10,6 +10,9 @@ export default function CreateTournament() {
   const [courseSearch, setCourseSearch] = useState('');
   const [courseResults, setCourseResults] = useState<any[]>([]);
   const [selectedCourse, setSelectedCourse] = useState<any>(null);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const router = useRouter();
 
@@ -18,7 +21,18 @@ export default function CreateTournament() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
-  // Search for courses
+  // Debounced search
+  const debouncedSearch = (query: string) => {
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+
+    searchTimeoutRef.current = setTimeout(() => {
+      searchCourses(query);
+    }, 500);
+  };
+
+  // Search for courses using RapidAPI
   const searchCourses = async (query: string) => {
     if (query.length < 3) {
       setCourseResults([]);
@@ -27,13 +41,21 @@ export default function CreateTournament() {
 
     try {
       const res = await fetch(
-        `https://api.golfcourseapi.com/v1/search?search_query=${encodeURIComponent(query)}`,
+        `https://golf-course-api.p.rapidapi.com/search?name=${encodeURIComponent(query)}`,
         {
           headers: {
-            'Authorization': `Key ${process.env.NEXT_PUBLIC_GOLF_COURSE_API_KEY}`
+            'X-RapidAPI-Key': 'f619f2f719msh75809eca0940d3dp19df7fjsn8ab27dcb27f2',
+            'X-RapidAPI-Host': 'golf-course-api.p.rapidapi.com'
           }
         }
       );
+
+      if (!res.ok) {
+        console.error("API error:", res.status);
+        setCourseResults([]);
+        return;
+      }
+
       const data = await res.json();
       setCourseResults(data.courses || data || []);
     } catch (err) {
@@ -42,28 +64,19 @@ export default function CreateTournament() {
     }
   };
 
-  // Select course and fetch full details
-  const selectCourse = async (basicCourse: any) => {
-    const courseId = basicCourse.id;
-    if (!courseId) return;
-
-    try {
-      const res = await fetch(`https://api.golfcourseapi.com/v1/courses/${courseId}`, {
-        headers: {
-          'Authorization': `Key ${process.env.NEXT_PUBLIC_GOLF_COURSE_API_KEY}`
-        }
-      });
-      const fullCourse = await res.json();
-
-      setSelectedCourse(fullCourse);
-      setCourseSearch(fullCourse.course_name || fullCourse.name || basicCourse.course_name || basicCourse.name || '');
-      setCourseResults([]);
-    } catch (err) {
-      console.error('Failed to load full course details:', err);
-    }
+  // Select course
+  const selectCourse = (course: any) => {
+    setSelectedCourse(course);
+    setCourseSearch(course.name || course.course_name || '');
+    setCourseResults([]);
   };
 
   const handleSubmit = async (formData: FormData) => {
+    if (!agreedToTerms) {
+      alert("Please agree to the Terms of Service and Waiver before creating the event.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -93,7 +106,7 @@ export default function CreateTournament() {
         date,
         location,
         course: selectedCourse.course_name || selectedCourse.name || '',
-        course_data: selectedCourse,           // Full course data saved
+        course_data: selectedCourse,
         description,
         max_players: maxPlayers,
         created_by: user.id,
@@ -109,7 +122,6 @@ export default function CreateTournament() {
 
     alert('Tournament created successfully!');
 
-    // Redirect to the Manage tab of the new event
     router.push(`/event/${newEvent.id}/admin`);
   };
 
@@ -149,7 +161,7 @@ export default function CreateTournament() {
                 value={courseSearch}
                 onChange={(e) => {
                   setCourseSearch(e.target.value);
-                  searchCourses(e.target.value);
+                  debouncedSearch(e.target.value);
                 }}
                 placeholder="Start typing course name..."
                 className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
@@ -163,7 +175,7 @@ export default function CreateTournament() {
                       onClick={() => selectCourse(course)}
                       className="px-6 py-4 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none"
                     >
-                      {course.course_name || course.name} — {course.club_name}
+                      {course.name || course.course_name} — {course.location || course.club_name || ''}
                     </div>
                   ))}
                 </div>
@@ -172,7 +184,7 @@ export default function CreateTournament() {
 
             {selectedCourse && (
               <div className="mt-3 px-5 py-3 bg-green-900/30 border border-green-700 rounded-2xl text-emerald-400 text-sm">
-                ✓ Selected: {selectedCourse.course_name || selectedCourse.name}
+                ✓ Selected: {selectedCourse.name || selectedCourse.course_name}
               </div>
             )}
           </div>
@@ -184,9 +196,23 @@ export default function CreateTournament() {
 
           {error && <p className="text-red-500 text-center">{error}</p>}
 
+          {/* Waiver / Terms Checkbox for Event Creation */}
+          <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl mt-6">
+            <input
+              type="checkbox"
+              id="event-terms"
+              checked={agreedToTerms}
+              onChange={(e) => setAgreedToTerms(e.target.checked)}
+              className="mt-1 w-5 h-5 accent-blue-600"
+            />
+            <label htmlFor="event-terms" className="text-sm text-gray-300 cursor-pointer">
+              I agree to Fried Egg Events Terms of Service and will ensure all participants sign the Waiver & Release of Liability.
+            </label>
+          </div>
+
           <button
             type="submit"
-            disabled={loading || !selectedCourse}
+            disabled={loading || !selectedCourse || !agreedToTerms}
             className="w-full py-4 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-2xl font-semibold text-lg transition-colors"
           >
             {loading ? 'Creating Tournament...' : 'Create Tournament'}
