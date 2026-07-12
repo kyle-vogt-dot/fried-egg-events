@@ -257,7 +257,7 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
           min="0"
           max="20"
           value={score}
-          onChange={(e) => updateScore(playerIdForScores, hole, parseInt(e.target.value) || 0)}
+          onChange={(e) => updateScore(999, hole, parseInt(e.target.value) || 0)}
           className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
         />
       </td>
