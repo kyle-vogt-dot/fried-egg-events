@@ -160,6 +160,9 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
 
     console.log("Scores to save:", allScores);
     console.log("PlayerScores state:", playerScores);
+    console.log("teamId:", teamId);
+console.log("playerIdForScores:", playerIdForScores);
+console.log("Current playerScores:", playerScores);
 
     if (allScores.length === 0) {
       alert("No scores to save");
