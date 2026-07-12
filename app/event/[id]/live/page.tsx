@@ -246,10 +246,9 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
 <tr className="border-b border-gray-700 bg-emerald-900/20">
   <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name}</td>
   
-  {/* Front 9 holes */}
-  {Array.from({ length: 9 }, (_, i) => {
+  {Array.from({ length: numHoles }, (_, i) => {
     const hole = i + 1;
-    const score = playerScores[playerIdForScores]?.[hole] ?? '';
+    const score = playerScores['player']?.[hole] ?? '';
     return (
       <td key={hole} className="text-center">
         <input
@@ -257,22 +256,27 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
           min="0"
           max="20"
           value={score}
-          onChange={(e) => updateScore(999, hole, parseInt(e.target.value) || 0)}
+          onChange={(e) => {
+            setPlayerScores(prev => ({
+              ...prev,
+              'player': { ...(prev['player'] || {}), [hole]: parseInt(e.target.value) || 0 }
+            }));
+          }}
           className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
         />
       </td>
     );
   })}
 
-  {/* OUT (Front 9 Total) */}
+  {/* OUT */}
   <td className="text-center font-bold text-emerald-400 text-lg border-l-2 border-r-2 border-emerald-500">
     {frontScore}
   </td>
 
-  {/* Back 9 holes */}
+  {/* Back 9 */}
   {Array.from({ length: 9 }, (_, i) => {
     const hole = i + 10;
-    const score = playerScores[playerIdForScores]?.[hole] ?? '';
+    const score = playerScores['player']?.[hole] ?? '';
     return (
       <td key={hole} className="text-center">
         <input
@@ -280,7 +284,12 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
           min="0"
           max="20"
           value={score}
-          onChange={(e) => updateScore(playerIdForScores, hole, parseInt(e.target.value) || 0)}
+          onChange={(e) => {
+            setPlayerScores(prev => ({
+              ...prev,
+              'player': { ...(prev['player'] || {}), [hole]: parseInt(e.target.value) || 0 }
+            }));
+          }}
           className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
         />
       </td>
