@@ -10,6 +10,9 @@ const nextConfig = {
   experimental: {
     allowedDevOrigins: ['10.0.0.22'],
   },
+  // Reduce font preload warnings
+  optimizeFonts: true,
 };
+
 
 export default nextConfig;

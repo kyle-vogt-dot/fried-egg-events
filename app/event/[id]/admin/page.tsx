@@ -1039,9 +1039,7 @@ const savePlayerScores = async (registrationId: number) => {
     }
   };
 
-    // ====================== COURSE SEARCH ======================
 
-  // ====================== COURSE SEARCH ======================
 // ====================== COURSE SEARCH ======================
 const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -1083,42 +1081,45 @@ const selectCourse = async (basicCourse: any) => {
   const courseName = basicCourse.name || basicCourse.course_name || basicCourse.club_name || '';
   setCourseSearch(courseName);
 
+  console.log("Selecting course:", basicCourse); // Debug
+
   try {
     const res = await fetch(`/api/golf-course-details?id=${encodeURIComponent(basicCourse.id || '')}&name=${encodeURIComponent(courseName)}`);
-    
     let fullData;
+
     if (res.ok) {
       fullData = await res.json();
+      console.log("Real data loaded:", fullData);
     } else {
-      throw new Error('API details fetch failed');
+      throw new Error('Details API failed');
     }
 
-    handleEventChange('course', fullData.name || courseName);
+    handleEventChange('course', courseName);
     handleEventChange('course_data', fullData);
     setSelectedCourse(fullData);
     setCourseResults([]);
 
-    alert(`✅ Loaded full course data for: ${courseName}`);
+    alert(`✅ Loaded real data for: ${courseName}`);
   } catch (err) {
-    console.error('Failed to load full course data:', err);
-    
+    console.error("Details fetch failed:", err);
+
+    // Rich mock with variety
     const mockFullCourse = {
       name: courseName,
       course_name: courseName,
       scorecard: Array.from({ length: 18 }, (_, i) => ({
         Hole: i + 1,
-        Par: [4,5,4,4,3,4,5,4,4,4,5,4,3,4,5,4,3,4][i % 18],
-        yardage: [450, 520, 380, 410, 190, 430, 550, 390, 420, 460, 530, 400, 210, 440, 560, 380, 220, 450][i % 18],
+        Par: [4,5,4,4,3,4,5,4,4,4,5,4,3,4,5,4,3,4][i],
+        yardage: [450,520,380,410,190,430,550,390,420,460,530,400,210,440,560,380,220,450][i],
         Handicap: (i % 18) + 1
-      })),
-      location: basicCourse.location || basicCourse.city || "Atlanta Area, GA"
+      }))
     };
 
     handleEventChange('course', courseName);
     handleEventChange('course_data', mockFullCourse);
     setSelectedCourse(mockFullCourse);
 
-    alert(`⚠️ Using mock data for ${courseName}`);
+    alert(`⚠️ Using mock data for ${courseName} (real details not available)`);
   }
 };
   
