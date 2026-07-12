@@ -304,7 +304,9 @@ export default function EventAdminPage() {
 
   const handleEventChange = (field: string, value: any) => {
     setEvent((prev: any) => ({ ...prev, [field]: value }));
+    
   };
+  
   const getFlightFromHandicap = (handicap: number, flights: any[]) => {
   if (!flights || flights.length === 0) return '';
 
@@ -602,50 +604,44 @@ const savePlayerScores = async (registrationId: number) => {
 
   
   // ====================== SCORING HELPERS ======================
-        const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
+       const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
   if (!courseData) {
-    return Array.from({ length: numHoles }, (_, i) => ({ 
-      hole: i + 1, 
-      par: 4, 
-      yardage: 400, 
-      handicap: i + 1 
-    }));
+    return defaultHoles(numHoles);
   }
 
   let holes: any[] = [];
 
-  // Primary scorecard array
-  if (courseData.scorecard && Array.isArray(courseData.scorecard)) {
+  // Try common paths
+  if (courseData.scorecard && Array.isArray(courseData.scorecard) && courseData.scorecard.length > 0) {
     holes = courseData.scorecard;
-  } 
-  // Tees structure (common in GolfCourseAPI)
-  else if (courseData.tees) {
+  } else if (courseData.course?.scorecard) {
+    holes = courseData.course.scorecard;
+  } else if (courseData.tees) {
     const teeSet = courseData.tees.male?.[0] || courseData.tees.female?.[0] || Object.values(courseData.tees)[0];
-    if (teeSet && teeSet.holes) {
-      holes = teeSet.holes;
-    } else if (Array.isArray(teeSet)) {
-      holes = teeSet;
-    }
-  } 
-  else if (courseData.holes && Array.isArray(courseData.holes)) {
+    if (teeSet?.holes) holes = teeSet.holes;
+    else if (Array.isArray(teeSet)) holes = teeSet;
+  } else if (courseData.holes) {
     holes = courseData.holes;
   }
 
-  // Normalize
-  return holes.length > 0 
-    ? holes.slice(0, numHoles).map((h: any, index: number) => ({
-        hole: Number(h.Hole || h.hole || index + 1),
-        par: Number(h.Par || h.par) || 4,
-        yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
-        handicap: Number(h.Handicap || h.handicap || index + 1)
-      }))
-    : Array.from({ length: numHoles }, (_, i) => ({ 
-        hole: i + 1, 
-        par: 4, 
-        yardage: 400 + i * 10, 
-        handicap: i + 1 
-      }));
+  if (holes.length > 0) {
+    return holes.slice(0, numHoles).map((h: any, i: number) => ({
+      hole: Number(h.Hole || h.hole) || i + 1,
+      par: Number(h.Par || h.par) || 4,
+      yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
+      handicap: Number(h.Handicap || h.handicap) || i + 1
+    }));
+  }
+
+  return defaultHoles(numHoles);
 };
+
+const defaultHoles = (numHoles: number) => Array.from({ length: numHoles }, (_, i) => ({
+  hole: i + 1,
+  par: 4,
+  yardage: 400 + i * 10,
+  handicap: i + 1
+}));
 
                     // ====================== SCORECARD PDF COMPONENT (Shorter OTHER TEAM row) ======================
   const ScorecardPDF = ({ team }: { team: any }) => {
@@ -1094,16 +1090,29 @@ const selectCourse = async (basicCourse: any) => {
       throw new Error('Details API failed');
     }
 
+    // Update local state
     handleEventChange('course', courseName);
     handleEventChange('course_data', fullData);
     setSelectedCourse(fullData);
+
+    // Save to Supabase
+    const { error } = await supabase
+      .from('tournaments')
+      .update({ 
+        course: courseName, 
+        course_data: fullData 
+      })
+      .eq('id', parseInt(eventId));
+
+    if (error) console.error("Failed to save course data:", error);
+
     setCourseResults([]);
 
     alert(`✅ Loaded real data for: ${courseName}`);
   } catch (err) {
     console.error("Details fetch failed:", err);
 
-    // Rich mock with variety
+    // Rich mock
     const mockFullCourse = {
       name: courseName,
       course_name: courseName,
@@ -1119,10 +1128,17 @@ const selectCourse = async (basicCourse: any) => {
     handleEventChange('course_data', mockFullCourse);
     setSelectedCourse(mockFullCourse);
 
-    alert(`⚠️ Using mock data for ${courseName} (real details not available)`);
+    // Save mock to Supabase too
+    await supabase
+      .from('tournaments')
+      .update({ course: courseName, course_data: mockFullCourse })
+      .eq('id', parseInt(eventId));
+
+    setCourseResults([]);
+
+    alert(`⚠️ Using mock data for ${courseName}`);
   }
 };
-  
   // ====================== RENDER ======================
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
