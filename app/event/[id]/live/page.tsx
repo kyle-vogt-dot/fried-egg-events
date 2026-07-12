@@ -147,6 +147,9 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
     try {
       const allScores: any[] = [];
 
+      console.log("Scores to save:", allScores);
+console.log("PlayerScores state:", playerScores);
+
       for (const player of teamMembers) {
         const scoresForPlayer = playerScores[player.id] || playerScores[playerIdForScores] || {};
         Object.entries(scoresForPlayer).forEach(([hole, score]) => {
@@ -154,6 +157,7 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
             registration_id: player.id,
             hole: parseInt(hole),
             score: Number(score),
+            
           });
         });
       }
