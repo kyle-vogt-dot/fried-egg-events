@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
 export default function ResetPasswordPage() {
@@ -10,7 +10,6 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -19,7 +18,10 @@ export default function ResetPasswordPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (password !== confirmPassword) return setMessage("Passwords don't match");
+    if (password !== confirmPassword) {
+      setMessage("Passwords don't match");
+      return;
+    }
 
     setLoading(true);
     const { error } = await supabase.auth.updateUser({ password });
@@ -27,8 +29,8 @@ export default function ResetPasswordPage() {
     if (error) {
       setMessage(error.message);
     } else {
-      setMessage("Password updated successfully!");
-      setTimeout(() => router.push('/login'), 2000);
+      setMessage("Password updated successfully! Redirecting...");
+      setTimeout(() => router.push('/login'), 1500);
     }
     setLoading(false);
   };
@@ -61,12 +63,12 @@ export default function ResetPasswordPage() {
             />
           </div>
 
-          {message && <p className="text-center text-sm">{message}</p>}
+          {message && <p className="text-center text-sm text-green-400">{message}</p>}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-4 bg-green-600 hover:bg-green-700 rounded-2xl font-semibold"
+            className="w-full py-4 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-2xl font-semibold"
           >
             {loading ? 'Updating...' : 'Update Password'}
           </button>
