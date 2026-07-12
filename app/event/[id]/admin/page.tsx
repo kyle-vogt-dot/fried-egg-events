@@ -1077,7 +1077,7 @@ const selectCourse = async (basicCourse: any) => {
   const courseName = basicCourse.name || basicCourse.course_name || basicCourse.club_name || '';
   setCourseSearch(courseName);
 
-  console.log("Selecting course:", basicCourse); // Debug
+  console.log("Selecting course:", basicCourse);
 
   try {
     const res = await fetch(`/api/golf-course-details?id=${encodeURIComponent(basicCourse.id || '')}&name=${encodeURIComponent(courseName)}`);
@@ -1090,7 +1090,6 @@ const selectCourse = async (basicCourse: any) => {
       throw new Error('Details API failed');
     }
 
-    // Update local state
     handleEventChange('course', courseName);
     handleEventChange('course_data', fullData);
     setSelectedCourse(fullData);
@@ -1098,13 +1097,13 @@ const selectCourse = async (basicCourse: any) => {
     // Save to Supabase
     const { error } = await supabase
       .from('tournaments')
-      .update({ 
-        course: courseName, 
-        course_data: fullData 
-      })
+      .update({ course: courseName, course_data: fullData })
       .eq('id', parseInt(eventId));
 
     if (error) console.error("Failed to save course data:", error);
+
+    // Force local state update
+    setEvent((prev: any) => ({ ...prev, course: courseName, course_data: fullData }));
 
     setCourseResults([]);
 
@@ -1112,7 +1111,6 @@ const selectCourse = async (basicCourse: any) => {
   } catch (err) {
     console.error("Details fetch failed:", err);
 
-    // Rich mock
     const mockFullCourse = {
       name: courseName,
       course_name: courseName,
@@ -1128,11 +1126,12 @@ const selectCourse = async (basicCourse: any) => {
     handleEventChange('course_data', mockFullCourse);
     setSelectedCourse(mockFullCourse);
 
-    // Save mock to Supabase too
     await supabase
       .from('tournaments')
       .update({ course: courseName, course_data: mockFullCourse })
       .eq('id', parseInt(eventId));
+
+    setEvent((prev: any) => ({ ...prev, course: courseName, course_data: mockFullCourse }));
 
     setCourseResults([]);
 
