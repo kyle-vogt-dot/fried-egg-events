@@ -240,21 +240,21 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
                 <tr className="border-b border-gray-700 bg-emerald-900/20">
                   <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name}</td>
                   {Array.from({ length: numHoles }, (_, i) => {
-                    const hole = i + 1;
-                    const score = playerScores[teamId]?.[hole] ?? '';
-                    return (
-                      <td key={hole} className="text-center">
-                        <input
-                          type="number"
-                          min="0"
-                          max="20"
-                          value={score}
-                          onChange={(e) => updateScore(team?.id || 0, hole, parseInt(e.target.value) || 0)}
-                          className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
-                        />
-                      </td>
-                    );
-                  })}
+  const hole = i + 1;
+  const score = playerScores[teamId]?.[hole] ?? '';
+  return (
+    <td key={hole} className="text-center">
+      <input
+        type="number"
+        min="0"
+        max="20"
+        value={score}
+        onChange={(e) => updateScore(teamId, hole, parseInt(e.target.value) || 0)}
+        className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
+      />
+    </td>
+  );
+})}
                   <td className="text-center font-bold text-emerald-400">{frontScore}</td>
                   <td className="text-center font-bold text-emerald-400">{backScore}</td>
                   <td className="text-center font-bold text-2xl text-white">{totalScore}</td>
