@@ -61,39 +61,48 @@ export default function LiveEventPage() {
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
   );
 
- const getHolesFromCourseData = (courseData: any, numHoles: number = 18, teeName: string = 'default') => {
+ const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
   if (!courseData) {
-    return Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+    return Array.from({ length: numHoles }, (_, i) => ({ 
+      hole: i + 1, 
+      par: 4, 
+      yardage: 400, 
+      handicap: i + 1 
+    }));
   }
 
   let holes: any[] = [];
 
-  // Try scorecard first
+  // Primary scorecard array
   if (courseData.scorecard && Array.isArray(courseData.scorecard)) {
     holes = courseData.scorecard;
   } 
-  // Handle tees object
+  // Tees structure (common in GolfCourseAPI)
   else if (courseData.tees) {
-    const teeSet = courseData.tees.male?.[0] || courseData.tees.female?.[0] || courseData.tees;
-    if (teeSet && Array.isArray(teeSet.holes)) {
+    const teeSet = courseData.tees.male?.[0] || courseData.tees.female?.[0] || Object.values(courseData.tees)[0];
+    if (teeSet && teeSet.holes) {
       holes = teeSet.holes;
     } else if (Array.isArray(teeSet)) {
       holes = teeSet;
     }
+  } 
+  else if (courseData.holes && Array.isArray(courseData.holes)) {
+    holes = courseData.holes;
   }
 
+  // Normalize
   return holes.length > 0 
-    ? holes.slice(0, numHoles).map(h => ({
+    ? holes.slice(0, numHoles).map((h: any, index: number) => ({
+        hole: Number(h.Hole || h.hole || index + 1),
         par: Number(h.Par || h.par) || 4,
-        yardage: Number(h.yardage || h.Yardage) || 0,
-        handicap: Number(h.Handicap || h.handicap) || 0,
-        hole: Number(h.Hole || h.hole) || 0
+        yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
+        handicap: Number(h.Handicap || h.handicap || index + 1)
       }))
     : Array.from({ length: numHoles }, (_, i) => ({ 
+        hole: i + 1, 
         par: 4, 
-        yardage: 400 + i*10, 
-        handicap: i+1, 
-        hole: i+1 
+        yardage: 400 + i * 10, 
+        handicap: i + 1 
       }));
 };
 const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes || 18);

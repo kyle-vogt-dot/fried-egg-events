@@ -1,8 +1,7 @@
 import type { Metadata } from 'next';
 import { Montserrat, Montserrat_Alternates } from 'next/font/google';
-import Navigation from './navigation';     // Make sure this line is here
+import Navigation from './navigation';   // This line must exist
 
-// Use relative path instead of alias for now
 import './globals.css';
 
 const montserrat = Montserrat({
