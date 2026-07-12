@@ -151,7 +151,7 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
         const scoresForPlayer = playerScores[player.id] || playerScores[playerIdForScores] || {};
         Object.entries(scoresForPlayer).forEach(([hole, score]) => {
           allScores.push({
-            registration_id: player.id,
+            registration_id: Number(player.id),
             hole: parseInt(hole),
             score: Number(score),
           });
@@ -256,7 +256,7 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
           min="0"
           max="20"
           value={score}
-          onChange={(e) => updateScore(playerIdForScores, hole, parseInt(e.target.value) || 0)}
+          onChange={(e) => updateScore(Number(playerIdForScores), hole, parseInt(e.target.value) || 0)}
           className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
         />
       </td>
@@ -298,6 +298,7 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
               className="mt-10 w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-6 rounded-3xl text-2xl font-semibold"
             >
               {saving ? 'Saving...' : '💾 Save All Scores'}
+              
             </button>
           </div>
         )}
