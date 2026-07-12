@@ -602,31 +602,41 @@ const savePlayerScores = async (registrationId: number) => {
 
   
   // ====================== SCORING HELPERS ======================
-                  const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
-    if (!courseData) {
-      return Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+         const getHolesFromCourseData = (courseData: any, numHoles: number = 18, teeName: string = 'default') => {
+  if (!courseData) {
+    return Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+  }
+
+  let holes: any[] = [];
+
+  // Try scorecard first
+  if (courseData.scorecard && Array.isArray(courseData.scorecard)) {
+    holes = courseData.scorecard;
+  } 
+  // Handle tees object
+  else if (courseData.tees) {
+    const teeSet = courseData.tees.male?.[0] || courseData.tees.female?.[0] || courseData.tees;
+    if (teeSet && Array.isArray(teeSet.holes)) {
+      holes = teeSet.holes;
+    } else if (Array.isArray(teeSet)) {
+      holes = teeSet;
     }
+  }
 
-    let holes: any[] = [];
-
-    // RapidAPI scorecard structure
-    if (courseData.scorecard && Array.isArray(courseData.scorecard)) {
-      holes = courseData.scorecard.map((h: any) => ({
-        par: Number(h.Par) || 4,
-        yardage: Number(h.yardage) || 0,
-        handicap: Number(h.Handicap) || 0,
-        hole: Number(h.Hole) || 0
+  return holes.length > 0 
+    ? holes.slice(0, numHoles).map(h => ({
+        par: Number(h.Par || h.par) || 4,
+        yardage: Number(h.yardage || h.Yardage) || 0,
+        handicap: Number(h.Handicap || h.handicap) || 0,
+        hole: Number(h.Hole || h.hole) || 0
+      }))
+    : Array.from({ length: numHoles }, (_, i) => ({ 
+        par: 4, 
+        yardage: 400 + i*10, 
+        handicap: i+1, 
+        hole: i+1 
       }));
-    } else if (courseData.holes && Array.isArray(courseData.holes)) {
-      holes = courseData.holes;
-    } else if (courseData.course?.holes && Array.isArray(courseData.course.holes)) {
-      holes = courseData.course.holes;
-    }
-
-    return holes.length > 0 ? holes.slice(0, numHoles) : 
-           Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
-  };
-
+};
 
                     // ====================== SCORECARD PDF COMPONENT (Shorter OTHER TEAM row) ======================
   const ScorecardPDF = ({ team }: { team: any }) => {
@@ -1022,45 +1032,67 @@ const savePlayerScores = async (registrationId: number) => {
 
     // ====================== COURSE SEARCH ======================
 
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // ====================== COURSE SEARCH ======================
+// ====================== COURSE SEARCH ======================
+const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-    const debouncedSearch = (query: string) => {
-    console.log("Debounced search called with:", query); // Debug
+const debouncedSearch = (query: string) => {
+  if (searchTimeoutRef.current) {
+    clearTimeout(searchTimeoutRef.current);
+  }
+  searchTimeoutRef.current = setTimeout(() => {
+    searchCourses(query);
+  }, 500);
+};
 
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
+const searchCourses = async (query: string) => {
+  if (query.length < 3) {
+    setCourseResults([]);
+    return;
+  }
 
-    searchTimeoutRef.current = setTimeout(() => {
-      console.log("Calling searchCourses with:", query); // Debug
-      searchCourses(query);
-    }, 500);
-  };
-
-      const searchCourses = async (query: string) => {
-    if (query.length < 3) {
-      setCourseResults([]);
+  try {
+    const res = await fetch(`/api/golf-search?q=${encodeURIComponent(query)}`);
+    if (!res.ok) {
+      console.error('Search failed:', res.status);
+      setCourseResults([{
+        name: query,
+        location: "Atlanta Area, GA",
+        id: "mock-" + Date.now()
+      }]);
       return;
     }
+    const data = await res.json();
+    setCourseResults(data.results || data || []);
+  } catch (err) {
+    console.error('Course search failed:', err);
+    setCourseResults([]);
+  }
+};
 
-    console.log("Fetching for query:", query);
+const selectCourse = async (basicCourse: any) => {
+  const courseName = basicCourse.name || basicCourse.course_name || basicCourse.club_name || '';
+  setCourseSearch(courseName);
 
-    // Mock results so you can continue
-    setCourseResults([
-      { id: 1, name: "TPC Sawgrass", location: "Ponte Vedra Beach, FL" },
-      { id: 2, name: "The Manor Golf Club", location: "Farmville, VA" },
-      { id: 3, name: "Sugarloaf Golf Club", location: "Duluth, GA" },
-      { id: 4, name: "TPC Sawgrass - Valley", location: "Ponte Vedra Beach, FL" },
-    ].filter(course => 
-      course.name.toLowerCase().includes(query.toLowerCase())
-    ));
-  };
+  try {
+    const res = await fetch(`/api/golf-course-details?id=${encodeURIComponent(basicCourse.id || '')}&name=${encodeURIComponent(courseName)}`);
+    
+    let fullData;
+    if (res.ok) {
+      fullData = await res.json();
+    } else {
+      throw new Error('API details fetch failed');
+    }
 
-    const selectCourse = async (basicCourse: any) => {
-    const courseName = basicCourse.name || '';
-    setCourseSearch(courseName);
+    handleEventChange('course', fullData.name || courseName);
+    handleEventChange('course_data', fullData);
+    setSelectedCourse(fullData);
+    setCourseResults([]);
 
-    // Mock full course data for now
+    alert(`✅ Loaded full course data for: ${courseName}`);
+  } catch (err) {
+    console.error('Failed to load full course data:', err);
+    
     const mockFullCourse = {
       name: courseName,
       course_name: courseName,
@@ -1070,17 +1102,17 @@ const savePlayerScores = async (registrationId: number) => {
         yardage: [450, 520, 380, 410, 190, 430, 550, 390, 420, 460, 530, 400, 210, 440, 560, 380, 220, 450][i % 18],
         Handicap: (i % 18) + 1
       })),
-      location: basicCourse.location || "Unknown"
+      location: basicCourse.location || basicCourse.city || "Atlanta Area, GA"
     };
 
     handleEventChange('course', courseName);
     handleEventChange('course_data', mockFullCourse);
     setSelectedCourse(mockFullCourse);
 
-    setCourseResults([]);
-
-    alert(`Selected course: ${courseName} (mock data loaded)`);
-  };
+    alert(`⚠️ Using mock data for ${courseName}`);
+  }
+};
+  
   // ====================== RENDER ======================
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
@@ -1174,29 +1206,28 @@ const savePlayerScores = async (registrationId: number) => {
   type="text"
   value={courseSearch}
   onChange={(e) => {
-    setCourseSearch(e.target.value);
-    debouncedSearch(e.target.value);
-  }}
+  setCourseSearch(e.target.value);
+  debouncedSearch(e.target.value);
+}}
   placeholder="Start typing course name..."
   className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500"
 />
 
-        {courseResults.length > 0 && (
-          <div className="absolute z-50 w-full mt-2 bg-gray-800 border border-gray-700 rounded-3xl shadow-2xl max-h-80 overflow-auto">
-            {courseResults.map((course, idx) => (
-              <div
-                key={idx}
-                onClick={async () => await selectCourse(course)}
-                className="px-6 py-5 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none"
-              >
-                <div className="font-medium">{course.name || course.course_name}</div>
-                <div className="text-sm text-gray-400">
-                  {course.club_name || ''} • {course.location || ''}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+                {courseResults.map((course, idx) => (
+  <div
+    key={idx}
+    onClick={async () => {
+      console.log("Selected course:", course); // Debug
+      await selectCourse(course);
+    }}
+    className="px-6 py-5 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none"
+  >
+    <div className="font-medium">{course.name || course.course_name || 'Unknown Course'}</div>
+    <div className="text-sm text-gray-400">
+      {course.club_name || course.city || course.location?.city || ''} • {course.state || course.location?.state || ''}
+    </div>
+  </div>
+))}
       </div>
 
                       {event && (event.course || event.course_data?.course_name || event.course_data?.name) && (

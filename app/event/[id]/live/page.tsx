@@ -61,26 +61,40 @@ export default function LiveEventPage() {
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
   );
 
- const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
+ const getHolesFromCourseData = (courseData: any, numHoles: number = 18, teeName: string = 'default') => {
   if (!courseData) {
     return Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
   }
 
   let holes: any[] = [];
 
+  // Try scorecard first
   if (courseData.scorecard && Array.isArray(courseData.scorecard)) {
-    holes = courseData.scorecard.map((h: any) => ({
-      par: Number(h.Par) || 4,
-      yardage: Number(h.yardage) || Number(h.distance) || 0,
-      handicap: Number(h.Handicap) || 0,
-      hole: Number(h.Hole) || 0
-    }));
-  } else if (courseData.holes && Array.isArray(courseData.holes)) {
-    holes = courseData.holes;
+    holes = courseData.scorecard;
+  } 
+  // Handle tees object
+  else if (courseData.tees) {
+    const teeSet = courseData.tees.male?.[0] || courseData.tees.female?.[0] || courseData.tees;
+    if (teeSet && Array.isArray(teeSet.holes)) {
+      holes = teeSet.holes;
+    } else if (Array.isArray(teeSet)) {
+      holes = teeSet;
+    }
   }
 
-  return holes.length > 0 ? holes.slice(0, numHoles) : 
-         Array.from({ length: numHoles }, () => ({ par: 4, yardage: 0, handicap: 0 }));
+  return holes.length > 0 
+    ? holes.slice(0, numHoles).map(h => ({
+        par: Number(h.Par || h.par) || 4,
+        yardage: Number(h.yardage || h.Yardage) || 0,
+        handicap: Number(h.Handicap || h.handicap) || 0,
+        hole: Number(h.Hole || h.hole) || 0
+      }))
+    : Array.from({ length: numHoles }, (_, i) => ({ 
+        par: 4, 
+        yardage: 400 + i*10, 
+        handicap: i+1, 
+        hole: i+1 
+      }));
 };
 const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes || 18);
   const numHoles = event?.number_of_holes || 18;
