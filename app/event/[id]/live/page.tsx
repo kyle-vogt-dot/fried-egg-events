@@ -61,50 +61,66 @@ export default function LiveEventPage() {
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
   );
 
- const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
+const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
+  console.log("Course data received:", courseData);
+
   if (!courseData) {
-    return Array.from({ length: numHoles }, (_, i) => ({ 
-      hole: i + 1, 
-      par: 4, 
-      yardage: 400, 
-      handicap: i + 1 
-    }));
+    return defaultHoles(numHoles);
   }
 
   let holes: any[] = [];
 
-  // Primary scorecard array
-  if (courseData.scorecard && Array.isArray(courseData.scorecard)) {
+  // Direct scorecard
+  if (courseData.scorecard && Array.isArray(courseData.scorecard) && courseData.scorecard.length > 0) {
     holes = courseData.scorecard;
   } 
-  // Tees structure (common in GolfCourseAPI)
-  else if (courseData.tees) {
-    const teeSet = courseData.tees.male?.[0] || courseData.tees.female?.[0] || Object.values(courseData.tees)[0];
-    if (teeSet && teeSet.holes) {
-      holes = teeSet.holes;
-    } else if (Array.isArray(teeSet)) {
-      holes = teeSet;
+  // Look inside 'course' object
+  else if (courseData.course) {
+    const inner = courseData.course;
+    if (inner.scorecard && Array.isArray(inner.scorecard)) {
+      holes = inner.scorecard;
+    } else if (inner.tees) {
+      const maleTees = inner.tees.male || inner.tees;
+      const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
+      if (teeSet && teeSet.holes) {
+        holes = teeSet.holes;
+        console.log("Using tee set:", teeSet.tee_name);
+      }
     }
   } 
-  else if (courseData.holes && Array.isArray(courseData.holes)) {
+  // Direct tees
+  else if (courseData.tees) {
+    const maleTees = courseData.tees.male || courseData.tees;
+    const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
+    if (teeSet && teeSet.holes) {
+      holes = teeSet.holes;
+    }
+  } 
+  else if (courseData.holes) {
     holes = courseData.holes;
   }
 
-  // Normalize
-  return holes.length > 0 
-    ? holes.slice(0, numHoles).map((h: any, index: number) => ({
-        hole: Number(h.Hole || h.hole || index + 1),
-        par: Number(h.Par || h.par) || 4,
-        yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
-        handicap: Number(h.Handicap || h.handicap || index + 1)
-      }))
-    : Array.from({ length: numHoles }, (_, i) => ({ 
-        hole: i + 1, 
-        par: 4, 
-        yardage: 400 + i * 10, 
-        handicap: i + 1 
-      }));
+  if (holes.length > 0) {
+    console.log("Using real holes:", holes.length);
+    return holes.slice(0, numHoles).map((h: any, i: number) => ({
+      hole: Number(h.Hole || h.hole) || i + 1,
+      par: Number(h.par || h.Par) || 4,
+      yardage: Number(h.yardage || h.Yardage) || 400,
+      handicap: Number(h.handicap || h.Handicap) || i + 1
+    }));
+  }
+
+  console.log("Falling to default holes");
+  return defaultHoles(numHoles);
 };
+
+const defaultHoles = (numHoles: number) => Array.from({ length: numHoles }, (_, i) => ({
+  hole: i + 1,
+  par: 4,
+  yardage: 400 + i * 10,
+  handicap: i + 1
+}));
+
 const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes || 18);
   const numHoles = event?.number_of_holes || 18;
 

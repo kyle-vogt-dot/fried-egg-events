@@ -604,35 +604,56 @@ const savePlayerScores = async (registrationId: number) => {
 
   
   // ====================== SCORING HELPERS ======================
-       const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
+      const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
+  console.log("Course data received:", courseData);
+
   if (!courseData) {
     return defaultHoles(numHoles);
   }
 
   let holes: any[] = [];
 
-  // Try common paths
+  // Direct scorecard
   if (courseData.scorecard && Array.isArray(courseData.scorecard) && courseData.scorecard.length > 0) {
     holes = courseData.scorecard;
-  } else if (courseData.course?.scorecard) {
-    holes = courseData.course.scorecard;
-  } else if (courseData.tees) {
-    const teeSet = courseData.tees.male?.[0] || courseData.tees.female?.[0] || Object.values(courseData.tees)[0];
-    if (teeSet?.holes) holes = teeSet.holes;
-    else if (Array.isArray(teeSet)) holes = teeSet;
-  } else if (courseData.holes) {
+  } 
+  // Look inside 'course' object
+  else if (courseData.course) {
+    const inner = courseData.course;
+    if (inner.scorecard && Array.isArray(inner.scorecard)) {
+      holes = inner.scorecard;
+    } else if (inner.tees) {
+      const maleTees = inner.tees.male || inner.tees;
+      const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
+      if (teeSet && teeSet.holes) {
+        holes = teeSet.holes;
+        console.log("Using tee set:", teeSet.tee_name);
+      }
+    }
+  } 
+  // Direct tees
+  else if (courseData.tees) {
+    const maleTees = courseData.tees.male || courseData.tees;
+    const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
+    if (teeSet && teeSet.holes) {
+      holes = teeSet.holes;
+    }
+  } 
+  else if (courseData.holes) {
     holes = courseData.holes;
   }
 
   if (holes.length > 0) {
+    console.log("Using real holes:", holes.length);
     return holes.slice(0, numHoles).map((h: any, i: number) => ({
       hole: Number(h.Hole || h.hole) || i + 1,
-      par: Number(h.Par || h.par) || 4,
-      yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
-      handicap: Number(h.Handicap || h.handicap) || i + 1
+      par: Number(h.par || h.Par) || 4,
+      yardage: Number(h.yardage || h.Yardage) || 400,
+      handicap: Number(h.handicap || h.Handicap) || i + 1
     }));
   }
 
+  console.log("Falling to default holes");
   return defaultHoles(numHoles);
 };
 
@@ -642,6 +663,7 @@ const defaultHoles = (numHoles: number) => Array.from({ length: numHoles }, (_, 
   yardage: 400 + i * 10,
   handicap: i + 1
 }));
+ 
 
                     // ====================== SCORECARD PDF COMPONENT (Shorter OTHER TEAM row) ======================
   const ScorecardPDF = ({ team }: { team: any }) => {
@@ -1263,6 +1285,9 @@ const selectCourse = async (basicCourse: any) => {
         </p>
       )}
     </div>
+    <button onClick={() => router.refresh()} className="bg-gray-600 px-6 py-3 rounded-2xl">
+  Refresh Data
+</button>
     {/* THREE BUTTONS ROW - Below Golf Course */}
     <div className="flex flex-wrap gap-3">
       <button 
