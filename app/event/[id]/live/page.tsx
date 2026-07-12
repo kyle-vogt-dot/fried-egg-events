@@ -142,42 +142,41 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
   const totalScore = frontScore + backScore;
 
   const saveScores = async () => {
-    setSaving(true);
-    const teamMembers = getTeamMembers();
-    try {
-      const allScores: any[] = [];
+  setSaving(true);
+  const teamMembers = getTeamMembers();
+  try {
+    const allScores: any[] = [];
 
-      console.log("Scores to save:", allScores);
-console.log("PlayerScores state:", playerScores);
-
-      for (const player of teamMembers) {
-        const scoresForPlayer = playerScores[player.id] || playerScores[playerIdForScores] || {};
-        Object.entries(scoresForPlayer).forEach(([hole, score]) => {
-          allScores.push({
-            registration_id: player.id,
-            hole: parseInt(hole),
-            score: Number(score),
-            
-          });
+    for (const player of teamMembers) {
+      const scoresForPlayer = playerScores[player.id] || playerScores[playerIdForScores] || {};
+      Object.entries(scoresForPlayer).forEach(([hole, score]) => {
+        allScores.push({
+          registration_id: player.id,
+          hole: parseInt(hole),
+          score: Number(score),
         });
-      }
-
-      if (allScores.length === 0) {
-        alert("No scores to save");
-        return;
-      }
-
-      const { error } = await supabase.from('scores').upsert(allScores, { onConflict: 'registration_id,hole' });
-      if (error) throw error;
-
-      alert("✅ Scores saved successfully!");
-    } catch (err: any) {
-      console.error(err);
-      alert("Failed to save scores: " + err.message);
-    } finally {
-      setSaving(false);
+      });
     }
-  };
+
+    console.log("Scores to save:", allScores);
+    console.log("PlayerScores state:", playerScores);
+
+    if (allScores.length === 0) {
+      alert("No scores to save");
+      return;
+    }
+
+    const { error } = await supabase.from('scores').upsert(allScores, { onConflict: 'registration_id,hole' });
+    if (error) throw error;
+
+    alert("✅ Scores saved successfully!");
+  } catch (err: any) {
+    console.error(err);
+    alert("Failed to save scores: " + err.message);
+  } finally {
+    setSaving(false);
+  }
+};
 
   if (loading) return <div className="p-12 text-center text-xl">Loading live scorecard...</div>;
 
