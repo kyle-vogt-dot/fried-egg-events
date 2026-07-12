@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
@@ -60,6 +60,9 @@ export default function LiveEventPage() {
   const getTeamMembers = () => registrations.filter(r => 
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
   );
+
+  const teamId = team?.id || teamParam || 'team';
+  const playerIdForScores = team?.id || teamParam || 'team';
 
 const getHolesFromCourseData = (courseData: any, numHoles: number = 18) => {
   console.log("Course data received:", courseData);
@@ -132,46 +135,45 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
   const frontYds = frontHoles.reduce((sum, h) => sum + (h?.yardage || 0), 0);
   const backYds = backHoles.reduce((sum, h) => sum + (h?.yardage || 0), 0);
 
-  const teamId = team?.id || teamParam || 'team';
-  const currentScores = playerScores[teamId] || {};
+  const currentScores = playerScores[playerIdForScores] || {};
 
   const frontScore = Array.from({ length: 9 }, (_, i) => currentScores[i + 1] || 0).reduce((a, b) => a + b, 0);
   const backScore = Array.from({ length: 9 }, (_, i) => currentScores[i + 10] || 0).reduce((a, b) => a + b, 0);
   const totalScore = frontScore + backScore;
 
   const saveScores = async () => {
-  setSaving(true);
-  const teamMembers = getTeamMembers();
-  try {
-    const allScores: any[] = [];
+    setSaving(true);
+    const teamMembers = getTeamMembers();
+    try {
+      const allScores: any[] = [];
 
-    for (const player of teamMembers) {
-      const scoresForPlayer = playerScores[player.id] || playerScores[teamId] || {};
-      Object.entries(scoresForPlayer).forEach(([hole, score]) => {
-        allScores.push({
-          registration_id: player.id,
-          hole: parseInt(hole),
-          score: Number(score),
+      for (const player of teamMembers) {
+        const scoresForPlayer = playerScores[player.id] || playerScores[playerIdForScores] || {};
+        Object.entries(scoresForPlayer).forEach(([hole, score]) => {
+          allScores.push({
+            registration_id: player.id,
+            hole: parseInt(hole),
+            score: Number(score),
+          });
         });
-      });
+      }
+
+      if (allScores.length === 0) {
+        alert("No scores to save");
+        return;
+      }
+
+      const { error } = await supabase.from('scores').upsert(allScores, { onConflict: 'registration_id,hole' });
+      if (error) throw error;
+
+      alert("✅ Scores saved successfully!");
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to save scores: " + err.message);
+    } finally {
+      setSaving(false);
     }
-
-    if (allScores.length === 0) {
-      alert("No scores to save");
-      return;
-    }
-
-    const { error } = await supabase.from('scores').upsert(allScores, { onConflict: 'registration_id,hole' });
-    if (error) throw error;
-
-    alert("✅ Scores saved successfully!");
-  } catch (err: any) {
-    console.error(err);
-    alert("Failed to save scores: " + err.message);
-  } finally {
-    setSaving(false);
-  }
-};
+  };
 
   if (loading) return <div className="p-12 text-center text-xl">Loading live scorecard...</div>;
 
@@ -240,21 +242,21 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
                 <tr className="border-b border-gray-700 bg-emerald-900/20">
                   <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name}</td>
                   {Array.from({ length: numHoles }, (_, i) => {
-  const hole = i + 1;
-  const score = playerScores[teamId]?.[hole] ?? '';
-  return (
-    <td key={hole} className="text-center">
-      <input
-        type="number"
-        min="0"
-        max="20"
-        value={score}
-        onChange={(e) => updateScore(teamId, hole, parseInt(e.target.value) || 0)}
-        className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
-      />
-    </td>
-  );
-})}
+                    const hole = i + 1;
+                    const score = playerScores[playerIdForScores]?.[hole] ?? '';
+                    return (
+                      <td key={hole} className="text-center">
+                        <input
+                          type="number"
+                          min="0"
+                          max="20"
+                          value={score}
+                          onChange={(e) => updateScore(playerIdForScores, hole, parseInt(e.target.value) || 0)}
+                          className="w-14 bg-gray-800 border border-emerald-600 rounded-2xl text-center py-4 text-xl focus:outline-none focus:border-emerald-500"
+                        />
+                      </td>
+                    );
+                  })}
                   <td className="text-center font-bold text-emerald-400">{frontScore}</td>
                   <td className="text-center font-bold text-emerald-400">{backScore}</td>
                   <td className="text-center font-bold text-2xl text-white">{totalScore}</td>
