@@ -132,7 +132,7 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
   const frontYds = frontHoles.reduce((sum, h) => sum + (h?.yardage || 0), 0);
   const backYds = backHoles.reduce((sum, h) => sum + (h?.yardage || 0), 0);
 
-  const teamId = team?.id || 'team';
+  const teamId = team?.id || teamParam || 'team';
   const currentScores = playerScores[teamId] || {};
 
   const frontScore = Array.from({ length: 9 }, (_, i) => currentScores[i + 1] || 0).reduce((a, b) => a + b, 0);
@@ -241,7 +241,7 @@ const holes = getHolesFromCourseData(event?.course_data, event?.number_of_holes 
                   <td className="py-5 px-6 font-bold bg-emerald-900/30">{team?.name}</td>
                   {Array.from({ length: numHoles }, (_, i) => {
                     const hole = i + 1;
-                    const score = playerScores[team?.id]?.[hole] ?? '';
+                    const score = playerScores[teamId]?.[hole] ?? '';
                     return (
                       <td key={hole} className="text-center">
                         <input
