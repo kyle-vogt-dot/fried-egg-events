@@ -51,11 +51,12 @@ export default function LiveEventPage() {
   }, [eventId, teamParam, supabase]);
 
   const updateScore = (playerId: number, hole: number, score: number) => {
-    setPlayerScores(prev => ({
-      ...prev,
-      [playerId]: { ...(prev[playerId] || {}), [hole]: score }
-    }));
-  };
+  console.log("Updating score:", { playerId, hole, score });
+  setPlayerScores(prev => ({
+    ...prev,
+    [playerId]: { ...(prev[playerId] || {}), [hole]: score }
+  }));
+};
 
   const getTeamMembers = () => registrations.filter(r => 
     r.checked_in && (r.team_name === team?.name || String(r.id) === teamParam)
