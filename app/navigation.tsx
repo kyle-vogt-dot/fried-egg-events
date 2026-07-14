@@ -94,11 +94,37 @@ export default function Navigation() {
       </button>
       
       <div className="space-y-1">
-  <Link href="/profile" onClick={() => setSidebarOpen(false)} className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white">👤 Profile</Link>
-  <Link href="/dashboard/events" onClick={() => setSidebarOpen(false)} className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg font-medium text-white">📅 Created Events</Link>
-  <Link href="/dashboard/play" onClick={() => setSidebarOpen(false)} className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white">🎯 Play Events</Link>
-  <Link href="/info" onClick={() => setSidebarOpen(false)} className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white">ℹ️ Info</Link>
-  <Link href="/about" onClick={() => setSidebarOpen(false)} className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white">About Us</Link>
+  <Link 
+    href="/profile" 
+    onClick={() => setSidebarOpen(false)} 
+    className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white"
+  >
+    👤 Profile
+  </Link>
+  
+  <Link 
+    href="/dashboard" 
+    onClick={() => setSidebarOpen(false)} 
+    className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg font-medium text-white"
+  >
+    📅 Dashboard
+  </Link>
+
+  <Link 
+    href="/create" 
+    onClick={() => setSidebarOpen(false)} 
+    className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white"
+  >
+    ➕ Create Event
+  </Link>
+
+  <Link 
+    href="/" 
+    onClick={() => setSidebarOpen(false)} 
+    className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white"
+  >
+    🏠 Home
+  </Link>
 </div>
     </div>
   </div>
