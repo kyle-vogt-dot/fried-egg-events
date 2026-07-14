@@ -656,6 +656,31 @@ const savePlayerScores = async (registrationId: number) => {
   console.log("Falling to default holes");
   return defaultHoles(numHoles);
 };
+                   const handleDeleteEvent = async () => {
+    if (!confirm(`Hide "${event.name}"?`)) return;
+    if (!confirm("This will hide the event from all views.")) return;
+
+    try {
+      setSaving(true);
+
+      const { error } = await supabase
+        .from('tournaments')
+        .update({ 
+          is_active: false 
+        })
+        .eq('id', parseInt(eventId));
+
+      if (error) throw error;
+
+      alert("✅ Event hidden successfully!");
+      window.location.href = '/dashboard';
+
+    } catch (err: any) {
+      alert("Failed: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
 const defaultHoles = (numHoles: number) => Array.from({ length: numHoles }, (_, i) => ({
   hole: i + 1,
@@ -687,6 +712,7 @@ const defaultHoles = (numHoles: number) => Array.from({ length: numHoles }, (_, 
     const frontYds = calculateSum(frontHoles, 'yardage');
     const backPar = calculateSum(backHoles, 'par');
     const backYds = calculateSum(backHoles, 'yardage');
+    
 
     return (
       <Document>
@@ -1558,14 +1584,13 @@ const selectCourse = async (basicCourse: any) => {
       <button onClick={() => alert('Update the date and save to postpone the event')} className="bg-amber-600 hover:bg-amber-700 py-5 rounded-3xl font-semibold text-lg">
         Postpone Event
       </button>
-      <button onClick={async () => {
-        if (confirm('Delete this event permanently?')) {
-          await supabase.from('tournaments').delete().eq('id', parseInt(eventId));
-          router.push('/dashboard');
-        }
-      }} className="bg-red-600 hover:bg-red-700 py-5 rounded-3xl font-semibold text-lg">
-        Delete Event
-      </button>
+      <button
+  onClick={handleDeleteEvent}
+  disabled={saving}
+  className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded-3xl font-medium text-lg transition-colors flex items-center gap-2"
+>
+  🗑️ Delete Event
+</button>
     </div>
 
   </div>

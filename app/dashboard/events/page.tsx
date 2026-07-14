@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { createBrowserClient } from '@supabase/ssr';
 
@@ -16,66 +16,124 @@ export default function CreatedEventsPage() {
   useEffect(() => {
     const fetchEvents = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      
-      if (!user) {
-        // Redirect or show login
-        return;
-      }
+      if (!user) return;
 
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('tournaments')
         .select('*')
         .eq('created_by', user.id)
-        .order('date', { ascending: false });
+        .order('date', { ascending: true });
 
-      if (error) console.error(error);
-      else setEvents(data || []);
-      
+      setEvents(data || []);
       setLoading(false);
     };
 
     fetchEvents();
   }, [supabase]);
 
-  if (loading) return <div className="text-center py-20 text-xl">Loading your events...</div>;
+  if (loading) {
+    return <div className="p-12 text-center text-xl text-white">Loading your events...</div>;
+  }
+
+  const now = new Date();
+  const upcoming = events.filter(e => new Date(e.date) >= now);
+  const past = events.filter(e => new Date(e.date) < now);
 
   return (
-    <div className="max-w-5xl mx-auto">
-      <div className="flex justify-between items-center mb-10">
-        <h1 className="text-4xl font-bold">Created Events</h1>
-        <Link href="/create" className="bg-green-600 hover:bg-green-700 px-8 py-4 rounded-3xl font-medium">
-          + Create New Event
-        </Link>
-      </div>
+    <div className="min-h-screen bg-gray-900 text-white p-8">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-between items-center mb-10">
+          <h1 className="text-4xl font-bold">Created Events</h1>
+          <Link 
+            href="/create" 
+            className="bg-green-600 hover:bg-green-700 px-8 py-4 rounded-3xl font-semibold flex items-center gap-2"
+          >
+            + Create New Event
+          </Link>
+        </div>
 
-      {events.length === 0 ? (
-        <div className="bg-gray-900 rounded-3xl p-16 text-center">
-          <p className="text-2xl mb-4">No events yet</p>
-          <Link href="/create" className="text-blue-400 hover:underline">Create your first tournament →</Link>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {events.map((event) => (
-            <Link 
-              key={event.id} 
-              href={`/event/${event.id}/admin`}
-              className="bg-gray-900 rounded-3xl p-8 hover:bg-gray-800 transition-all group"
-            >
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="text-2xl font-semibold mb-2 group-hover:text-blue-400">{event.name}</h3>
-                  <p className="text-gray-400">{new Date(event.date).toLocaleDateString()}</p>
+        {upcoming.length > 0 && (
+          <div className="mb-12">
+            <h2 className="text-2xl font-semibold mb-6 text-gray-300">Upcoming</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {upcoming.map((event) => (
+                <div key={event.id} className="bg-gray-800 p-6 rounded-3xl hover:bg-gray-700 transition-colors">
+                  <h3 className="text-xl font-semibold mb-1">{event.name}</h3>
+                  <p className="text-gray-400 mb-6 text-sm">{new Date(event.date).toLocaleDateString()} • {event.course}</p>
+                  
+                  <div className="space-y-2 text-sm">
+                    <Link 
+                      href={`/event/${event.id}/manage`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Manage Event →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/checkin`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Check-In →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/scoring`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Scoring →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/leaderboard`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Leaderboard →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/pairings`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Pairings →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/scorecards`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Scorecards →
+                    </Link>
+                  </div>
                 </div>
-                <div className="text-sm bg-gray-800 px-4 py-2 rounded-full">{event.event_type || 'Event'}</div>
-              </div>
-              
-              <div className="mt-8 text-blue-400 flex items-center gap-2 text-sm">
-                Manage Event →
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
+              ))}
+            </div>
+          </div>
+        )}
+
+        {past.length > 0 && (
+          <div>
+            <h2 className="text-2xl font-semibold mb-6 text-gray-300">Past Events</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 opacity-75">
+              {past.map((event) => (
+                <div key={event.id} className="bg-gray-800 p-6 rounded-3xl hover:bg-gray-700 transition-colors">
+                  <h3 className="text-xl font-semibold mb-1">{event.name}</h3>
+                  <p className="text-gray-400 mb-6 text-sm">{new Date(event.date).toLocaleDateString()} • {event.course}</p>
+                  
+                  <div className="space-y-2 text-sm">
+                    <Link 
+                      href={`/event/${event.id}/scoring`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      View Results →
+                    </Link>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {events.length === 0 && (
+          <div className="text-center py-20 text-gray-400">
+            You haven't created any events yet.
+          </div>
+        )}
+      </div>
     </div>
   );
 }

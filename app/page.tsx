@@ -19,18 +19,19 @@ export default function EventsPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const fetchEvents = async () => {
-      const { data } = await supabase
-        .from('tournaments')
-        .select('*')
-        .order('date', { ascending: true });
+  const fetchEvents = async () => {
+    const { data } = await supabase
+      .from('tournaments')
+      .select('*')
+      .eq('is_active', true)
+      .order('date', { ascending: true });
 
-      setEvents(data || []);
-      setLoading(false);
-    };
+    setEvents(data || []);
+    setLoading(false);
+  };
 
-    fetchEvents();
-  }, []);
+  fetchEvents();
+}, []);   // ← Keep empty array for now
 
   const filteredEvents = events.filter(event =>
     event.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||

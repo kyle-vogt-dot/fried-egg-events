@@ -120,9 +120,9 @@ export default function EventDetailPage() {
           to: mainRegistrant.player_email,
           name: mainRegistrant.player_name,
           eventName: event.name,
-          eventDate: new Date(event.date).toLocaleDateString('en-US', { 
-            weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' 
-          }),
+          eventDate: new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', 
+              month: 'long', day: 'numeric', year: 'numeric' 
+            }),
           location: event.location,
           course: event.course,
           teamName: mainRegistrant.team_name || null,
@@ -141,8 +141,8 @@ export default function EventDetailPage() {
             to: teammate.player_email,
             name: teammate.player_name,
             eventName: event.name,
-            eventDate: new Date(event.date).toLocaleDateString('en-US', { 
-              weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' 
+            eventDate: new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', 
+              month: 'long', day: 'numeric', year: 'numeric' 
             }),
             location: event.location,
             course: event.course,
@@ -381,11 +381,19 @@ export default function EventDetailPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 p-10 border-b border-gray-700">
             <div>
               <p className="text-gray-500 text-sm mb-1">DATE</p>
-              <p className="text-xl font-medium">
-                {new Date(event.date).toLocaleDateString('en-US', { 
-                  weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' 
-                })}
-              </p>
+              {/* Replace your current date display with this */}
+<p className="text-2xl font-semibold">
+  {(() => {
+    const d = new Date(event.date);
+    d.setHours(12); // Force noon
+    return d.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  })()}
+</p>
             </div>
             <div>
               <p className="text-gray-500 text-sm mb-1">REGISTRATION OPENS</p>

@@ -38,23 +38,20 @@ export default function ProfilePage() {
       setEmail(user.email || '');
       setAvatarUrl(user.user_metadata?.avatar_url || '');
 
-      // Fetch created events
-      const { data: created } = await supabase
-        .from('tournaments')
-        .select('*')
-        .eq('created_by', user.id)
-        .order('date', { ascending: true });
+      // For created events
+const { data: created } = await supabase
+  .from('tournaments')
+  .select('*')
+  .eq('created_by', user.id)
+  .eq('is_active', true)
+  .order('date', { ascending: false });
 
-      setCreatedEvents(created || []);
-
-      // Fetch registered events
-      const { data: registered } = await supabase
-        .from('event_registrations')
-        .select(`
-          *,
-          tournament:tournaments(*)
-        `)
-        .eq('user_id', user.id);
+      /// For registered events (if you have a join)
+const { data: registered } = await supabase
+  .from('event_registrations')
+  .select('*, tournament(*)')
+  .eq('user_id', user.id)
+  .eq('tournament.is_active', true);   // ← Add this if possible
 
       setRegisteredEvents(registered || []);
 

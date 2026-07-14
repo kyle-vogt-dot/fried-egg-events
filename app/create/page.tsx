@@ -71,26 +71,33 @@ export default function CreateTournament() {
     setCourseResults([]);
   };
 
-  const handleSubmit = async (formData: FormData) => {
+    const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault(); // Important when using onSubmit
+
     if (!agreedToTerms) {
       alert("Please agree to the Terms of Service and Waiver before creating the event.");
+      return;
+    }
+
+    if (!selectedCourse) {
+      setError("Please select a golf course");
       return;
     }
 
     setLoading(true);
     setError(null);
 
+    const formData = new FormData(e.currentTarget);
+
     const name = formData.get('name') as string;
-    const date = formData.get('date') as string;
+    const dateStr = formData.get('date') as string;
     const location = formData.get('location') as string;
     const description = formData.get('description') as string || null;
     const maxPlayers = parseInt(formData.get('maxPlayers') as string || '0');
 
-    if (!selectedCourse) {
-      setError("Please select a golf course");
-      setLoading(false);
-      return;
-    }
+    // Fix date off-by-one issue
+    const eventDate = new Date(dateStr + 'T12:00:00');
+    const formattedDate = eventDate.toISOString().split('T')[0]; // YYYY-MM-DD
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -103,25 +110,26 @@ export default function CreateTournament() {
       .from('tournaments')
       .insert({
         name,
-        date,
+        date: formattedDate,
         location,
         course: selectedCourse.course_name || selectedCourse.name || '',
         course_data: selectedCourse,
         description,
         max_players: maxPlayers,
         created_by: user.id,
+        is_active: true,
       })
       .select()
       .single();
 
     if (insertError) {
+      console.error(insertError);
       setError(insertError.message);
       setLoading(false);
       return;
     }
 
     alert('Tournament created successfully!');
-
     router.push(`/event/${newEvent.id}/admin`);
   };
 
@@ -130,7 +138,7 @@ export default function CreateTournament() {
       <div className="max-w-2xl mx-auto">
         <h1 className="text-5xl font-bold mb-10 text-center">Create New Tournament</h1>
 
-        <form action={handleSubmit} className="bg-gray-800 rounded-3xl p-10 space-y-8">
+        <form onSubmit={handleSubmit} className="...">
           <div>
             <label className="block text-sm font-medium mb-2">Tournament Name</label>
             <input name="name" type="text" required className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500" placeholder="Summer Classic" />
