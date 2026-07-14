@@ -101,13 +101,13 @@ export default function Navigation() {
   >
     👤 Profile
   </Link>
-  
+
   <Link 
     href="/dashboard" 
     onClick={() => setSidebarOpen(false)} 
     className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg font-medium text-white"
   >
-    📅 Dashboard
+    📅 Created Events
   </Link>
 
   <Link 
@@ -115,7 +115,7 @@ export default function Navigation() {
     onClick={() => setSidebarOpen(false)} 
     className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white"
   >
-    ➕ Create Event
+    ➕ Create New Event
   </Link>
 
   <Link 
