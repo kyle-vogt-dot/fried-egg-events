@@ -57,16 +57,46 @@ export default function CreatedEventsPage() {
             <h2 className="text-2xl font-semibold mb-6 text-gray-300">Upcoming</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {upcoming.map((event) => (
-                <div key={event.id} className="bg-gray-800 p-8 rounded-3xl hover:bg-gray-700 transition-colors">
-                  <h3 className="text-2xl font-semibold mb-2">{event.name}</h3>
-                  <p className="text-gray-400 mb-6">{new Date(event.date).toLocaleDateString()}</p>
+                <div key={event.id} className="bg-gray-800 p-6 rounded-3xl hover:bg-gray-700 transition-colors">
+                  <h3 className="text-xl font-semibold mb-1">{event.name}</h3>
+                  <p className="text-gray-400 mb-6 text-sm">{new Date(event.date).toLocaleDateString()} • {event.course}</p>
                   
-                  <div className="flex gap-3">
+                  <div className="space-y-2 text-sm">
                     <Link 
-                      href={`/event/${event.id}/admin`}
-                      className="flex-1 bg-blue-600 hover:bg-blue-700 py-4 rounded-2xl text-center font-medium"
+                      href={`/event/${event.id}/manage`}
+                      className="block text-blue-400 hover:text-blue-300"
                     >
                       Manage Event →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/checkin`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Check-In →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/scoring`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Scoring →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/leaderboard`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Leaderboard →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/pairings`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Pairings →
+                    </Link>
+                    <Link 
+                      href={`/event/${event.id}/scorecards`}
+                      className="block text-blue-400 hover:text-blue-300"
+                    >
+                      Scorecards →
                     </Link>
                   </div>
                 </div>
@@ -80,14 +110,14 @@ export default function CreatedEventsPage() {
             <h2 className="text-2xl font-semibold mb-6 text-gray-300">Past Events</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 opacity-75">
               {past.map((event) => (
-                <div key={event.id} className="bg-gray-800 p-8 rounded-3xl hover:bg-gray-700 transition-colors">
-                  <h3 className="text-2xl font-semibold mb-2">{event.name}</h3>
-                  <p className="text-gray-400 mb-6">{new Date(event.date).toLocaleDateString()}</p>
+                <div key={event.id} className="bg-gray-800 p-6 rounded-3xl hover:bg-gray-700 transition-colors">
+                  <h3 className="text-xl font-semibold mb-1">{event.name}</h3>
+                  <p className="text-gray-400 mb-6 text-sm">{new Date(event.date).toLocaleDateString()} • {event.course}</p>
                   
-                  <div className="flex gap-3">
+                  <div className="space-y-2 text-sm">
                     <Link 
-                      href={`/event/${event.id}/admin`}
-                      className="flex-1 bg-gray-700 hover:bg-gray-600 py-4 rounded-2xl text-center font-medium"
+                      href={`/event/${event.id}/scoring`}
+                      className="block text-blue-400 hover:text-blue-300"
                     >
                       View Results →
                     </Link>

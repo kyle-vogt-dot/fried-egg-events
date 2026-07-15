@@ -39,20 +39,17 @@ export default function Navigation() {
     <>
       <nav className="bg-gray-900 border-b border-gray-800 py-5">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-between">
-          {/* Left Side - Logo + Links */}
+          
+          {/* Left Side - Logo + Home Link */}
           <div className="flex items-center gap-8">
             
 
-            <div className="hidden md:flex items-center gap-6">
-              <Link href="/" className="text-sm font-medium text-gray-300 hover:text-white transition-colors">
-                Home
-              </Link>
-              {user && (
-                <Link href="/dashboard" className="text-sm font-medium text-gray-300 hover:text-white transition-colors">
-                  Dashboard
-                </Link>
-              )}
-            </div>
+            <Link 
+              href="/" 
+              className="text-sm font-medium text-gray-300 hover:text-white transition-colors hidden md:block"
+            >
+              Home
+            </Link>
           </div>
 
           {/* Right Side - Menu + Auth */}
@@ -103,20 +100,20 @@ export default function Navigation() {
   </Link>
 
   <Link 
-    href="/dashboard" 
+    href="/dashboard/play" 
     onClick={() => setSidebarOpen(false)} 
     className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg font-medium text-white"
   >
-    📅 Created Events
+    🏌️‍♂️ Play Events
   </Link>
 
   <Link 
-    href="/create" 
-    onClick={() => setSidebarOpen(false)} 
-    className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg text-white"
-  >
-    ➕ Create New Event
-  </Link>
+  href="/events" 
+  onClick={() => setSidebarOpen(false)} 
+  className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg font-medium text-white"
+>
+  📅 Created Events
+</Link>
 
   <Link 
     href="/" 
