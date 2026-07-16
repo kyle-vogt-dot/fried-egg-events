@@ -128,9 +128,20 @@ export default function CreatedEventsPage() {
           </div>
         )}
 
-        {events.length === 0 && (
-          <div className="text-center py-20 text-gray-400">
-            You haven't created any events yet.
+                {events.length === 0 && (
+          <div className="bg-gray-800 rounded-3xl p-16 text-center">
+            <div className="text-6xl mb-6">🏌️</div>
+            <h3 className="text-2xl font-semibold mb-3">No Events Yet</h3>
+            <p className="text-gray-400 mb-8 max-w-md mx-auto">
+              You haven't created any tournaments yet. 
+              Get started by creating your first event!
+            </p>
+            <Link
+              href="/create"
+              className="inline-block bg-green-600 hover:bg-green-700 px-8 py-4 rounded-2xl font-semibold text-lg"
+            >
+              Create Your First Event
+            </Link>
           </div>
         )}
       </div>

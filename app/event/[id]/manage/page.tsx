@@ -15,7 +15,9 @@ export default function EventManagePage() {
   );
 
   const [event, setEvent] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [courseSearch, setCourseSearch] = useState('');
   const [courseResults, setCourseResults] = useState<any[]>([]);
@@ -27,7 +29,110 @@ export default function EventManagePage() {
   const [saving, setSaving] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
 
-  // Available Tees for Flights
+  const [newFlight, setNewFlight] = useState({ name: '', range: '' });
+  const [newAddon, setNewAddon] = useState({ name: '', quantity_available: 5, price_per_unit: 10 });
+  const [addons, setAddons] = useState<any[]>([]);
+  const [admins, setAdmins] = useState<any[]>([]);
+  const [newAdminName, setNewAdminName] = useState('');
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Main fetch + permission check
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      setError(null);
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        router.push('/login');
+        return;
+      }
+
+      const { data: eventData, error: eventError } = await supabase
+        .from('tournaments')
+        .select('*')
+        .eq('id', parseInt(eventId))
+        .single();
+
+      if (eventError || !eventData) {
+        setError("Event not found");
+        setLoading(false);
+        return;
+      }
+
+      setEvent(eventData);
+
+      // Permission check
+      const isCreator = eventData.created_by === user.id;
+
+      const { data: adminData } = await supabase
+        .from('event_admins')
+        .select('id')
+        .eq('event_id', parseInt(eventId))
+        .eq('user_id', user.id)
+        .single();
+
+      const isEventAdmin = !!adminData;
+      setIsAdmin(isCreator || isEventAdmin);
+
+      if (!isCreator && !isEventAdmin) {
+        setError("You don't have permission to manage this event.");
+      }
+
+      // Load addons and admins
+      const { data: addonData } = await supabase
+        .from('event_addons')
+        .select('*')
+        .eq('event_id', parseInt(eventId));
+      setAddons(addonData || []);
+
+      await fetchAdmins();
+
+      setLoading(false);
+    };
+
+    fetchData();
+  }, [eventId, supabase, router]);
+
+  const fetchAdmins = async () => {
+    const { data } = await supabase
+      .from('event_admins')
+      .select('*')
+      .eq('event_id', parseInt(eventId));
+    setAdmins(data || []);
+  };
+
+  // Session check
+  useEffect(() => {
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.push('/login?redirect=' + encodeURIComponent(window.location.pathname));
+      }
+    };
+    checkSession();
+  }, [supabase, router]);
+
+  if (loading) {
+    return <div className="min-h-screen bg-gray-900 text-white p-12 text-center">Loading event details...</div>;
+  }
+
+  if (error || !isAdmin) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white p-12 text-center">
+        <p className="text-red-400 text-xl">{error || "Access Denied"}</p>
+        <button 
+          onClick={() => router.back()} 
+          className="mt-6 px-6 py-3 bg-gray-700 rounded-2xl"
+        >
+          ← Go Back
+        </button>
+      </div>
+    );
+  }
+    // Available Tees for Flights
   const availableTees = (() => {
     if (!event?.course_data) return [];
     let teesData = event.course_data?.tees || event.course_data?.course?.tees;
@@ -48,51 +153,11 @@ export default function EventManagePage() {
     return flat;
   })();
 
-  // Flights
-  const [newFlight, setNewFlight] = useState({ name: '', range: '' });
-
-  // Add-ons
-  const [newAddon, setNewAddon] = useState({ name: '', quantity_available: 5, price_per_unit: 10 });
-  const [addons, setAddons] = useState<any[]>([]);
-
-  // Admins
-  const [admins, setAdmins] = useState<any[]>([]);
-  const [newAdminName, setNewAdminName] = useState('');
-  const [newAdminEmail, setNewAdminEmail] = useState('');
-
-  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Fetch initial data
-  useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      const { data: eventData } = await supabase
-        .from('tournaments')
-        .select('*')
-        .eq('id', parseInt(eventId))
-        .single();
-      setEvent(eventData);
-
-      const { data: addonData } = await supabase
-        .from('event_addons')
-        .select('*')
-        .eq('event_id', parseInt(eventId));
-      setAddons(addonData || []);
-
-      await fetchAdmins();
-      setLoading(false);
-    };
-
-    fetchData();
-  }, [eventId, supabase]);
-
-  const fetchAdmins = async () => {
-    const { data } = await supabase
-      .from('event_admins')
-      .select('*')
-      .eq('event_id', parseInt(eventId));
-    setAdmins(data || []);
+  const handleEventChange = (field: string, value: any) => {
+    setEvent((prev: any) => ({ ...prev, [field]: value }));
   };
+
+
 
   // Course Search
   const debouncedSearch = (query: string) => {
@@ -196,9 +261,7 @@ export default function EventManagePage() {
     }
   };
 
-  const handleEventChange = (field: string, value: any) => {
-    setEvent((prev: any) => ({ ...prev, [field]: value }));
-  };
+
 
   const handleSaveEvent = async () => {
     setSaving(true);
@@ -321,8 +384,15 @@ export default function EventManagePage() {
     setAddons(data || []);
   };
 
-  if (loading || !event) {
-    return <div className="min-h-screen bg-gray-900 text-white p-12 text-center">Loading event details...</div>;
+    if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-10 h-10 border-4 border-gray-700 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-400">Loading event...</p>
+        </div>
+      </div>
+    );
   }
 
     const handleDeleteEvent = async () => {
@@ -358,12 +428,12 @@ export default function EventManagePage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
       <div className="max-w-6xl mx-auto">
-        <button 
-          onClick={() => router.push('/dashboard/events')} 
-          className="mb-6 text-gray-400 hover:text-white flex items-center gap-2"
-        >
-          ← Back to Events
-        </button>
+        <button
+  onClick={() => router.back()}
+  className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-6"
+>
+  ← Back
+</button>
 
         <h1 className="text-4xl font-bold mb-2">{event.name}</h1>
         <p className="text-gray-400 mb-8">Manage Event Details</p>
@@ -770,15 +840,15 @@ export default function EventManagePage() {
         <div className="space-y-6">
           <div>
             <label className="block text-xs text-gray-500 mb-2">Contact Name</label>
-            <input placeholder="Kyle Vogt" value={event.contact_name || ''} onChange={(e) => handleEventChange('contact_name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+            <input placeholder="John Smith" value={event.contact_name || ''} onChange={(e) => handleEventChange('contact_name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-2">Email Address</label>
-            <input type="email" placeholder="kyle@friedeggevents.app" value={event.contact_email || ''} onChange={(e) => handleEventChange('contact_email', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+            <input type="email" placeholder="John@friedeggevents.app" value={event.contact_email || ''} onChange={(e) => handleEventChange('contact_email', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-2">Phone Number</label>
-            <input type="tel" placeholder="(555) 123-4567" value={event.contact_phone || ''} onChange={(e) => handleEventChange('contact_phone', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+            <input type="tel" placeholder="(555) 555-5555" value={event.contact_phone || ''} onChange={(e) => handleEventChange('contact_phone', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
           </div>
         </div>
       </div>
