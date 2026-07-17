@@ -76,13 +76,13 @@ export default function CreatedEventsPage() {
                       Manage Event →
                     </Link>
                     <Link 
-                      href={`/event/${event.id}/checkin`}
+                      href={`/event/${event.id}/check-in`}
                       className="block text-blue-400 hover:text-blue-300"
                     >
                       Check-In →
                     </Link>
                     <Link 
-                      href={`/event/${event.id}/scoring`}
+                      href={`/event/${event.id}/admin`}
                       className="block text-blue-400 hover:text-blue-300"
                     >
                       Scoring →

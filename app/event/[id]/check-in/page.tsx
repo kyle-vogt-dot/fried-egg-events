@@ -45,6 +45,13 @@ export default function EventCheckInPage() {
         .single();
       setEvent(eventData);
 
+      // Fetch addons
+      const { data: addonData } = await supabase
+        .from('event_addons')
+        .select('*')
+        .eq('event_id', parseInt(eventId));
+      setAddons(addonData || []);
+
       await fetchRegistrations();
       setLoading(false);
     };
@@ -245,22 +252,22 @@ export default function EventCheckInPage() {
           <div className="overflow-x-auto">
             <table className="w-full border-collapse">
               <thead>
-                <tr className="border-b border-gray-700 bg-gray-900">
-                  <th className="text-left py-3 px-6 font-medium">Player Name</th>
-                  <th className="text-left py-3 px-6 font-medium">Team</th>
-                  {event?.use_handicaps && (
-                    <th className="text-center py-3 px-6 font-medium">Handicap</th>
-                  )}
-                  {(event?.flights && event.flights.length > 0) && (
-                    <th className="text-center py-3 px-6 font-medium">Flight</th>
-                  )}
-                  {addons.map((addon: any) => (
-                    <th key={addon.id} className="text-center py-3 px-6 font-medium">{addon.name}</th>
-                  ))}
-                  <th className="text-center py-3 px-6 font-medium">Add-on Total</th>
-                  <th className="text-center py-3 px-6 font-medium">Actions</th>
-                </tr>
-              </thead>
+  <tr className="border-b border-gray-700 bg-gray-900">
+    <th className="text-left py-3 px-6 font-medium">Player Name</th>
+    <th className="text-left py-3 px-6 font-medium">Team</th>
+    {event?.use_handicaps && (
+      <th className="text-center py-3 px-6 font-medium">Handicap</th>
+    )}
+    {(event?.flights && event.flights.length > 0) && (
+      <th className="text-center py-3 px-6 font-medium">Flight</th>
+    )}
+    {addons.map((addon: any) => (
+      <th key={addon.id} className="text-center py-3 px-6 font-medium">{addon.name}</th>
+    ))}
+    <th className="text-center py-3 px-6 font-medium">Add-on Total</th>
+    <th className="text-center py-3 px-6 font-medium w-48">Actions</th>
+  </tr>
+</thead>
               <tbody>
                 {registrations
                   .filter((reg: any) => 
@@ -348,42 +355,42 @@ export default function EventCheckInPage() {
                         })}
 
                         <td className="py-2 px-6 text-center">
-                          <div className="flex flex-wrap gap-3 justify-center">
-                            {addonCost > 0 ? (
-                              <button 
-                                onClick={() => openPaymentModal(reg)} 
-                                className="bg-amber-600 hover:bg-amber-700 px-6 py-2.5 rounded-2xl text-sm font-medium text-white"
-                              >
-                                Pay ${addonCost}
-                              </button>
-                            ) : (
-                              <button 
-                                onClick={async () => {
-                                  if (isCheckedIn) {
-                                    if (!confirm(`Un-check in ${reg.player_name}?`)) return;
-                                    await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
-                                  } else {
-                                    await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
-                                  }
-                                  fetchRegistrations();
-                                }} 
-                                className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
-                              >
-                                {isCheckedIn ? '✓ Checked In' : 'Check In'}
-                              </button>
-                            )}
+  <div className="flex flex-wrap gap-3 justify-center">
+    {addonCost > 0 ? (
+      <button 
+        onClick={() => openPaymentModal(reg)} 
+        className="bg-amber-600 hover:bg-amber-700 px-6 py-2.5 rounded-2xl text-sm font-medium text-white"
+      >
+        Pay ${addonCost}
+      </button>
+    ) : (
+      <button 
+        onClick={async () => {
+          if (isCheckedIn) {
+            if (!confirm(`Un-check in ${reg.player_name}?`)) return;
+            await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
+          } else {
+            await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
+          }
+          fetchRegistrations();
+        }} 
+        className={`px-8 py-2.5 rounded-2xl text-sm font-medium transition-all ${isCheckedIn ? 'bg-green-600 hover:bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white`}
+      >
+        {isCheckedIn ? '✓ Checked In' : 'Check In'}
+      </button>
+    )}
 
-                            <div className="flex gap-2">
-                              <button onClick={() => handleRemovePlayer(reg)} className="text-red-400 hover:text-red-500 text-sm font-medium px-4 py-2">Remove</button>
-                              <button onClick={() => {
-                                setSubPlayerReg(reg);
-                                setSubName('');
-                                setSubEmail('');
-                                setShowSubModal(true);
-                              }} className="text-blue-400 hover:text-blue-500 text-sm font-medium px-4 py-2">Sub Player</button>
-                            </div>
-                          </div>
-                        </td>
+    <div className="flex gap-2">
+      <button onClick={() => handleRemovePlayer(reg)} className="text-red-400 hover:text-red-500 text-sm font-medium px-4 py-2">Remove</button>
+      <button onClick={() => {
+        setSubPlayerReg(reg);
+        setSubName('');
+        setSubEmail('');
+        setShowSubModal(true);
+      }} className="text-blue-400 hover:text-blue-500 text-sm font-medium px-4 py-2">Sub Player</button>
+    </div>
+  </div>
+</td>
                       </tr>
                     );
                   })}
