@@ -10,7 +10,9 @@ export default function SignupPage() {
   const searchParams = useSearchParams();
   const redirect = searchParams.get('redirect') || '/';
 
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,20 +28,36 @@ export default function SignupPage() {
     setLoading(true);
     setError(null);
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${window.location.origin}/login?redirect=${encodeURIComponent(redirect)}`,
-      },
-    });
-
-    if (error) {
-      setError(error.message);
-    } else {
-      setSuccess(true);
+    if (!name.trim() || !phone.trim()) {
+      setError("Name and phone number are required");
+      setLoading(false);
+      return;
     }
-    setLoading(false);
+
+    try {
+      // 1. Create auth user
+      const { data, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/login?redirect=${encodeURIComponent(redirect)}`,
+          data: {
+            full_name: name,
+            phone: phone,
+          }
+        },
+      });
+
+      if (authError) throw authError;
+
+      // Profile is now created automatically by the database trigger
+
+      setSuccess(true);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (success) {
@@ -69,7 +87,19 @@ export default function SignupPage() {
 
         <form onSubmit={handleSignup} className="space-y-6">
           <div>
-            <label className="block text-sm mb-2">Email</label>
+            <label className="block text-sm mb-2">Full Name <span className="text-red-400">*</span></label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
+              placeholder="Kyle Vogt"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm mb-2">Email <span className="text-red-400">*</span></label>
             <input
               type="email"
               value={email}
@@ -80,7 +110,19 @@ export default function SignupPage() {
           </div>
 
           <div>
-            <label className="block text-sm mb-2">Password</label>
+            <label className="block text-sm mb-2">Phone Number <span className="text-red-400">*</span></label>
+            <input
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              required
+              className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
+              placeholder="(555) 123-4567"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm mb-2">Password <span className="text-red-400">*</span></label>
             <input
               type="password"
               value={password}

@@ -38,7 +38,7 @@ function LoginContent() {
       return;
     }
 
-    const redirectUrl = searchParams.get('redirect') || '/dashboard';
+    const redirectUrl = searchParams.get('redirect') || '/';
     router.push(redirectUrl);
     router.refresh();
   };

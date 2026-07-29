@@ -207,122 +207,152 @@ export default function EventDetailPage() {
     setAdditionalPlayers([]);
   };
 
-    // ==================== FIXED handleRegister - Mobile-friendly redirect ====================
-  const handleRegister = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      alert("Please log in to register");
+    const handleRegister = async () => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    alert("Please log in to register");
+    return;
+  }
+
+  setSubmitting(true);
+
+  try {
+    const finalTeamName = mode === 'create' ? newTeamName : selectedTeam;
+
+    if (!isIndividual && !finalTeamName) {
+      alert("Please select or create a team name");
+      setSubmitting(false);
       return;
     }
 
-    setSubmitting(true);
+    // ========== INDIVIDUAL ==========
+    if (isIndividual) {
+      const { error } = await supabase.from('event_registrations').insert({
+        event_id: parseInt(eventId),
+        user_id: user.id,
+        player_name: user.email?.split('@')[0] || 'Player',
+        player_email: user.email || '',
+        team_name: null,
+        paid: false,
+        checked_in: false,
+        addons_selected: {}
+      });
 
-    try {
-      const finalTeamName = mode === 'create' ? newTeamName : selectedTeam;
-
-      if (!isIndividual && !finalTeamName) {
-        alert("Please select or create a team name");
+      if (error) {
+        console.error('Registration error:', error);
+        alert(`Failed to register: ${error.message}`);
+        setSubmitting(false);
         return;
       }
-
-      // Insert registrations first
-      if (isIndividual) {
-        const mainInsert = {
+    } 
+    
+    // ========== TEAM ==========
+    else {
+      // Join existing team
+      if (mode === 'join' && selectedTeam) {
+        const { error } = await supabase.from('event_registrations').insert({
           event_id: parseInt(eventId),
           user_id: user.id,
           player_name: user.email?.split('@')[0] || 'Player',
           player_email: user.email || '',
-          team_name: null,
+          team_name: selectedTeam,
           paid: false,
           checked_in: false,
           addons_selected: {}
-        };
-        await supabase.from('event_registrations').insert(mainInsert);
+        });
+
+        if (error) {
+          console.error('Join team error:', error);
+          alert(`Failed to join team: ${error.message}`);
+          setSubmitting(false);
+          return;
+        }
       } 
-      else {
-        if (mode === 'join' && selectedTeam) {
-          const joinInsert = {
+      
+      // Create new team
+      else if (mode === 'create' && newTeamName) {
+        if (!isOrganizerOnly) {
+          const { error } = await supabase.from('event_registrations').insert({
             event_id: parseInt(eventId),
             user_id: user.id,
             player_name: user.email?.split('@')[0] || 'Player',
             player_email: user.email || '',
-            team_name: selectedTeam,
+            team_name: newTeamName,
             paid: false,
             checked_in: false,
             addons_selected: {}
-          };
-          await supabase.from('event_registrations').insert(joinInsert);
-        } 
-        else if (mode === 'create' && newTeamName) {
-          if (!isOrganizerOnly) {
-            const mainInsert = {
-              event_id: parseInt(eventId),
-              user_id: user.id,
-              player_name: user.email?.split('@')[0] || 'Player',
-              player_email: user.email || '',
-              team_name: newTeamName,
-              paid: false,
-              checked_in: false,
-              addons_selected: {}
-            };
-            await supabase.from('event_registrations').insert(mainInsert);
+          });
+
+          if (error) {
+            console.error('Create team error:', error);
+            alert(`Failed to create team: ${error.message}`);
+            setSubmitting(false);
+            return;
           }
         }
+      }
 
-        if (additionalPlayers.length > 0) {
-          const inserts = additionalPlayers.map(p => ({
-            event_id: parseInt(eventId),
-            user_id: null,
-            player_name: p.name,
-            player_email: p.email,
-            team_name: finalTeamName,
-            paid: false,
-            checked_in: false,
-            addons_selected: {}
-          }));
-          await supabase.from('event_registrations').insert(inserts);
+      // Additional players
+      if (additionalPlayers.length > 0) {
+        const inserts = additionalPlayers.map(p => ({
+          event_id: parseInt(eventId),
+          user_id: null,
+          player_name: p.name,
+          player_email: p.email,
+          team_name: finalTeamName,
+          paid: false,
+          checked_in: false,
+          addons_selected: {}
+        }));
+
+        const { error } = await supabase.from('event_registrations').insert(inserts);
+        if (error) {
+          console.error('Additional players error:', error);
+          alert(`Failed to add additional players: ${error.message}`);
+          setSubmitting(false);
+          return;
         }
       }
-
-      // === FIXED: Use direct redirect instead of window.open (much more reliable on mobile) ===
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
-
-      const response = await fetch('/api/create-checkout-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: totalCost,
-          player_name: user.email?.split('@')[0] || 'Player',
-          email: user.email,
-          description: `Registration for ${event.name}`,
-          event_name: event.name,
-          event_id: event.id,
-          type: 'registration',
-          success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration`,
-          cancel_url: `${baseUrl}/event/${eventId}`,
-        }),
-      });
-
-      const { url } = await response.json();
-
-      if (url) {
-        // This is the key change for mobile
-        window.location.href = url;
-        setShowRegisterModal(false);
-      } else {
-        alert('Failed to create payment link');
-      }
-    } catch (err: any) {
-      console.error(err);
-      alert('Error starting registration');
-    } finally {
-      setSubmitting(false);
     }
-  };
 
-  const viewRegisteredPlayers = () => {
-    router.push(`/event/${eventId}/players`);
-  };
+    // Only go to Stripe if database inserts succeeded
+    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+
+    const response = await fetch('/api/create-checkout-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: totalCost,
+        player_name: user.email?.split('@')[0] || 'Player',
+        email: user.email,
+        description: `Registration for ${event.name}`,
+        event_name: event.name,
+        event_id: event.id,
+        type: 'registration',
+        success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration`,
+        cancel_url: `${baseUrl}/event/${eventId}`,
+      }),
+    });
+
+    const { url } = await response.json();
+
+    if (url) {
+      window.location.href = url;
+      setShowRegisterModal(false);
+    } else {
+      alert('Failed to create payment link');
+    }
+
+  } catch (err: any) {
+    console.error(err);
+    alert('Error starting registration');
+  } finally {
+    setSubmitting(false);
+  }
+};
+const viewRegisteredPlayers = () => {
+  router.push(`/event/${eventId}/players`);
+};
 
   if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Loading event...</div>;
   if (!event) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Event not found</div>;
