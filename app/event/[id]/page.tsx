@@ -61,35 +61,66 @@ export default function EventDetailPage() {
 
     
           // Handle payment success (main registration OR add-ons)
-  useEffect(() => {
-    const successType = searchParams.get('success');
-    const regIdParam = searchParams.get('registration_id');
+useEffect(() => {
+  const paymentStatus = searchParams.get('payment');
+  const type = searchParams.get('type');
+  const regIdParam = searchParams.get('registration_id');
 
-    if (successType === 'addon' && regIdParam) {
-      const regId = parseInt(regIdParam);
+  // ===== MAIN REGISTRATION SUCCESS =====
+  if (paymentStatus === 'success' && type === 'registration') {
+    const handleRegistrationSuccess = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
 
-      console.log(`🔄 Add-on payment success detected for reg ${regId}`);
+      // 1. Mark the registration as paid
+      const { error } = await supabase
+        .from('event_registrations')
+        .update({ paid: true })
+        .eq('event_id', parseInt(eventId))
+        .eq('user_id', user.id);
 
-      const handleSuccess = async () => {
-        const { error } = await supabase
-          .from('event_registrations')
-          .update({ 
-            paid_addons: true 
-            // Do NOT set checked_in here - admin does it manually
-          })
-          .eq('id', regId);
+      if (error) {
+        console.error("Failed to mark as paid:", error);
+      } else {
+        console.log("✅ Registration marked as paid");
+      }
 
-        if (error) {
-          console.error("Failed to update add-on status:", error);
-        } else {
-          console.log("✅ paid_addons = true");
-          setShowSuccessModal(true);
-        }
-      };
+      // 2. Refresh the registrations list
+      await fetchData();
 
-      handleSuccess();
-    }
-  }, [searchParams, supabase]);
+      // 3. Show success message
+      setShowSuccessMessage(true);
+
+      // 4. Send confirmation emails
+      // (small delay so the updated paid status is available)
+      setTimeout(() => {
+        sendRegistrationEmails();
+      }, 800);
+    };
+
+    handleRegistrationSuccess();
+  }
+
+  // ===== ADD-ON PAYMENT SUCCESS =====
+  if (paymentStatus === 'success' && type === 'addon' && regIdParam) {
+    const regId = parseInt(regIdParam);
+
+    const handleAddonSuccess = async () => {
+      const { error } = await supabase
+        .from('event_registrations')
+        .update({ paid_addons: true })
+        .eq('id', regId);
+
+      if (error) {
+        console.error("Failed to update add-on status:", error);
+      } else {
+        setShowSuccessModal(true);
+      }
+    };
+
+    handleAddonSuccess();
+  }
+}, [searchParams, eventId]);
 
        const updatePaymentStatusToPaid = async () => {
     const { data: { user } } = await supabase.auth.getUser();
