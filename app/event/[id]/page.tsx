@@ -59,70 +59,116 @@ export default function EventDetailPage() {
     fetchData();
   }, [eventId]);
 
-    
-          // Handle payment success (main registration OR add-ons)
-useEffect(() => {
-  const paymentStatus = searchParams.get('payment');
-  const type = searchParams.get('type');
-  const regIdParam = searchParams.get('registration_id');
+  // Helper to send registration email
+  const sendRegistrationEmailToPlayer = async (player: {
+    player_email: string;
+    player_name: string;
+    team_name?: string | null;
+  }) => {
+    if (!event || !player.player_email) return;
 
-  // ===== MAIN REGISTRATION SUCCESS =====
-  if (paymentStatus === 'success' && type === 'registration') {
-    const handleRegistrationSuccess = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+    try {
+      await fetch('/api/send-registration-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: player.player_email,
+          name: player.player_name,
+          eventName: event.name,
+          eventDate: new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', {
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+          }),
+          location: event.location,
+          course: event.course,
+          teamName: player.team_name || null,
+          isTeam: !!player.team_name,
+          eventId: event.id,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to send registration email:', err);
+    }
+  };
 
-      // 1. Mark the registration as paid
-      const { error } = await supabase
-        .from('event_registrations')
-        .update({ paid: true })
-        .eq('event_id', parseInt(eventId))
-        .eq('user_id', user.id);
+  // Handle payment success (main registration OR add-ons)
+  useEffect(() => {
+    const paymentStatus = searchParams.get('payment');
+    const type = searchParams.get('type');
+    const regIdParam = searchParams.get('registration_id');
 
-      if (error) {
-        console.error("Failed to mark as paid:", error);
-      } else {
-        console.log("✅ Registration marked as paid");
-      }
+    // ===== MAIN REGISTRATION SUCCESS =====
+    if (paymentStatus === 'success' && type === 'registration') {
+      const handleRegistrationSuccess = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
 
-      // 2. Refresh the registrations list
-      await fetchData();
+        // 1. Mark the main player as paid
+        await supabase
+          .from('event_registrations')
+          .update({ paid: true })
+          .eq('event_id', parseInt(eventId))
+          .eq('user_id', user.id);
 
-      // 3. Show success message
-      setShowSuccessMessage(true);
+        // 2. Get the updated registration for this user
+        const { data: myReg } = await supabase
+          .from('event_registrations')
+          .select('*')
+          .eq('event_id', parseInt(eventId))
+          .eq('user_id', user.id)
+          .single();
 
-      // 4. Send confirmation emails
-      // (small delay so the updated paid status is available)
-      setTimeout(() => {
-        sendRegistrationEmails();
-      }, 800);
-    };
+        // 3. Show success message
+        setShowSuccessMessage(true);
 
-    handleRegistrationSuccess();
-  }
+        // 4. Send email to the main registrant
+        if (myReg) {
+          await sendRegistrationEmailToPlayer(myReg);
 
-  // ===== ADD-ON PAYMENT SUCCESS =====
-  if (paymentStatus === 'success' && type === 'addon' && regIdParam) {
-    const regId = parseInt(regIdParam);
+          // 5. Send emails to any additional teammates (user_id = null)
+          if (myReg.team_name) {
+            const { data: teammates } = await supabase
+              .from('event_registrations')
+              .select('*')
+              .eq('event_id', parseInt(eventId))
+              .eq('team_name', myReg.team_name)
+              .is('user_id', null);
 
-    const handleAddonSuccess = async () => {
-      const { error } = await supabase
-        .from('event_registrations')
-        .update({ paid_addons: true })
-        .eq('id', regId);
+            if (teammates && teammates.length > 0) {
+              for (const teammate of teammates) {
+                await sendRegistrationEmailToPlayer(teammate);
+              }
+            }
+          }
+        }
 
-      if (error) {
-        console.error("Failed to update add-on status:", error);
-      } else {
+        // 6. Refresh the list
+        await fetchData();
+      };
+
+      handleRegistrationSuccess();
+    }
+
+    // ===== ADD-ON PAYMENT SUCCESS =====
+    if (paymentStatus === 'success' && type === 'addon' && regIdParam) {
+      const regId = parseInt(regIdParam);
+
+      const handleAddonSuccess = async () => {
+        await supabase
+          .from('event_registrations')
+          .update({ paid_addons: true })
+          .eq('id', regId);
+
         setShowSuccessModal(true);
-      }
-    };
+      };
 
-    handleAddonSuccess();
-  }
-}, [searchParams, eventId]);
+      handleAddonSuccess();
+    }
+  }, [searchParams, eventId]);
 
-       const updatePaymentStatusToPaid = async () => {
+  const updatePaymentStatusToPaid = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
@@ -136,55 +182,6 @@ useEffect(() => {
       console.log("✅ Main registration marked as paid");
     } catch (err) {
       console.error("Error updating main payment status:", err);
-    }
-  };
-
-  const sendRegistrationEmails = async () => {
-    try {
-      const mainRegistrant = registrations.find(r => r.user_id && r.paid === true);
-      if (!mainRegistrant) return;
-
-      await fetch('/api/send-registration-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: mainRegistrant.player_email,
-          name: mainRegistrant.player_name,
-          eventName: event.name,
-          eventDate: new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', 
-              month: 'long', day: 'numeric', year: 'numeric' 
-            }),
-          location: event.location,
-          course: event.course,
-          teamName: mainRegistrant.team_name || null,
-          isTeam: !isIndividual,
-          eventId: event.id,
-        }),
-      });
-
-      const teammates = registrations.filter(r => !r.user_id && r.team_name === mainRegistrant.team_name);
-
-      for (const teammate of teammates) {
-        await fetch('/api/send-registration-email', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            to: teammate.player_email,
-            name: teammate.player_name,
-            eventName: event.name,
-            eventDate: new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', 
-              month: 'long', day: 'numeric', year: 'numeric' 
-            }),
-            location: event.location,
-            course: event.course,
-            teamName: teammate.team_name,
-            isTeam: true,
-            eventId: event.id,
-          }),
-        });
-      }
-    } catch (err) {
-      console.error("Failed to send registration emails:", err);
     }
   };
 
@@ -238,152 +235,153 @@ useEffect(() => {
     setAdditionalPlayers([]);
   };
 
-    const handleRegister = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    alert("Please log in to register");
-    return;
-  }
-
-  setSubmitting(true);
-
-  try {
-    const finalTeamName = mode === 'create' ? newTeamName : selectedTeam;
-
-    if (!isIndividual && !finalTeamName) {
-      alert("Please select or create a team name");
-      setSubmitting(false);
+  const handleRegister = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      alert("Please log in to register");
       return;
     }
 
-    // ========== INDIVIDUAL ==========
-    if (isIndividual) {
-      const { error } = await supabase.from('event_registrations').insert({
-        event_id: parseInt(eventId),
-        user_id: user.id,
-        player_name: user.email?.split('@')[0] || 'Player',
-        player_email: user.email || '',
-        team_name: null,
-        paid: false,
-        checked_in: false,
-        addons_selected: {}
-      });
+    setSubmitting(true);
 
-      if (error) {
-        console.error('Registration error:', error);
-        alert(`Failed to register: ${error.message}`);
+    try {
+      const finalTeamName = mode === 'create' ? newTeamName : selectedTeam;
+
+      if (!isIndividual && !finalTeamName) {
+        alert("Please select or create a team name");
         setSubmitting(false);
         return;
       }
-    } 
-    
-    // ========== TEAM ==========
-    else {
-      // Join existing team
-      if (mode === 'join' && selectedTeam) {
+
+      // ========== INDIVIDUAL ==========
+      if (isIndividual) {
         const { error } = await supabase.from('event_registrations').insert({
           event_id: parseInt(eventId),
           user_id: user.id,
           player_name: user.email?.split('@')[0] || 'Player',
           player_email: user.email || '',
-          team_name: selectedTeam,
+          team_name: null,
           paid: false,
           checked_in: false,
           addons_selected: {}
         });
 
         if (error) {
-          console.error('Join team error:', error);
-          alert(`Failed to join team: ${error.message}`);
+          console.error('Registration error:', error);
+          alert(`Failed to register: ${error.message}`);
           setSubmitting(false);
           return;
         }
       } 
       
-      // Create new team
-      else if (mode === 'create' && newTeamName) {
-        if (!isOrganizerOnly) {
+      // ========== TEAM ==========
+      else {
+        // Join existing team
+        if (mode === 'join' && selectedTeam) {
           const { error } = await supabase.from('event_registrations').insert({
             event_id: parseInt(eventId),
             user_id: user.id,
             player_name: user.email?.split('@')[0] || 'Player',
             player_email: user.email || '',
-            team_name: newTeamName,
+            team_name: selectedTeam,
             paid: false,
             checked_in: false,
             addons_selected: {}
           });
 
           if (error) {
-            console.error('Create team error:', error);
-            alert(`Failed to create team: ${error.message}`);
+            console.error('Join team error:', error);
+            alert(`Failed to join team: ${error.message}`);
+            setSubmitting(false);
+            return;
+          }
+        } 
+        
+        // Create new team
+        else if (mode === 'create' && newTeamName) {
+          if (!isOrganizerOnly) {
+            const { error } = await supabase.from('event_registrations').insert({
+              event_id: parseInt(eventId),
+              user_id: user.id,
+              player_name: user.email?.split('@')[0] || 'Player',
+              player_email: user.email || '',
+              team_name: newTeamName,
+              paid: false,
+              checked_in: false,
+              addons_selected: {}
+            });
+
+            if (error) {
+              console.error('Create team error:', error);
+              alert(`Failed to create team: ${error.message}`);
+              setSubmitting(false);
+              return;
+            }
+          }
+        }
+
+        // Additional players
+        if (additionalPlayers.length > 0) {
+          const inserts = additionalPlayers.map(p => ({
+            event_id: parseInt(eventId),
+            user_id: null,
+            player_name: p.name,
+            player_email: p.email,
+            team_name: finalTeamName,
+            paid: false,
+            checked_in: false,
+            addons_selected: {}
+          }));
+
+          const { error } = await supabase.from('event_registrations').insert(inserts);
+          if (error) {
+            console.error('Additional players error:', error);
+            alert(`Failed to add additional players: ${error.message}`);
             setSubmitting(false);
             return;
           }
         }
       }
 
-      // Additional players
-      if (additionalPlayers.length > 0) {
-        const inserts = additionalPlayers.map(p => ({
-          event_id: parseInt(eventId),
-          user_id: null,
-          player_name: p.name,
-          player_email: p.email,
-          team_name: finalTeamName,
-          paid: false,
-          checked_in: false,
-          addons_selected: {}
-        }));
+      // Only go to Stripe if database inserts succeeded
+      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
 
-        const { error } = await supabase.from('event_registrations').insert(inserts);
-        if (error) {
-          console.error('Additional players error:', error);
-          alert(`Failed to add additional players: ${error.message}`);
-          setSubmitting(false);
-          return;
-        }
+      const response = await fetch('/api/create-checkout-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: totalCost,
+          player_name: user.email?.split('@')[0] || 'Player',
+          email: user.email,
+          description: `Registration for ${event.name}`,
+          event_name: event.name,
+          event_id: event.id,
+          type: 'registration',
+          success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration`,
+          cancel_url: `${baseUrl}/event/${eventId}`,
+        }),
+      });
+
+      const { url } = await response.json();
+
+      if (url) {
+        window.location.href = url;
+        setShowRegisterModal(false);
+      } else {
+        alert('Failed to create payment link');
       }
+
+    } catch (err: any) {
+      console.error(err);
+      alert('Error starting registration');
+    } finally {
+      setSubmitting(false);
     }
+  };
 
-    // Only go to Stripe if database inserts succeeded
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
-
-    const response = await fetch('/api/create-checkout-session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount: totalCost,
-        player_name: user.email?.split('@')[0] || 'Player',
-        email: user.email,
-        description: `Registration for ${event.name}`,
-        event_name: event.name,
-        event_id: event.id,
-        type: 'registration',
-        success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration`,
-        cancel_url: `${baseUrl}/event/${eventId}`,
-      }),
-    });
-
-    const { url } = await response.json();
-
-    if (url) {
-      window.location.href = url;
-      setShowRegisterModal(false);
-    } else {
-      alert('Failed to create payment link');
-    }
-
-  } catch (err: any) {
-    console.error(err);
-    alert('Error starting registration');
-  } finally {
-    setSubmitting(false);
-  }
-};
-const viewRegisteredPlayers = () => {
-  router.push(`/event/${eventId}/players`);
-};
+  const viewRegisteredPlayers = () => {
+    router.push(`/event/${eventId}/players`);
+  };
 
   if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Loading event...</div>;
   if (!event) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Event not found</div>;
@@ -402,7 +400,10 @@ const viewRegisteredPlayers = () => {
           <div className="mb-8 bg-green-900/50 border border-green-600 rounded-3xl p-8 text-center">
             <div className="text-5xl mb-4">🎉</div>
             <h2 className="text-3xl font-bold text-green-400 mb-2">Registration Complete!</h2>
-            <p className="text-gray-300 mb-6">Your registration has been successfully processed.</p>
+            <p className="text-gray-300 mb-6">
+              Congratulations! You are registered for <strong>{event?.name}</strong>.
+              <br />A confirmation email has been sent.
+            </p>
             <button 
               onClick={viewRegisteredPlayers}
               className="bg-green-600 hover:bg-green-700 px-8 py-4 rounded-2xl font-semibold text-lg"
@@ -442,19 +443,18 @@ const viewRegisteredPlayers = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 p-10 border-b border-gray-700">
             <div>
               <p className="text-gray-500 text-sm mb-1">DATE</p>
-              {/* Replace your current date display with this */}
-<p className="text-2xl font-semibold">
-  {(() => {
-    const d = new Date(event.date);
-    d.setHours(12); // Force noon
-    return d.toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-  })()}
-</p>
+              <p className="text-2xl font-semibold">
+                {(() => {
+                  const d = new Date(event.date);
+                  d.setHours(12);
+                  return d.toLocaleDateString('en-US', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                  });
+                })()}
+              </p>
             </div>
             <div>
               <p className="text-gray-500 text-sm mb-1">REGISTRATION OPENS</p>
@@ -566,7 +566,7 @@ const viewRegisteredPlayers = () => {
         </div>
       )}
 
-            {/* Registration Modal - Updated with Waiver Checkbox */}
+      {/* Registration Modal - Updated with Waiver Checkbox */}
       {showRegisterModal && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
@@ -788,7 +788,7 @@ const viewRegisteredPlayers = () => {
         </div>
       )}
 
-            {/* Add-on Payment Success Modal */}
+      {/* Add-on Payment Success Modal */}
       {showSuccessModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100]">
           <div className="bg-gray-900 rounded-3xl p-10 max-w-md w-full mx-4 text-center">
