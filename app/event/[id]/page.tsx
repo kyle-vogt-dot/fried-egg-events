@@ -61,38 +61,37 @@ export default function EventDetailPage() {
 
   // Helper to send registration email
   const sendRegistrationEmailToPlayer = async (player: {
-    player_email: string;
-    player_name: string;
-    team_name?: string | null;
-  }) => {
-    if (!event || !player.player_email) return;
+  player_email: string;
+  player_name: string;
+  team_name?: string | null;
+}, eventData: any) => {
+  if (!eventData || !player.player_email) return;
 
-    try {
-      await fetch('/api/send-registration-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          to: player.player_email,
-          name: player.player_name,
-          eventName: event.name,
-          eventDate: new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', {
-            weekday: 'long',
-            month: 'long',
-            day: 'numeric',
-            year: 'numeric',
-          }),
-          location: event.location,
-          course: event.course,
-          teamName: player.team_name || null,
-          isTeam: !!player.team_name,
-          eventId: event.id,
+  try {
+    await fetch('/api/send-registration-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: player.player_email,
+        name: player.player_name,
+        eventName: eventData.name,
+        eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
         }),
-      });
-    } catch (err) {
-      console.error('Failed to send registration email:', err);
-    }
-  };
-
+        location: eventData.location,
+        course: eventData.course,
+        teamName: player.team_name || null,
+        isTeam: !!player.team_name,
+        eventId: eventData.id,
+      }),
+    });
+  } catch (err) {
+    console.error('Failed to send registration email:', err);
+  }
+};
   // Handle payment success (main registration OR add-ons)
   useEffect(() => {
     const paymentStatus = searchParams.get('payment');
@@ -124,25 +123,30 @@ export default function EventDetailPage() {
         setShowSuccessMessage(true);
 
         // 4. Send email to the main registrant
-        if (myReg) {
-          await sendRegistrationEmailToPlayer(myReg);
+        // After you get myReg...
+if (myReg) {
+  // Make sure we have event data
+  const eventData = event || (await supabase.from('tournaments').select('*').eq('id', parseInt(eventId)).single()).data;
 
-          // 5. Send emails to any additional teammates (user_id = null)
-          if (myReg.team_name) {
-            const { data: teammates } = await supabase
-              .from('event_registrations')
-              .select('*')
-              .eq('event_id', parseInt(eventId))
-              .eq('team_name', myReg.team_name)
-              .is('user_id', null);
+  if (eventData) {
+    await sendRegistrationEmailToPlayer(myReg, eventData);
 
-            if (teammates && teammates.length > 0) {
-              for (const teammate of teammates) {
-                await sendRegistrationEmailToPlayer(teammate);
-              }
-            }
-          }
+    if (myReg.team_name) {
+      const { data: teammates } = await supabase
+        .from('event_registrations')
+        .select('*')
+        .eq('event_id', parseInt(eventId))
+        .eq('team_name', myReg.team_name)
+        .is('user_id', null);
+
+      if (teammates && teammates.length > 0) {
+        for (const teammate of teammates) {
+          await sendRegistrationEmailToPlayer(teammate, eventData);
         }
+      }
+    }
+  }
+}
 
         // 6. Refresh the list
         await fetchData();
