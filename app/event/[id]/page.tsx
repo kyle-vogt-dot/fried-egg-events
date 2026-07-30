@@ -93,84 +93,172 @@ export default function EventDetailPage() {
   }
 };
   // Handle payment success (main registration OR add-ons)
-  useEffect(() => {
-    const paymentStatus = searchParams.get('payment');
-    const type = searchParams.get('type');
-    const regIdParam = searchParams.get('registration_id');
+useEffect(() => {
+  const paymentStatus = searchParams.get('payment');
+  const type = searchParams.get('type');
+  const regIdParam = searchParams.get('registration_id');
 
-    // ===== MAIN REGISTRATION SUCCESS =====
-    if (paymentStatus === 'success' && type === 'registration') {
-      const handleRegistrationSuccess = async () => {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+  console.log("Payment success check:", { paymentStatus, type, eventId });
 
-        // 1. Mark the main player as paid
-        await supabase
-          .from('event_registrations')
-          .update({ paid: true })
-          .eq('event_id', parseInt(eventId))
-          .eq('user_id', user.id);
+  // ===== MAIN REGISTRATION SUCCESS =====
+  if (paymentStatus === 'success' && type === 'registration') {
+    const handleRegistrationSuccess = async () => {
+      console.log("Starting registration success handler...");
 
-        // 2. Get the updated registration for this user
-        const { data: myReg } = await supabase
-          .from('event_registrations')
-          .select('*')
-          .eq('event_id', parseInt(eventId))
-          .eq('user_id', user.id)
-          .single();
+      const { data: { user } } = await supabase.auth.getUser();
+      console.log("Current user:", user?.id, user?.email);
 
-        // 3. Show success message
-        setShowSuccessMessage(true);
+      if (!user) {
+        console.log("No user found - exiting");
+        return;
+      }
 
-        // 4. Send email to the main registrant
-        // After you get myReg...
-if (myReg) {
-  // Make sure we have event data
-  const eventData = event || (await supabase.from('tournaments').select('*').eq('id', parseInt(eventId)).single()).data;
+      // 1. Mark as paid
+      const { error: updateError } = await supabase
+        .from('event_registrations')
+        .update({ paid: true })
+        .eq('event_id', parseInt(eventId))
+        .eq('user_id', user.id);
 
-  if (eventData) {
-    await sendRegistrationEmailToPlayer(myReg, eventData);
+      console.log("Update paid result:", updateError || "success");
 
-    if (myReg.team_name) {
-      const { data: teammates } = await supabase
+      // 2. Get the registration
+      const { data: myReg, error: fetchError } = await supabase
         .from('event_registrations')
         .select('*')
         .eq('event_id', parseInt(eventId))
-        .eq('team_name', myReg.team_name)
-        .is('user_id', null);
+        .eq('user_id', user.id)
+        .single();
 
-      if (teammates && teammates.length > 0) {
-        for (const teammate of teammates) {
-          await sendRegistrationEmailToPlayer(teammate, eventData);
-        }
+      console.log("Fetched registration:", myReg);
+      console.log("Fetch error:", fetchError);
+
+      // 3. Show success message
+      setShowSuccessMessage(true);
+
+      // 4. Get event data
+      let eventData = event;
+      if (!eventData) {
+        const { data } = await supabase
+          .from('tournaments')
+          .select('*')
+          .eq('id', parseInt(eventId))
+          .single();
+        eventData = data;
+      }
+      console.log("Event data for email:", eventData?.name);
+
+     
+      // 5. Send emails with receipt
+if (myReg && eventData) {
+  console.log("Sending email to main player:", myReg.player_email);
+
+  // Calculate receipt amounts
+  const platformFee = 3.00; // your platform fee
+  const eventPrice = Number(eventData.price) || 0;
+  const netAmount = eventPrice + platformFee; // what you want to receive
+
+  // Stripe fee calculation (same formula we use in checkout)
+  const netCents = Math.round(netAmount * 100);
+  const totalCents = Math.ceil((netCents + 30) / (1 - 0.029));
+  const processingFee = (totalCents - netCents) / 100;
+  const totalPaid = totalCents / 100;
+
+  try {
+    const res = await fetch('/api/send-registration-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: myReg.player_email,
+        name: myReg.player_name,
+        eventName: eventData.name,
+        eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+        }),
+        location: eventData.location,
+        course: eventData.course,
+        teamName: myReg.team_name || null,
+        isTeam: !!myReg.team_name,
+        eventId: eventData.id,
+        // Receipt
+        eventPrice: eventPrice,
+        platformFee: platformFee,
+        processingFee: processingFee,
+        totalPaid: totalPaid,
+      }),
+    });
+
+    const result = await res.json();
+    console.log("Email API response:", result);
+  } catch (err) {
+    console.error("Email send error:", err);
+  }
+
+  // Teammates
+  if (myReg.team_name) {
+    const { data: teammates } = await supabase
+      .from('event_registrations')
+      .select('*')
+      .eq('event_id', parseInt(eventId))
+      .eq('team_name', myReg.team_name)
+      .is('user_id', null);
+
+    console.log("Teammates found:", teammates);
+
+    if (teammates) {
+      for (const teammate of teammates) {
+        console.log("Sending email to teammate:", teammate.player_email);
+        await fetch('/api/send-registration-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: teammate.player_email,
+            name: teammate.player_name,
+            eventName: eventData.name,
+            eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric',
+            }),
+            location: eventData.location,
+            course: eventData.course,
+            teamName: teammate.team_name,
+            isTeam: true,
+            eventId: eventData.id,
+            // Receipt (same amounts for now)
+            eventPrice: eventPrice,
+            platformFee: platformFee,
+            processingFee: processingFee,
+            totalPaid: totalPaid,
+          }),
+        });
       }
     }
   }
+} else {
+  console.log("Missing myReg or eventData - cannot send email");
 }
 
-        // 6. Refresh the list
-        await fetchData();
-      };
+      await fetchData();
+    };
 
-      handleRegistrationSuccess();
-    }
+    handleRegistrationSuccess();
+  }
 
-    // ===== ADD-ON PAYMENT SUCCESS =====
-    if (paymentStatus === 'success' && type === 'addon' && regIdParam) {
-      const regId = parseInt(regIdParam);
-
-      const handleAddonSuccess = async () => {
-        await supabase
-          .from('event_registrations')
-          .update({ paid_addons: true })
-          .eq('id', regId);
-
-        setShowSuccessModal(true);
-      };
-
-      handleAddonSuccess();
-    }
-  }, [searchParams, eventId]);
+  // ===== ADD-ON PAYMENT SUCCESS =====
+  if (paymentStatus === 'success' && type === 'addon' && regIdParam) {
+    const regId = parseInt(regIdParam);
+    supabase
+      .from('event_registrations')
+      .update({ paid_addons: true })
+      .eq('id', regId)
+      .then(() => setShowSuccessModal(true));
+  }
+}, [searchParams, eventId]);
 
   const updatePaymentStatusToPaid = async () => {
     const { data: { user } } = await supabase.auth.getUser();

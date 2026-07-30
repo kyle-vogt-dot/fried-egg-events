@@ -15,6 +15,11 @@ export async function POST(request: NextRequest) {
       teamName,
       isTeam = false,
       eventId,
+      // Receipt fields
+      eventPrice = 0,
+      platformFee = 0,
+      processingFee = 0,
+      totalPaid = 0,
     } = await request.json();
 
     const { data, error } = await resend.emails.send({
@@ -40,9 +45,32 @@ export async function POST(request: NextRequest) {
           <div style="background-color: #1f2937; padding: 25px; border-radius: 16px; margin: 30px 0;">
             <p style="margin: 8px 0;"><strong>Event:</strong> ${eventName}</p>
             <p style="margin: 8px 0;"><strong>Date:</strong> ${eventDate}</p>
-            <p style="margin: 8px 0;"><strong>Location:</strong> ${location}</p>
+            <p style="margin: 8px 0;"><strong>Location:</strong> ${location || 'TBD'}</p>
             ${course ? `<p style="margin: 8px 0;"><strong>Course:</strong> ${course}</p>` : ''}
             ${teamName ? `<p style="margin: 8px 0;"><strong>Team:</strong> ${teamName}</p>` : ''}
+          </div>
+
+          <!-- Receipt -->
+          <div style="background-color: #1f2937; padding: 25px; border-radius: 16px; margin: 30px 0;">
+            <h3 style="margin-top: 0; color: #22c55e;">Payment Receipt</h3>
+            <table style="width: 100%; border-collapse: collapse; color: #e5e7eb;">
+              <tr>
+                <td style="padding: 8px 0;">Event Registration</td>
+                <td style="padding: 8px 0; text-align: right;">$${Number(eventPrice).toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0;">Platform Fee</td>
+                <td style="padding: 8px 0; text-align: right;">$${Number(platformFee).toFixed(2)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0;">Processing Fee</td>
+                <td style="padding: 8px 0; text-align: right;">$${Number(processingFee).toFixed(2)}</td>
+              </tr>
+              <tr style="border-top: 1px solid #374151;">
+                <td style="padding: 12px 0; font-weight: bold;">Total Paid</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: bold; color: #22c55e;">$${Number(totalPaid).toFixed(2)}</td>
+              </tr>
+            </table>
           </div>
 
           <p style="text-align: center; margin: 40px 0;">
