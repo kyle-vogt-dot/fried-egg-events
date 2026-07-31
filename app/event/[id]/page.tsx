@@ -4,16 +4,17 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
-
 export default function EventDetailPage() {
   const [agreedToWaiver, setAgreedToWaiver] = useState(false);
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
   const eventId = params.id as string;
+  const [platformFee, setPlatformFee] = useState(3.00);
 
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
+  const [rounds, setRounds] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
 
@@ -27,6 +28,7 @@ export default function EventDetailPage() {
   const [additionalPlayers, setAdditionalPlayers] = useState<any[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [isOrganizerOnly, setIsOrganizerOnly] = useState(false);
+  const [selectedPaidRoundIds, setSelectedPaidRoundIds] = useState<number[]>([]);
 
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
@@ -52,6 +54,28 @@ export default function EventDetailPage() {
       .eq('event_id', parseInt(eventId));
 
     setRegistrations(regData || []);
+
+    const { data: roundsData } = await supabase
+      .from('event_rounds')
+      .select('*')
+      .eq('event_id', parseInt(eventId))
+      .order('sort_order', { ascending: true });
+
+    setRounds(roundsData || []);
+
+    const { data: feeData } = await supabase
+      .from('platform_settings')
+      .select('platform_fee')
+      .eq('id', 1)
+      .single();
+
+    if (feeData?.platform_fee !== undefined && feeData?.platform_fee !== null) {
+      setPlatformFee(Number(feeData.platform_fee));
+    }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    setCurrentUser(user);
+
     setLoading(false);
   };
 
@@ -59,246 +83,225 @@ export default function EventDetailPage() {
     fetchData();
   }, [eventId]);
 
-  // Helper to send registration email
-  const sendRegistrationEmailToPlayer = async (player: {
-  player_email: string;
-  player_name: string;
-  team_name?: string | null;
-}, eventData: any) => {
-  if (!eventData || !player.player_email) return;
-
-  try {
-    await fetch('/api/send-registration-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: player.player_email,
-        name: player.player_name,
-        eventName: eventData.name,
-        eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
-          weekday: 'long',
-          month: 'long',
-          day: 'numeric',
-          year: 'numeric',
-        }),
-        location: eventData.location,
-        course: eventData.course,
-        teamName: player.team_name || null,
-        isTeam: !!player.team_name,
-        eventId: eventData.id,
-      }),
-    });
-  } catch (err) {
-    console.error('Failed to send registration email:', err);
-  }
-};
   // Handle payment success (main registration OR add-ons)
-useEffect(() => {
-  const paymentStatus = searchParams.get('payment');
-  const type = searchParams.get('type');
-  const regIdParam = searchParams.get('registration_id');
+  useEffect(() => {
+    const paymentStatus = searchParams.get('payment');
+    const type = searchParams.get('type');
+    const regIdParam = searchParams.get('registration_id');
 
-  console.log("Payment success check:", { paymentStatus, type, eventId });
+    if (paymentStatus === 'success' && type === 'registration') {
+      const handleRegistrationSuccess = async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
 
-  // ===== MAIN REGISTRATION SUCCESS =====
-  if (paymentStatus === 'success' && type === 'registration') {
-    const handleRegistrationSuccess = async () => {
-      console.log("Starting registration success handler...");
+        await supabase
+          .from('event_registrations')
+          .update({ paid: true })
+          .eq('event_id', parseInt(eventId))
+          .eq('user_id', user.id);
 
-      const { data: { user } } = await supabase.auth.getUser();
-      console.log("Current user:", user?.id, user?.email);
-
-      if (!user) {
-        console.log("No user found - exiting");
-        return;
-      }
-
-      // 1. Mark as paid
-      const { error: updateError } = await supabase
-        .from('event_registrations')
-        .update({ paid: true })
-        .eq('event_id', parseInt(eventId))
-        .eq('user_id', user.id);
-
-      console.log("Update paid result:", updateError || "success");
-
-      // 2. Get the registration
-      const { data: myReg, error: fetchError } = await supabase
-        .from('event_registrations')
-        .select('*')
-        .eq('event_id', parseInt(eventId))
-        .eq('user_id', user.id)
-        .single();
-
-      console.log("Fetched registration:", myReg);
-      console.log("Fetch error:", fetchError);
-
-      // 3. Show success message
-      setShowSuccessMessage(true);
-
-      // 4. Get event data
-      let eventData = event;
-      if (!eventData) {
-        const { data } = await supabase
-          .from('tournaments')
+        const { data: regs } = await supabase
+          .from('event_registrations')
           .select('*')
-          .eq('id', parseInt(eventId))
+          .eq('event_id', parseInt(eventId))
+          .eq('user_id', user.id)
+          .order('id', { ascending: false })
+          .limit(1);
+
+        const myReg = regs?.[0] || null;
+
+        const { data: feeData } = await supabase
+          .from('platform_settings')
+          .select('platform_fee')
+          .eq('id', 1)
           .single();
-        eventData = data;
-      }
-      console.log("Event data for email:", eventData?.name);
 
-     
-      // 5. Send emails with receipt
-if (myReg && eventData) {
-  console.log("Sending email to main player:", myReg.player_email);
+        if (feeData?.platform_fee) {
+          setPlatformFee(Number(feeData.platform_fee));
+        }
 
-  // Calculate receipt amounts
-  const platformFee = 3.00; // your platform fee
-  const eventPrice = Number(eventData.price) || 0;
-  const netAmount = eventPrice + platformFee; // what you want to receive
+        setShowSuccessMessage(true);
 
-  // Stripe fee calculation (same formula we use in checkout)
-  const netCents = Math.round(netAmount * 100);
-  const totalCents = Math.ceil((netCents + 30) / (1 - 0.029));
-  const processingFee = (totalCents - netCents) / 100;
-  const totalPaid = totalCents / 100;
+        let eventData = event;
+        if (!eventData) {
+          const { data } = await supabase
+            .from('tournaments')
+            .select('*')
+            .eq('id', parseInt(eventId))
+            .single();
+          eventData = data;
+        }
 
-  try {
-    const res = await fetch('/api/send-registration-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: myReg.player_email,
-        name: myReg.player_name,
-        eventName: eventData.name,
-        eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
-          weekday: 'long',
-          month: 'long',
-          day: 'numeric',
-          year: 'numeric',
-        }),
-        location: eventData.location,
-        course: eventData.course,
-        teamName: myReg.team_name || null,
-        isTeam: !!myReg.team_name,
-        eventId: eventData.id,
-        // Receipt
-        eventPrice: eventPrice,
-        platformFee: platformFee,
-        processingFee: processingFee,
-        totalPaid: totalPaid,
-      }),
-    });
+        if (myReg && eventData) {
+          let teammates: any[] = [];
+          if (myReg.team_name) {
+            const { data } = await supabase
+              .from('event_registrations')
+              .select('*')
+              .eq('event_id', parseInt(eventId))
+              .eq('team_name', myReg.team_name)
+              .is('user_id', null);
+            teammates = data || [];
+          }
 
-    const result = await res.json();
-    console.log("Email API response:", result);
-  } catch (err) {
-    console.error("Email send error:", err);
-  }
+          // Get rounds this player signed up for
+          const selectedIds: number[] = myReg.selected_round_ids || [];
+          let signedUpRounds: any[] = [];
 
-  // Teammates
-  if (myReg.team_name) {
-    const { data: teammates } = await supabase
-      .from('event_registrations')
-      .select('*')
-      .eq('event_id', parseInt(eventId))
-      .eq('team_name', myReg.team_name)
-      .is('user_id', null);
+          if (selectedIds.length > 0) {
+            const { data: roundRows } = await supabase
+              .from('event_rounds')
+              .select('*')
+              .in('id', selectedIds)
+              .order('sort_order', { ascending: true });
+            signedUpRounds = roundRows || [];
+          }
 
-    console.log("Teammates found:", teammates);
+          const playerCount = 1 + teammates.length;
+          const pricePerPlayer = Number(eventData.price) || 0;
 
-    if (teammates) {
-      for (const teammate of teammates) {
-        console.log("Sending email to teammate:", teammate.player_email);
-        await fetch('/api/send-registration-email', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            to: teammate.player_email,
-            name: teammate.player_name,
-            eventName: eventData.name,
-            eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-              year: 'numeric',
+          const { data: liveFeeData } = await supabase
+            .from('platform_settings')
+            .select('platform_fee')
+            .eq('id', 1)
+            .single();
+
+          const platformFeePerPlayer = Number(liveFeeData?.platform_fee) || 0;
+
+          // Extra cost from separately priced rounds
+          const paidRoundsExtra = signedUpRounds
+            .filter((r) => r.pay_separately)
+            .reduce((sum, r) => sum + Number(r.price || 0) + platformFeePerPlayer, 0);
+
+          const perPlayerTotal = pricePerPlayer + platformFeePerPlayer + paidRoundsExtra;
+          const eventPriceTotal = perPlayerTotal * playerCount;
+          const platformFeeTotal = 0;
+          const netAmount = eventPriceTotal;
+
+          const netCents = Math.round(netAmount * 100);
+          const totalCents = Math.ceil((netCents + 30) / (1 - 0.029));
+          const processingFee = (totalCents - netCents) / 100;
+          const totalPaid = totalCents / 100;
+
+          const roundsSummary = signedUpRounds.map((r) => {
+            const time = r.start_time ? String(r.start_time).slice(0, 5) : '';
+            const priceNote = r.pay_separately
+              ? ` (+$${(Number(r.price || 0) + platformFeePerPlayer).toFixed(2)})`
+              : ' (included)';
+            return `${r.name}${time ? ` at ${time}` : ''}${priceNote}`;
+          });
+
+          // Email to main player
+          await fetch('/api/send-registration-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: myReg.player_email,
+              name: myReg.player_name,
+              eventName: eventData.name,
+              eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
+                weekday: 'long',
+                month: 'long',
+                day: 'numeric',
+                year: 'numeric',
+              }),
+              location: eventData.location,
+              course: eventData.course,
+              teamName: myReg.team_name || null,
+              isTeam: !!myReg.team_name,
+              eventId: eventData.id,
+              eventPrice: eventPriceTotal,
+              platformFee: platformFeeTotal,
+              processingFee: processingFee,
+              totalPaid: totalPaid,
+              playerCount: playerCount,
+              rounds: roundsSummary,
             }),
-            location: eventData.location,
-            course: eventData.course,
-            teamName: teammate.team_name,
-            isTeam: true,
-            eventId: eventData.id,
-            // Receipt (same amounts for now)
-            eventPrice: eventPrice,
-            platformFee: platformFee,
-            processingFee: processingFee,
-            totalPaid: totalPaid,
-          }),
-        });
-      }
+          });
+
+          // Emails to teammates
+          for (const teammate of teammates) {
+            await fetch('/api/send-registration-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                to: teammate.player_email,
+                name: teammate.player_name,
+                eventName: eventData.name,
+                eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
+                  weekday: 'long',
+                  month: 'long',
+                  day: 'numeric',
+                  year: 'numeric',
+                }),
+                location: eventData.location,
+                course: eventData.course,
+                teamName: teammate.team_name,
+                isTeam: true,
+                eventId: eventData.id,
+                eventPrice: eventPriceTotal,
+                platformFee: platformFeeTotal,
+                processingFee: processingFee,
+                totalPaid: totalPaid,
+                playerCount: playerCount,
+                rounds: roundsSummary,
+              }),
+            });
+          }
+        }
+
+        await fetchData();
+      };
+
+      handleRegistrationSuccess();
     }
-  }
-} else {
-  console.log("Missing myReg or eventData - cannot send email");
-}
 
-      await fetchData();
-    };
-
-    handleRegistrationSuccess();
-  }
-
-  // ===== ADD-ON PAYMENT SUCCESS =====
-  if (paymentStatus === 'success' && type === 'addon' && regIdParam) {
-    const regId = parseInt(regIdParam);
-    supabase
-      .from('event_registrations')
-      .update({ paid_addons: true })
-      .eq('id', regId)
-      .then(() => setShowSuccessModal(true));
-  }
-}, [searchParams, eventId]);
-
-  const updatePaymentStatusToPaid = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    try {
-      await supabase
+    if (paymentStatus === 'success' && type === 'addon' && regIdParam) {
+      const regId = parseInt(regIdParam);
+      supabase
         .from('event_registrations')
-        .update({ paid: true })
-        .eq('event_id', parseInt(eventId))
-        .eq('user_id', user.id);
-
-      console.log("✅ Main registration marked as paid");
-    } catch (err) {
-      console.error("Error updating main payment status:", err);
+        .update({ paid_addons: true })
+        .eq('id', regId)
+        .then(() => setShowSuccessModal(true));
     }
-  };
+  }, [searchParams, eventId]);
 
   // ==================== CALCULATIONS ====================
   const isIndividual = event?.max_teammates === 1 || !event?.max_teammates;
   const maxTeamSize = event?.max_teammates || 1;
 
-  const registrationOpen = event?.registration_open_date 
+  const registrationOpen = event?.registration_open_date
     ? new Date() >= new Date(event.registration_open_date + 'T' + (event.registration_open_time || '00:00:00'))
     : false;
 
-  const basePricePerPlayer = event?.price && maxTeamSize > 0 
-    ? event.price / maxTeamSize 
-    : event?.price || 0;
+  const includedRounds = rounds.filter((r) => !r.pay_separately);
+  const paidRounds = rounds.filter((r) => r.pay_separately);
 
-  const feePerPlayer = 3;
-  const totalPlayers = isOrganizerOnly 
-    ? additionalPlayers.length 
+  const pricePerPlayer = Number(event?.price) || 0;
+  const feePerPlayer = platformFee;
+  const totalPlayers = isOrganizerOnly
+    ? additionalPlayers.length
     : 1 + additionalPlayers.length;
-  const totalCost = totalPlayers * (basePricePerPlayer + feePerPlayer);
 
-  const existingTeams = Array.from(new Set(registrations.map(r => r.team_name).filter(Boolean)));
+  // Base event price + fee, plus any separately priced rounds selected
+  const paidRoundsCostPerPlayer = selectedPaidRoundIds.reduce((sum, id) => {
+    const round = paidRounds.find((r) => r.id === id);
+    if (!round) return sum;
+    return sum + Number(round.price || 0) + feePerPlayer;
+  }, 0);
+
+  const totalCost =
+    totalPlayers * (pricePerPlayer + feePerPlayer + paidRoundsCostPerPlayer);
+
+  const getSelectedRoundIds = () => {
+    const autoIds = includedRounds.map((r) => r.id);
+    return [...autoIds, ...selectedPaidRoundIds];
+  };
+
+  const existingTeams = Array.from(new Set(registrations.map((r) => r.team_name).filter(Boolean)));
 
   const getSpotsLeft = (team: string) => {
-    const count = registrations.filter(r => r.team_name === team).length;
+    const count = registrations.filter((r) => r.team_name === team).length;
     return Math.max(0, maxTeamSize - count);
   };
 
@@ -313,24 +316,42 @@ if (myReg && eventData) {
     setAdditionalPlayers(updated);
   };
 
+  const togglePaidRound = (roundId: number) => {
+    setSelectedPaidRoundIds((prev) =>
+      prev.includes(roundId) ? prev.filter((id) => id !== roundId) : [...prev, roundId]
+    );
+  };
+
+  const getPlayerName = (user: any) => {
+    return (
+      user?.user_metadata?.full_name ||
+      user?.user_metadata?.name ||
+      user?.email?.split('@')[0] ||
+      'Player'
+    );
+  };
+
   const handleRegisterClick = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       router.push(`/login?redirect=/event/${eventId}`);
       return;
     }
+    setCurrentUser(user);
     setShowRegisterModal(true);
     setIsOrganizerOnly(false);
     setMode('');
     setSelectedTeam('');
     setNewTeamName('');
     setAdditionalPlayers([]);
+    setSelectedPaidRoundIds([]);
+    setAgreedToWaiver(false);
   };
 
   const handleRegister = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
-      alert("Please log in to register");
+      alert('Please log in to register');
       return;
     }
 
@@ -338,9 +359,11 @@ if (myReg && eventData) {
 
     try {
       const finalTeamName = mode === 'create' ? newTeamName : selectedTeam;
+      const selectedRoundIds = getSelectedRoundIds();
+      const playerName = getPlayerName(user);
 
       if (!isIndividual && !finalTeamName) {
-        alert("Please select or create a team name");
+        alert('Please select or create a team name');
         setSubmitting(false);
         return;
       }
@@ -350,12 +373,13 @@ if (myReg && eventData) {
         const { error } = await supabase.from('event_registrations').insert({
           event_id: parseInt(eventId),
           user_id: user.id,
-          player_name: user.email?.split('@')[0] || 'Player',
+          player_name: playerName,
           player_email: user.email || '',
           team_name: null,
           paid: false,
           checked_in: false,
-          addons_selected: {}
+          addons_selected: {},
+          selected_round_ids: selectedRoundIds,
         });
 
         if (error) {
@@ -364,21 +388,21 @@ if (myReg && eventData) {
           setSubmitting(false);
           return;
         }
-      } 
-      
+      }
+
       // ========== TEAM ==========
       else {
-        // Join existing team
         if (mode === 'join' && selectedTeam) {
           const { error } = await supabase.from('event_registrations').insert({
             event_id: parseInt(eventId),
             user_id: user.id,
-            player_name: user.email?.split('@')[0] || 'Player',
+            player_name: playerName,
             player_email: user.email || '',
             team_name: selectedTeam,
             paid: false,
             checked_in: false,
-            addons_selected: {}
+            addons_selected: {},
+            selected_round_ids: selectedRoundIds,
           });
 
           if (error) {
@@ -387,20 +411,18 @@ if (myReg && eventData) {
             setSubmitting(false);
             return;
           }
-        } 
-        
-        // Create new team
-        else if (mode === 'create' && newTeamName) {
+        } else if (mode === 'create' && newTeamName) {
           if (!isOrganizerOnly) {
             const { error } = await supabase.from('event_registrations').insert({
               event_id: parseInt(eventId),
               user_id: user.id,
-              player_name: user.email?.split('@')[0] || 'Player',
+              player_name: playerName,
               player_email: user.email || '',
               team_name: newTeamName,
               paid: false,
               checked_in: false,
-              addons_selected: {}
+              addons_selected: {},
+              selected_round_ids: selectedRoundIds,
             });
 
             if (error) {
@@ -412,9 +434,8 @@ if (myReg && eventData) {
           }
         }
 
-        // Additional players
         if (additionalPlayers.length > 0) {
-          const inserts = additionalPlayers.map(p => ({
+          const inserts = additionalPlayers.map((p) => ({
             event_id: parseInt(eventId),
             user_id: null,
             player_name: p.name,
@@ -422,7 +443,8 @@ if (myReg && eventData) {
             team_name: finalTeamName,
             paid: false,
             checked_in: false,
-            addons_selected: {}
+            addons_selected: {},
+            selected_round_ids: selectedRoundIds,
           }));
 
           const { error } = await supabase.from('event_registrations').insert(inserts);
@@ -435,7 +457,6 @@ if (myReg && eventData) {
         }
       }
 
-      // Only go to Stripe if database inserts succeeded
       const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
 
       const response = await fetch('/api/create-checkout-session', {
@@ -443,7 +464,7 @@ if (myReg && eventData) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: totalCost,
-          player_name: user.email?.split('@')[0] || 'Player',
+          player_name: playerName,
           email: user.email,
           description: `Registration for ${event.name}`,
           event_name: event.name,
@@ -462,7 +483,6 @@ if (myReg && eventData) {
       } else {
         alert('Failed to create payment link');
       }
-
     } catch (err: any) {
       console.error(err);
       alert('Error starting registration');
@@ -475,14 +495,24 @@ if (myReg && eventData) {
     router.push(`/event/${eventId}/players`);
   };
 
-  if (loading) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Loading event...</div>;
-  if (!event) return <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">Event not found</div>;
+  if (loading)
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
+        Loading event...
+      </div>
+    );
+  if (!event)
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
+        Event not found
+      </div>
+    );
 
   return (
     <div className="min-h-screen bg-gray-900 text-white pb-20">
       <div className="max-w-4xl mx-auto px-6 pt-8">
-        <button 
-          onClick={() => router.push('/')} 
+        <button
+          onClick={() => router.push('/')}
           className="mb-8 flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
         >
           ← Back to All Events
@@ -496,7 +526,7 @@ if (myReg && eventData) {
               Congratulations! You are registered for <strong>{event?.name}</strong>.
               <br />A confirmation email has been sent.
             </p>
-            <button 
+            <button
               onClick={viewRegisteredPlayers}
               className="bg-green-600 hover:bg-green-700 px-8 py-4 rounded-2xl font-semibold text-lg"
             >
@@ -509,11 +539,7 @@ if (myReg && eventData) {
           {/* Image Banner */}
           <div className="relative h-80 bg-gray-900">
             {event.image_url ? (
-              <img 
-                src={event.image_url} 
-                alt={event.name}
-                className="w-full h-full object-cover"
-              />
+              <img src={event.image_url} alt={event.name} className="w-full h-full object-cover" />
             ) : (
               <div className="w-full h-full bg-gradient-to-br from-gray-800 to-gray-900 flex items-center justify-center">
                 <span className="text-6xl opacity-30">🏌️</span>
@@ -537,13 +563,15 @@ if (myReg && eventData) {
               <p className="text-gray-500 text-sm mb-1">DATE</p>
               <p className="text-2xl font-semibold">
                 {(() => {
-                  const d = new Date(event.date);
-                  d.setHours(12);
+                  if (!event.date) return 'TBD';
+                  const dateOnly = String(event.date).split('T')[0];
+                  const [year, month, day] = dateOnly.split('-').map(Number);
+                  const d = new Date(year, month - 1, day);
                   return d.toLocaleDateString('en-US', {
                     weekday: 'long',
                     year: 'numeric',
                     month: 'long',
-                    day: 'numeric'
+                    day: 'numeric',
                   });
                 })()}
               </p>
@@ -551,25 +579,55 @@ if (myReg && eventData) {
             <div>
               <p className="text-gray-500 text-sm mb-1">REGISTRATION OPENS</p>
               <p className="text-xl font-medium">
-                {new Date(event.registration_open_date).toLocaleDateString()} at {event.registration_open_time || '00:00'}
+                {new Date(event.registration_open_date).toLocaleDateString()} at{' '}
+                {event.registration_open_time || '00:00'}
               </p>
             </div>
             <div>
-              <p className="text-gray-500 text-sm mb-1">{isIndividual ? 'Price' : 'Team Price'}</p>
+              <p className="text-gray-500 text-sm mb-1">Price per Player</p>
               <p className="text-xl font-medium">
-                ${event.price || 'TBD'}
-                {!isIndividual && event.price && (
-                  <span className="text-sm text-gray-400 ml-2">
-                    (${Math.round(event.price / maxTeamSize)} per person)
-                  </span>
-                )}
+                {event.price ? `$${(Number(event.price) + platformFee).toFixed(2)}` : 'TBD'}
               </p>
             </div>
             <div>
               <p className="text-gray-500 text-sm mb-1">MAX PLAYERS</p>
-              <p className="text-xl font-medium">{event.max_teammates || event.max_players || 'N/A'}</p>
+              <p className="text-xl font-medium">
+                {event.max_teammates || event.max_players || 'N/A'}
+              </p>
             </div>
           </div>
+
+          {/* Rounds */}
+          {rounds.length > 0 && (
+            <div className="p-10 border-b border-gray-700">
+              <p className="text-gray-500 text-sm mb-3">
+                ROUNDS ({rounds.length})
+              </p>
+              <div className="space-y-3">
+                {rounds.map((round) => (
+                  <div
+                    key={round.id}
+                    className="bg-gray-900 px-5 py-4 rounded-2xl flex justify-between items-center"
+                  >
+                    <div>
+                      <span className="font-medium">{round.name}</span>
+                      {round.start_time && (
+                        <span className="text-gray-400 ml-3">
+                          {String(round.start_time).slice(0, 5)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm text-gray-400">
+                      Max {round.max_players} players
+                      {round.pay_separately
+                        ? ` · +$${(Number(round.price) + platformFee).toFixed(2)}`
+                        : ' · Included'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Flights */}
           {event.flights && event.flights.length > 0 && (
@@ -597,21 +655,21 @@ if (myReg && eventData) {
           <div className="p-10 flex flex-col sm:flex-row gap-4">
             {registrationOpen ? (
               <>
-                <button 
+                <button
                   onClick={handleRegisterClick}
                   className="flex-1 bg-green-600 hover:bg-green-700 py-5 rounded-2xl text-xl font-semibold transition-colors"
                 >
                   Register for this Event
                 </button>
 
-                <button 
+                <button
                   onClick={() => router.push(`/event/${eventId}/sponsors`)}
                   className="flex-1 bg-amber-600 hover:bg-amber-700 py-5 rounded-2xl text-xl font-semibold transition-colors"
                 >
                   Sponsor / Donate
                 </button>
 
-                <button 
+                <button
                   onClick={viewRegisteredPlayers}
                   className="flex-1 bg-blue-600 hover:bg-blue-700 py-5 rounded-2xl text-xl font-semibold transition-colors"
                 >
@@ -619,9 +677,7 @@ if (myReg && eventData) {
                 </button>
               </>
             ) : (
-              <button 
-                className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors"
-              >
+              <button className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors">
                 Notify Me When Registration Opens
               </button>
             )}
@@ -635,20 +691,20 @@ if (myReg && eventData) {
           <div className="bg-gray-800 rounded-3xl p-10 w-full max-w-md">
             <h2 className="text-3xl font-bold mb-8 text-center">Sign in to Register</h2>
             <div className="space-y-4">
-              <button 
+              <button
                 onClick={() => router.push(`/login?redirect=/event/${eventId}`)}
                 className="w-full bg-blue-600 hover:bg-blue-700 py-4 rounded-2xl text-lg font-semibold"
               >
                 Sign In
               </button>
-              <button 
+              <button
                 onClick={() => router.push(`/signup?redirect=/event/${eventId}`)}
                 className="w-full bg-gray-700 hover:bg-gray-600 py-4 rounded-2xl text-lg font-semibold"
               >
                 Create Account
               </button>
             </div>
-            <button 
+            <button
               onClick={() => setShowAuthModal(false)}
               className="w-full mt-6 py-4 text-gray-400 hover:text-white"
             >
@@ -658,21 +714,80 @@ if (myReg && eventData) {
         </div>
       )}
 
-      {/* Registration Modal - Updated with Waiver Checkbox */}
+      {/* Registration Modal */}
       {showRegisterModal && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
             <div className="p-10">
               <h2 className="text-3xl font-bold mb-6">Register for {event.name}</h2>
 
+              {/* Included rounds notice */}
+              {includedRounds.length > 0 && (
+                <div className="bg-teal-900/30 border border-teal-600/40 rounded-2xl p-5 mb-6">
+                  <p className="text-sm text-teal-300 mb-2 font-medium">Included in registration:</p>
+                  <ul className="text-sm text-gray-300 space-y-1">
+                    {includedRounds.map((r) => (
+                      <li key={r.id}>
+                        {r.name}
+                        {r.start_time ? ` · ${String(r.start_time).slice(0, 5)}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Optional paid rounds */}
+              {paidRounds.length > 0 && (
+                <div className="bg-gray-900 rounded-2xl p-5 mb-6">
+                  <p className="text-sm text-gray-400 mb-4 font-medium">
+                    Optional rounds (extra charge)
+                  </p>
+                  <div className="space-y-3">
+                    {paidRounds.map((round) => {
+                      const checked = selectedPaidRoundIds.includes(round.id);
+                      const roundTotal = Number(round.price || 0) + feePerPlayer;
+                      return (
+                        <label
+                          key={round.id}
+                          className={`flex items-center justify-between gap-4 p-4 rounded-2xl cursor-pointer border transition-colors ${
+                            checked
+                              ? 'border-teal-500 bg-teal-950/40'
+                              : 'border-gray-700 hover:border-gray-600'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => togglePaidRound(round.id)}
+                              className="w-5 h-5 accent-teal-600"
+                            />
+                            <div>
+                              <div className="font-medium">{round.name}</div>
+                              {round.start_time && (
+                                <div className="text-xs text-gray-400">
+                                  {String(round.start_time).slice(0, 5)}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-sm font-medium text-teal-300">
+                            +${roundTotal.toFixed(2)}
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {isIndividual ? (
                 <div className="space-y-8">
                   <div className="bg-gray-900 p-6 rounded-2xl text-center">
                     <p className="text-xl">Individual Event</p>
-                    <p className="text-3xl font-semibold mt-2">${event.price || 'TBD'}</p>
+                    <p className="text-3xl font-semibold mt-2">${totalCost.toFixed(2)}</p>
                   </div>
 
-                  {/* Waiver Checkbox for Individual */}
                   <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
                     <input
                       type="checkbox"
@@ -683,7 +798,9 @@ if (myReg && eventData) {
                     />
                     <label htmlFor="waiver-individual" className="text-sm text-gray-300 cursor-pointer">
                       I have read and agree to the <strong>Waiver & Release of Liability</strong>.
-                      <a href="/waiver" target="_blank" className="text-blue-400 hover:underline ml-1">(View Document)</a>
+                      <a href="/waiver" target="_blank" className="text-blue-400 hover:underline ml-1">
+                        (View Document)
+                      </a>
                     </label>
                   </div>
 
@@ -692,23 +809,35 @@ if (myReg && eventData) {
                     disabled={submitting || !agreedToWaiver}
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
-                    {submitting ? 'Processing Payment...' : `Complete Registration — $${(event.price || 0).toFixed(2)}`}
+                    {submitting
+                      ? 'Processing Payment...'
+                      : `Complete Registration — $${totalCost.toFixed(2)}`}
                   </button>
                 </div>
               ) : (
                 <div className="space-y-8">
                   <div>
-                    <label className="block text-sm text-gray-400 mb-4">How would you like to register?</label>
+                    <label className="block text-sm text-gray-400 mb-4">
+                      How would you like to register?
+                    </label>
                     <div className="grid grid-cols-2 gap-4">
                       <button
                         onClick={() => setMode('join')}
-                        className={`p-6 rounded-2xl border text-center font-medium transition-colors ${mode === 'join' ? 'border-blue-500 bg-blue-950' : 'border-gray-700 hover:border-gray-600'}`}
+                        className={`p-6 rounded-2xl border text-center font-medium transition-colors ${
+                          mode === 'join'
+                            ? 'border-blue-500 bg-blue-950'
+                            : 'border-gray-700 hover:border-gray-600'
+                        }`}
                       >
                         Join Existing Team
                       </button>
                       <button
                         onClick={() => setMode('create')}
-                        className={`p-6 rounded-2xl border text-center font-medium transition-colors ${mode === 'create' ? 'border-blue-500 bg-blue-950' : 'border-gray-700 hover:border-gray-600'}`}
+                        className={`p-6 rounded-2xl border text-center font-medium transition-colors ${
+                          mode === 'create'
+                            ? 'border-blue-500 bg-blue-950'
+                            : 'border-gray-700 hover:border-gray-600'
+                        }`}
                       >
                         Create New Team
                       </button>
@@ -728,13 +857,10 @@ if (myReg && eventData) {
                     </label>
                   </div>
 
-                  {/* Prominent "You are playing" box */}
                   {!isOrganizerOnly && (
                     <div className="bg-emerald-900/30 border border-emerald-500 p-5 rounded-2xl">
                       <p className="text-sm text-emerald-400 mb-1">You are playing as the first player</p>
-                      <p className="font-medium text-white">
-                        {currentUser?.email?.split('@')[0] || 'You'}
-                      </p>
+                      <p className="font-medium text-white">{getPlayerName(currentUser)}</p>
                     </div>
                   )}
 
@@ -775,9 +901,7 @@ if (myReg && eventData) {
                   <div>
                     <div className="flex justify-between items-center mb-3">
                       <label className="text-sm text-gray-400">Additional Players</label>
-                      <span className="text-xs text-gray-500">
-                        {additionalPlayers.length} added
-                      </span>
+                      <span className="text-xs text-gray-500">{additionalPlayers.length} added</span>
                     </div>
 
                     {additionalPlayers.map((player, index) => (
@@ -826,10 +950,14 @@ if (myReg && eventData) {
                       disabled={
                         (mode === 'join' && !selectedTeam) ||
                         (mode === 'create' && !newTeamName) ||
-                        additionalPlayers.length >= 
-                          (mode === 'join' && selectedTeam 
-                            ? (isOrganizerOnly ? getSpotsLeft(selectedTeam) : getSpotsLeft(selectedTeam) - 1)
-                            : (isOrganizerOnly ? maxTeamSize : maxTeamSize - 1))
+                        additionalPlayers.length >=
+                          (mode === 'join' && selectedTeam
+                            ? isOrganizerOnly
+                              ? getSpotsLeft(selectedTeam)
+                              : getSpotsLeft(selectedTeam) - 1
+                            : isOrganizerOnly
+                              ? maxTeamSize
+                              : maxTeamSize - 1)
                       }
                       className="w-full py-4 border border-dashed border-gray-600 rounded-2xl text-gray-400 hover:text-white disabled:opacity-50"
                     >
@@ -844,7 +972,6 @@ if (myReg && eventData) {
                     </div>
                   </div>
 
-                  {/* Waiver Checkbox for Team Registration */}
                   <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
                     <input
                       type="checkbox"
@@ -855,16 +982,26 @@ if (myReg && eventData) {
                     />
                     <label htmlFor="waiver-team" className="text-sm text-gray-300 cursor-pointer">
                       I have read and agree to the <strong>Waiver & Release of Liability</strong>.
-                      <a href="/waiver" target="_blank" className="text-blue-400 hover:underline ml-1">(View Document)</a>
+                      <a href="/waiver" target="_blank" className="text-blue-400 hover:underline ml-1">
+                        (View Document)
+                      </a>
                     </label>
                   </div>
 
                   <button
                     onClick={handleRegister}
-                    disabled={submitting || !agreedToWaiver ||(mode === '' || (mode === 'create' && !newTeamName) || (mode === 'join' && !selectedTeam))}
+                    disabled={
+                      submitting ||
+                      !agreedToWaiver ||
+                      mode === '' ||
+                      (mode === 'create' && !newTeamName) ||
+                      (mode === 'join' && !selectedTeam)
+                    }
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
-                    {submitting ? 'Processing Payment...' : `Complete Registration — $${totalCost.toFixed(2)}`}
+                    {submitting
+                      ? 'Processing Payment...'
+                      : `Complete Registration — $${totalCost.toFixed(2)}`}
                   </button>
                 </div>
               )}
@@ -887,10 +1024,11 @@ if (myReg && eventData) {
             <div className="mx-auto w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-6">
               <span className="text-4xl">✅</span>
             </div>
-            
+
             <h2 className="text-3xl font-semibold mb-2">Add-ons Paid Successfully</h2>
             <p className="text-gray-400 mb-8">
-              Your add-ons have been paid.<br />
+              Your add-ons have been paid.
+              <br />
               <strong>Awaiting Admin Check-In</strong>
             </p>
 
@@ -904,7 +1042,7 @@ if (myReg && eventData) {
               >
                 Scorecard
               </button>
-              
+
               <button
                 onClick={() => {
                   setShowSuccessModal(false);

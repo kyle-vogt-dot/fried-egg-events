@@ -13,11 +13,10 @@ export default function PlatformAdminPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [feeInput, setFeeInput] = useState('300'); // stored as string to avoid leading zero issues
+  const [feeInput, setFeeInput] = useState('3.00');
   const [message, setMessage] = useState('');
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
-  // Only these emails can access this page
   const ALLOWED_EMAILS = [
     'kyle-vogt@hotmail.com',
   ];
@@ -33,7 +32,6 @@ export default function PlatformAdminPage() {
 
       setUserEmail(user.email || null);
 
-      // Check if user is allowed
       if (!ALLOWED_EMAILS.includes(user.email || '')) {
         router.push('/');
         return;
@@ -42,12 +40,12 @@ export default function PlatformAdminPage() {
       // Load current fee
       const { data } = await supabase
         .from('platform_settings')
-        .select('value')
-        .eq('key', 'platform_fee_cents')
+        .select('platform_fee')
+        .eq('id', 1)
         .single();
 
-      if (data) {
-        setFeeInput(String(data.value));
+      if (data?.platform_fee !== undefined && data?.platform_fee !== null) {
+        setFeeInput(Number(data.platform_fee).toFixed(2));
       }
 
       setLoading(false);
@@ -60,15 +58,15 @@ export default function PlatformAdminPage() {
     setSaving(true);
     setMessage('');
 
-    const feeCents = Number(feeInput) || 0;
+    const fee = Number(feeInput) || 0;
 
     const { error } = await supabase
       .from('platform_settings')
       .update({
-        value: feeCents,
+        platform_fee: fee,
         updated_at: new Date().toISOString(),
       })
-      .eq('key', 'platform_fee_cents');
+      .eq('id', 1);
 
     if (error) {
       setMessage('Failed to save: ' + error.message);
@@ -96,21 +94,18 @@ export default function PlatformAdminPage() {
         <div className="bg-gray-800 rounded-3xl p-8 space-y-6">
           <div>
             <label className="block text-sm font-medium mb-2">
-              Platform Fee (in cents)
+              Platform Fee (in dollars)
             </label>
             <input
-              type="text"
-              inputMode="numeric"
+              type="number"
+              step="0.01"
+              min="0"
               value={feeInput}
-              onChange={(e) => {
-                // Only allow numbers
-                const val = e.target.value.replace(/[^0-9]/g, '');
-                setFeeInput(val);
-              }}
+              onChange={(e) => setFeeInput(e.target.value)}
               className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4 text-lg"
             />
             <p className="text-sm text-gray-400 mt-2">
-              Current fee: ${((Number(feeInput) || 0) / 100).toFixed(2)} per registration
+              Current fee: ${Number(feeInput || 0).toFixed(2)} per player
             </p>
           </div>
 

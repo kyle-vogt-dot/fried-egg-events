@@ -15,18 +15,31 @@ export async function POST(request: NextRequest) {
       teamName,
       isTeam = false,
       eventId,
-      // Receipt fields
       eventPrice = 0,
       platformFee = 0,
       processingFee = 0,
       totalPaid = 0,
+      playerCount = 1,
+      rounds = [],
     } = await request.json();
+
+    const roundsHtml =
+      Array.isArray(rounds) && rounds.length > 0
+        ? `
+          <div style="background-color: #1f2937; padding: 25px; border-radius: 16px; margin: 30px 0;">
+            <h3 style="margin-top: 0; color: #22c55e;">Rounds</h3>
+            <ul style="margin: 0; padding-left: 18px; color: #e5e7eb;">
+              ${rounds.map((r: string) => `<li style="margin: 6px 0;">${r}</li>`).join('')}
+            </ul>
+          </div>
+        `
+        : '';
 
     const { data, error } = await resend.emails.send({
       from: 'Fried Egg Events <noreply@friedeggevents.app>',
       to: to,
-      subject: isTeam 
-        ? `You're registered for ${eventName} as part of ${teamName}` 
+      subject: isTeam
+        ? `You're registered for ${eventName} as part of ${teamName}`
         : `You're registered for ${eventName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px 20px; background-color: #111827; color: #f3f4f6;">
@@ -50,17 +63,17 @@ export async function POST(request: NextRequest) {
             ${teamName ? `<p style="margin: 8px 0;"><strong>Team:</strong> ${teamName}</p>` : ''}
           </div>
 
+          ${roundsHtml}
+
           <!-- Receipt -->
           <div style="background-color: #1f2937; padding: 25px; border-radius: 16px; margin: 30px 0;">
             <h3 style="margin-top: 0; color: #22c55e;">Payment Receipt</h3>
             <table style="width: 100%; border-collapse: collapse; color: #e5e7eb;">
               <tr>
-                <td style="padding: 8px 0;">Event Registration</td>
+                <td style="padding: 8px 0;">
+                  Event Registration${playerCount > 1 ? ` (${playerCount} players)` : ''}
+                </td>
                 <td style="padding: 8px 0; text-align: right;">$${Number(eventPrice).toFixed(2)}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0;">Platform Fee</td>
-                <td style="padding: 8px 0; text-align: right;">$${Number(platformFee).toFixed(2)}</td>
               </tr>
               <tr>
                 <td style="padding: 8px 0;">Processing Fee</td>
@@ -68,7 +81,9 @@ export async function POST(request: NextRequest) {
               </tr>
               <tr style="border-top: 1px solid #374151;">
                 <td style="padding: 12px 0; font-weight: bold;">Total Paid</td>
-                <td style="padding: 12px 0; text-align: right; font-weight: bold; color: #22c55e;">$${Number(totalPaid).toFixed(2)}</td>
+                <td style="padding: 12px 0; text-align: right; font-weight: bold; color: #22c55e;">
+                  $${Number(totalPaid).toFixed(2)}
+                </td>
               </tr>
             </table>
           </div>

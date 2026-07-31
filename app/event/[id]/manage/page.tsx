@@ -18,6 +18,7 @@ export default function EventManagePage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [platformFee, setPlatformFee] = useState(3.00);
 
   const [courseSearch, setCourseSearch] = useState('');
   const [courseResults, setCourseResults] = useState<any[]>([]);
@@ -26,6 +27,7 @@ export default function EventManagePage() {
   const [showFlights, setShowFlights] = useState(false);
   const [showAddOns, setShowAddOns] = useState(false);
   const [showAdmins, setShowAdmins] = useState(false);
+  const [showRounds, setShowRounds] = useState(false);
   const [saving, setSaving] = useState(false);
   const [agreedToTerms, setAgreedToTerms] = useState(false);
 
@@ -35,6 +37,15 @@ export default function EventManagePage() {
   const [admins, setAdmins] = useState<any[]>([]);
   const [newAdminName, setNewAdminName] = useState('');
   const [newAdminEmail, setNewAdminEmail] = useState('');
+
+  const [rounds, setRounds] = useState<any[]>([]);
+  const [newRound, setNewRound] = useState({
+    name: '',
+    start_time: '',
+    max_players: 40,
+    pay_separately: false,
+    price: 0,
+  });
 
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -90,6 +101,25 @@ export default function EventManagePage() {
 
       await fetchAdmins();
 
+      // Load rounds
+      const { data: roundsData } = await supabase
+        .from('event_rounds')
+        .select('*')
+        .eq('event_id', parseInt(eventId))
+        .order('sort_order', { ascending: true });
+      setRounds(roundsData || []);
+
+      // Load platform fee
+      const { data: feeData } = await supabase
+        .from('platform_settings')
+        .select('platform_fee')
+        .eq('id', 1)
+        .single();
+
+      if (feeData?.platform_fee) {
+        setPlatformFee(Number(feeData.platform_fee));
+      }
+
       setLoading(false);
     };
 
@@ -115,7 +145,7 @@ export default function EventManagePage() {
     checkSession();
   }, [supabase, router]);
 
-    if (loading) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
         <div className="text-center">
@@ -130,8 +160,8 @@ export default function EventManagePage() {
     return (
       <div className="min-h-screen bg-gray-900 text-white p-12 text-center">
         <p className="text-red-400 text-xl">{error || "Access Denied"}</p>
-        <button 
-          onClick={() => router.back()} 
+        <button
+          onClick={() => router.back()}
           className="mt-6 px-6 py-3 bg-gray-700 rounded-2xl"
         >
           ← Go Back
@@ -139,7 +169,8 @@ export default function EventManagePage() {
       </div>
     );
   }
-    // Available Tees for Flights
+
+  // Available Tees for Flights
   const availableTees = (() => {
     if (!event?.course_data) return [];
     let teesData = event.course_data?.tees || event.course_data?.course?.tees;
@@ -164,25 +195,23 @@ export default function EventManagePage() {
     setEvent((prev: any) => ({ ...prev, [field]: value }));
   };
 
-
-
   // Course Search
   const debouncedSearch = (query: string) => {
     if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     searchTimeoutRef.current = setTimeout(() => searchCourses(query), 500);
   };
 
-    const searchCourses = async (query: string) => {
+  const searchCourses = async (query: string) => {
     if (query.length < 3) {
       setCourseResults([]);
       return;
     }
 
     try {
-      console.log("Searching for:", query); // Debug log
+      console.log("Searching for:", query);
 
       const res = await fetch(`/api/golf-search?q=${encodeURIComponent(query)}`);
-      
+
       if (!res.ok) {
         console.error('Search failed:', res.status);
         setCourseResults([{
@@ -194,7 +223,7 @@ export default function EventManagePage() {
       }
 
       const data = await res.json();
-      console.log("Search results:", data); // Debug log
+      console.log("Search results:", data);
       setCourseResults(data.results || data.courses || data || []);
     } catch (err) {
       console.error('Course search failed:', err);
@@ -268,8 +297,6 @@ export default function EventManagePage() {
     }
   };
 
-
-
   const handleSaveEvent = async () => {
     setSaving(true);
     const { error } = await supabase
@@ -281,7 +308,7 @@ export default function EventManagePage() {
     setSaving(false);
   };
 
-      const handleAddAdmin = async () => {
+  const handleAddAdmin = async () => {
     if (!newAdminEmail.trim()) return alert("Email is required");
 
     const email = newAdminEmail.trim().toLowerCase();
@@ -327,9 +354,9 @@ export default function EventManagePage() {
   // ====================== FLIGHT & ADDON HANDLERS ======================
   const handleAddFlight = () => {
     if (!newFlight.name.trim()) return alert("Flight name is required");
-    const updatedFlights = [...(event.flights || []), { 
-      name: newFlight.name.trim(), 
-      range: newFlight.range.trim() 
+    const updatedFlights = [...(event.flights || []), {
+      name: newFlight.name.trim(),
+      range: newFlight.range.trim()
     }];
     handleEventChange('flights', updatedFlights);
     setNewFlight({ name: '', range: '' });
@@ -340,7 +367,7 @@ export default function EventManagePage() {
     handleEventChange('flights', updatedFlights);
   };
 
-    const handleDeleteAdmin = async (adminId: number, email: string) => {
+  const handleDeleteAdmin = async (adminId: number, email: string) => {
     if (!confirm(`Remove ${email} as an admin?`)) return;
 
     try {
@@ -380,7 +407,6 @@ export default function EventManagePage() {
     }
   };
 
-  
   const handleDeleteAddon = async (id: number) => {
     if (!confirm('Remove this add-on?')) return;
     await supabase.from('event_addons').delete().eq('id', id);
@@ -391,18 +417,44 @@ export default function EventManagePage() {
     setAddons(data || []);
   };
 
-    if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-10 h-10 border-4 border-gray-700 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-400">Loading event...</p>
-        </div>
-      </div>
-    );
-  }
+  // ====================== ROUNDS HANDLERS ======================
+  const handleAddRound = async () => {
+    if (!newRound.name.trim()) {
+      alert('Round name is required');
+      return;
+    }
 
-    const handleDeleteEvent = async () => {
+    const { error } = await supabase.from('event_rounds').insert({
+      event_id: parseInt(eventId),
+      name: newRound.name.trim(),
+      start_time: newRound.start_time || null,
+      max_players: newRound.max_players,
+      pay_separately: newRound.pay_separately,
+      price: newRound.pay_separately ? Number(newRound.price) : 0,
+      sort_order: rounds.length,
+    });
+
+    if (error) {
+      alert('Failed to add round: ' + error.message);
+      return;
+    }
+
+    const { data } = await supabase
+      .from('event_rounds')
+      .select('*')
+      .eq('event_id', parseInt(eventId))
+      .order('sort_order', { ascending: true });
+    setRounds(data || []);
+    setNewRound({ name: '', start_time: '', max_players: 40, pay_separately: false, price: 0 });
+  };
+
+  const handleDeleteRound = async (id: number) => {
+    if (!confirm('Remove this round?')) return;
+    await supabase.from('event_rounds').delete().eq('id', id);
+    setRounds((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const handleDeleteEvent = async () => {
     if (!confirm(`⚠️ Delete this entire event?\n\n${event.name}\n\nThis action cannot be undone!`)) {
       return;
     }
@@ -430,17 +482,16 @@ export default function EventManagePage() {
       setSaving(false);
     }
   };
-  
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
       <div className="max-w-6xl mx-auto">
         <button
-  onClick={() => router.back()}
-  className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-6"
->
-  ← Back
-</button>
+          onClick={() => router.back()}
+          className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-6"
+        >
+          ← Back
+        </button>
 
         <h1 className="text-4xl font-bold mb-2">{event.name}</h1>
         <p className="text-gray-400 mb-8">Manage Event Details</p>
@@ -492,7 +543,6 @@ export default function EventManagePage() {
         </div>
 
         {/* Golf Course Search */}
-        
         <div>
           <h3 className="text-xl font-medium mb-4">Golf Course</h3>
           <div className="relative">
@@ -529,54 +579,155 @@ export default function EventManagePage() {
           )}
         </div>
 
-        {/* Three Buttons */}
+        {/* Four Buttons */}
         <div className="flex flex-wrap gap-3 mt-8">
-          <button 
-            onClick={() => setShowFlights(!showFlights)} 
+          <button
+            onClick={() => setShowRounds(!showRounds)}
+            className="flex-1 sm:flex-none bg-teal-600 hover:bg-teal-700 px-6 py-4 rounded-3xl font-medium transition-colors"
+          >
+            {showRounds ? 'Hide Rounds' : 'Manage Rounds'}
+          </button>
+
+          <button
+            onClick={() => setShowFlights(!showFlights)}
             className="flex-1 sm:flex-none bg-purple-600 hover:bg-purple-700 px-6 py-4 rounded-3xl font-medium transition-colors"
           >
             {showFlights ? 'Hide Flights' : 'Manage Flights'}
           </button>
 
-          <button 
-            onClick={() => setShowAddOns(!showAddOns)} 
+          <button
+            onClick={() => setShowAddOns(!showAddOns)}
             className="flex-1 sm:flex-none bg-yellow-600 hover:bg-yellow-700 px-6 py-4 rounded-3xl font-medium transition-colors"
           >
             {showAddOns ? 'Hide Add-ons' : 'Manage Add-ons'}
           </button>
 
-          <button 
-            onClick={() => setShowAdmins(!showAdmins)} 
+          <button
+            onClick={() => setShowAdmins(!showAdmins)}
             className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 px-6 py-4 rounded-3xl font-medium transition-colors"
           >
             {showAdmins ? 'Hide Admins' : 'Manage Admins'}
           </button>
         </div>
-                {/* Flights Panel */}
+
+        {/* Rounds Panel */}
+        {showRounds && (
+          <div className="bg-gray-900 border border-teal-500/30 rounded-3xl p-8 mt-8">
+            <h3 className="text-xl font-medium mb-6">Event Rounds</h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
+              <div className="md:col-span-3">
+                <label className="block text-sm text-gray-400 mb-2">Round Name</label>
+                <input
+                  value={newRound.name}
+                  onChange={(e) => setNewRound({ ...newRound, name: e.target.value })}
+                  placeholder="Morning Round"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm text-gray-400 mb-2">Start Time</label>
+                <input
+                  type="time"
+                  value={newRound.start_time}
+                  onChange={(e) => setNewRound({ ...newRound, start_time: e.target.value })}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm text-gray-400 mb-2">Max Players</label>
+                <input
+                  type="number"
+                  value={newRound.max_players}
+                  onChange={(e) => setNewRound({ ...newRound, max_players: parseInt(e.target.value) || 0 })}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                />
+              </div>
+              <div className="md:col-span-3">
+                <label className="flex items-center gap-3 text-sm text-gray-300 mb-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newRound.pay_separately}
+                    onChange={(e) => setNewRound({ ...newRound, pay_separately: e.target.checked })}
+                    className="w-5 h-5 accent-teal-600"
+                  />
+                  Charge separately
+                </label>
+                {newRound.pay_separately && (
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={newRound.price}
+                    onChange={(e) => setNewRound({ ...newRound, price: parseFloat(e.target.value) || 0 })}
+                    placeholder="Price per player"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                  />
+                )}
+              </div>
+              <div className="md:col-span-2">
+                <button
+                  onClick={handleAddRound}
+                  className="w-full bg-teal-600 hover:bg-teal-700 py-4 rounded-3xl font-medium"
+                >
+                  Add Round
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {rounds.length === 0 && (
+                <p className="text-gray-500 text-sm">No rounds yet. Add one above (e.g. 8:00 AM, 12:00 PM, 4:00 PM).</p>
+              )}
+              {rounds.map((round) => (
+                <div key={round.id} className="bg-gray-800 p-6 rounded-3xl flex justify-between items-center">
+                  <div>
+                    <div className="font-semibold text-lg">{round.name}</div>
+                    <div className="text-sm text-gray-400 mt-1">
+                      {round.start_time ? String(round.start_time).slice(0, 5) : 'No time set'}
+                      {' · '}
+                      Max {round.max_players} players
+                      {round.pay_separately
+                        ? ` · $${Number(round.price).toFixed(2)} + platform fee`
+                        : ' · Included in event price'}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleDeleteRound(round.id)}
+                    className="text-red-500 hover:text-red-600 text-sm font-medium px-4 py-2"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Flights Panel */}
         {showFlights && (
           <div className="bg-gray-900 border border-purple-500/30 rounded-3xl p-8 mt-8">
             <h3 className="text-xl font-medium mb-6">Manage Flights</h3>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
               <div className="md:col-span-4">
-                <input 
-                  value={newFlight.name} 
-                  onChange={(e) => setNewFlight({ ...newFlight, name: e.target.value })} 
-                  placeholder="Flight A..." 
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" 
+                <input
+                  value={newFlight.name}
+                  onChange={(e) => setNewFlight({ ...newFlight, name: e.target.value })}
+                  placeholder="Flight A..."
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                 />
               </div>
               <div className="md:col-span-4">
-                <input 
-                  value={newFlight.range} 
-                  onChange={(e) => setNewFlight({ ...newFlight, range: e.target.value })} 
-                  placeholder="<15 or 4.0-7.9" 
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" 
+                <input
+                  value={newFlight.range}
+                  onChange={(e) => setNewFlight({ ...newFlight, range: e.target.value })}
+                  placeholder="<15 or 4.0-7.9"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                 />
               </div>
               <div className="md:col-span-4">
-                <button 
-                  onClick={handleAddFlight} 
+                <button
+                  onClick={handleAddFlight}
                   className="w-full bg-purple-600 hover:bg-purple-700 py-5 rounded-3xl font-medium"
                 >
                   Add Flight
@@ -592,21 +743,21 @@ export default function EventManagePage() {
                       <span className="font-semibold text-lg">{flight.name}</span>
                       <span className="ml-4 text-gray-400">Range: {flight.range}</span>
                     </div>
-                    <button 
-                      onClick={() => handleDeleteFlight(index)} 
+                    <button
+                      onClick={() => handleDeleteFlight(index)}
                       className="text-red-500 hover:text-red-600 text-sm"
                     >
                       Remove
                     </button>
                   </div>
                   <label className="block text-sm text-gray-400 mb-2">Tees for this Flight</label>
-                  <select 
-                    value={flight.tee || ''} 
+                  <select
+                    value={flight.tee || ''}
                     onChange={(e) => {
                       const updated = [...(event.flights || [])];
                       updated[index] = { ...updated[index], tee: e.target.value };
                       handleEventChange('flights', updated);
-                    }} 
+                    }}
                     className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                   >
                     <option value="">Select Tees</option>
@@ -626,41 +777,41 @@ export default function EventManagePage() {
           </div>
         )}
 
-                {/* Add-ons Panel */}
+        {/* Add-ons Panel */}
         {showAddOns && (
           <div className="bg-gray-900 border border-yellow-500/30 rounded-3xl p-8 mt-8">
             <h3 className="text-xl font-medium mb-6">Manage Add-ons</h3>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
               <div className="md:col-span-5">
-                <input 
-                  value={newAddon.name} 
-                  onChange={(e) => setNewAddon({ ...newAddon, name: e.target.value })} 
-                  placeholder="Mulligan Package, Cart, etc." 
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" 
+                <input
+                  value={newAddon.name}
+                  onChange={(e) => setNewAddon({ ...newAddon, name: e.target.value })}
+                  placeholder="Mulligan Package, Cart, etc."
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                 />
               </div>
               <div className="md:col-span-2">
-                <input 
-                  type="number" 
-                  value={newAddon.quantity_available} 
-                  onChange={(e) => setNewAddon({ ...newAddon, quantity_available: parseInt(e.target.value) || 0 })} 
-                  placeholder="Qty" 
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-center" 
+                <input
+                  type="number"
+                  value={newAddon.quantity_available}
+                  onChange={(e) => setNewAddon({ ...newAddon, quantity_available: parseInt(e.target.value) || 0 })}
+                  placeholder="Qty"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-center"
                 />
               </div>
               <div className="md:col-span-2">
-                <input 
-                  type="number" 
-                  value={newAddon.price_per_unit} 
-                  onChange={(e) => setNewAddon({ ...newAddon, price_per_unit: parseFloat(e.target.value) || 0 })} 
-                  placeholder="$" 
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-center" 
+                <input
+                  type="number"
+                  value={newAddon.price_per_unit}
+                  onChange={(e) => setNewAddon({ ...newAddon, price_per_unit: parseFloat(e.target.value) || 0 })}
+                  placeholder="$"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-center"
                 />
               </div>
               <div className="md:col-span-3">
-                <button 
-                  onClick={handleAddAddon} 
+                <button
+                  onClick={handleAddAddon}
                   className="w-full bg-yellow-600 hover:bg-yellow-700 py-5 rounded-3xl font-medium"
                 >
                   Add Add-on
@@ -677,8 +828,8 @@ export default function EventManagePage() {
                       ${addon.price_per_unit} each • {addon.quantity_available} available
                     </div>
                   </div>
-                  <button 
-                    onClick={() => handleDeleteAddon(addon.id)} 
+                  <button
+                    onClick={() => handleDeleteAddon(addon.id)}
                     className="text-red-500 hover:text-red-600 px-4 py-2"
                   >
                     Remove
@@ -692,32 +843,33 @@ export default function EventManagePage() {
             )}
           </div>
         )}
-                        {/* Admins Panel */}
+
+        {/* Admins Panel */}
         {showAdmins && (
           <div className="bg-gray-900 border border-indigo-500/30 rounded-3xl p-8 mt-8">
             <h3 className="text-xl font-medium mb-6">Event Admins</h3>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
               <div className="md:col-span-5">
-                <input 
-                  value={newAdminName} 
-                  onChange={(e) => setNewAdminName(e.target.value)} 
-                  placeholder="Admin Name (optional)" 
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" 
+                <input
+                  value={newAdminName}
+                  onChange={(e) => setNewAdminName(e.target.value)}
+                  placeholder="Admin Name (optional)"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                 />
               </div>
               <div className="md:col-span-5">
-                <input 
+                <input
                   type="email"
-                  value={newAdminEmail} 
-                  onChange={(e) => setNewAdminEmail(e.target.value)} 
-                  placeholder="admin@example.com" 
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" 
+                  value={newAdminEmail}
+                  onChange={(e) => setNewAdminEmail(e.target.value)}
+                  placeholder="admin@example.com"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                 />
               </div>
               <div className="md:col-span-2">
-                <button 
-                  onClick={handleAddAdmin} 
+                <button
+                  onClick={handleAddAdmin}
                   className="w-full bg-indigo-600 hover:bg-indigo-700 py-5 rounded-3xl font-medium"
                 >
                   Add Admin
@@ -736,7 +888,7 @@ export default function EventManagePage() {
                     <div className="text-xs px-3 py-1 bg-gray-700 rounded-full">
                       {admin.user_id ? 'Registered' : 'Invited'}
                     </div>
-                    <button 
+                    <button
                       onClick={() => handleDeleteAdmin(admin.id, admin.email)}
                       className="text-red-500 hover:text-red-600 px-4 py-2 text-sm font-medium"
                     >
@@ -754,178 +906,186 @@ export default function EventManagePage() {
         )}
 
         {/* ====================== MAIN FORM FIELDS ====================== */}
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Event Name</label>
-        <input value={event.name || ''} onChange={(e) => handleEventChange('name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
-      </div>
-
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Event Type</label>
-        <select value={event.event_type || ''} onChange={(e) => handleEventChange('event_type', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
-          <option value="">Select Event Type</option>
-          <option value="individual">Individual Stroke Play</option>
-          <option value="2man-best-ball">2-Man Best Ball</option>
-          <option value="2man-scramble">2-Man Scramble</option>
-          <option value="4man-best-ball">4-Man Best Ball</option>
-          <option value="4man-scramble">4-Man Scramble</option>
-          <option value="skins">Skins Match</option>
-          <option value="other">Other</option>
-        </select>
-      </div>
-
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">{event.event_type?.toLowerCase() === 'individual' ? 'Price' : 'Team Price'}</label>
-        <input type="number" value={event.price || ''} onChange={(e) => handleEventChange('price', parseFloat(e.target.value) || 0)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
-      </div>
-
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Golfers per Team</label>
-        <input type="number" value={event.max_teammates || 1} onChange={(e) => handleEventChange('max_teammates', parseInt(e.target.value) || 1)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="1" />
-      </div>
-
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Registration Open Date</label>
-        <input type="date" value={event.registration_open_date || ''} onChange={(e) => handleEventChange('registration_open_date', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
-      </div>
-
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Open Time</label>
-        <input type="time" value={event.registration_open_time || ''} onChange={(e) => handleEventChange('registration_open_time', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
-      </div>
-
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Event Date</label>
-        <input type="date" value={event.date || ''} onChange={(e) => handleEventChange('date', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
-      </div>
-
-      {/* Number of Holes Toggle */}
-      <div className="md:col-span-2">
-        <label className="block text-sm text-gray-400 mb-3">Number of Holes</label>
-        <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
-          <button type="button" onClick={() => handleEventChange('number_of_holes', 9)} className={`flex-1 py-4 rounded-3xl font-medium ${event?.number_of_holes === 9 ? 'bg-blue-600 text-white' : 'hover:bg-gray-600 text-gray-300'}`}>9 Holes</button>
-          <button type="button" onClick={() => handleEventChange('number_of_holes', 18)} className={`flex-1 py-4 rounded-3xl font-medium ${event?.number_of_holes === 18 || !event?.number_of_holes ? 'bg-blue-600 text-white' : 'hover:bg-gray-600 text-gray-300'}`}>18 Holes</button>
-        </div>
-      </div>
-
-      {/* Players per Hole */}
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Players per Hole</label>
-        <input type="number" value={event.players_per_hole || 4} onChange={(e) => handleEventChange('players_per_hole', parseInt(e.target.value) || 4)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="1" />
-      </div>
-
-      {/* Start Format */}
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Start Format</label>
-        <select value={event.start_format || 'shotgun'} onChange={(e) => handleEventChange('start_format', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
-          <option value="shotgun">Shotgun Start</option>
-          <option value="tee_times">Tee Times</option>
-          <option value="double_tee">Double Tee</option>
-        </select>
-      </div>
-
-      {event.start_format === 'tee_times' && (
-        <div>
-          <label className="block text-sm text-gray-400 mb-2">Minutes between Tee Times</label>
-          <input type="number" value={event.tee_time_interval || 10} onChange={(e) => handleEventChange('tee_time_interval', parseInt(e.target.value) || 10)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="5" />
-        </div>
-      )}
-
-      {/* Starting Hole */}
-      <div>
-        <label className="block text-sm text-gray-400 mb-2">Starting Hole</label>
-        <select value={event.starting_hole || 1} onChange={(e) => handleEventChange('starting_hole', parseInt(e.target.value))} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
-          {Array.from({ length: event?.number_of_holes || 18 }, (_, i) => (
-            <option key={i + 1} value={i + 1}>Hole {i + 1}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Event Contact - Clean stacked */}
-      <div className="md:col-span-2">
-        <label className="block text-sm text-gray-400 mb-4">Event Contact (optional)</label>
-        <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div>
-            <label className="block text-xs text-gray-500 mb-2">Contact Name</label>
-            <input placeholder="John Smith" value={event.contact_name || ''} onChange={(e) => handleEventChange('contact_name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+            <label className="block text-sm text-gray-400 mb-2">Event Name</label>
+            <input value={event.name || ''} onChange={(e) => handleEventChange('name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
           </div>
+
           <div>
-            <label className="block text-xs text-gray-500 mb-2">Email Address</label>
-            <input type="email" placeholder="John@friedeggevents.app" value={event.contact_email || ''} onChange={(e) => handleEventChange('contact_email', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+            <label className="block text-sm text-gray-400 mb-2">Event Type</label>
+            <select value={event.event_type || ''} onChange={(e) => handleEventChange('event_type', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
+              <option value="">Select Event Type</option>
+              <option value="individual">Individual Stroke Play</option>
+              <option value="2man-best-ball">2-Man Best Ball</option>
+              <option value="2man-scramble">2-Man Scramble</option>
+              <option value="4man-best-ball">4-Man Best Ball</option>
+              <option value="4man-scramble">4-Man Scramble</option>
+              <option value="skins">Skins Match</option>
+              <option value="other">Other</option>
+            </select>
           </div>
+
           <div>
-            <label className="block text-xs text-gray-500 mb-2">Phone Number</label>
-            <input type="tel" placeholder="(555) 555-5555" value={event.contact_phone || ''} onChange={(e) => handleEventChange('contact_phone', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+            <label className="block text-sm text-gray-400 mb-2">Price per Player</label>
+            <input
+              type="number"
+              value={event.price || ''}
+              onChange={(e) => handleEventChange('price', parseFloat(e.target.value) || 0)}
+              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+            />
+            <p className="text-sm text-gray-400 mt-2">
+              ${platformFee.toFixed(2)} Platform fee will be added to this price
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Golfers per Team</label>
+            <input type="number" value={event.max_teammates || 1} onChange={(e) => handleEventChange('max_teammates', parseInt(e.target.value) || 1)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="1" />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Registration Open Date</label>
+            <input type="date" value={event.registration_open_date || ''} onChange={(e) => handleEventChange('registration_open_date', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Open Time</label>
+            <input type="time" value={event.registration_open_time || ''} onChange={(e) => handleEventChange('registration_open_time', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
+          </div>
+
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Event Date</label>
+            <input type="date" value={event.date || ''} onChange={(e) => handleEventChange('date', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
+          </div>
+
+          {/* Number of Holes Toggle */}
+          <div className="md:col-span-2">
+            <label className="block text-sm text-gray-400 mb-3">Number of Holes</label>
+            <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
+              <button type="button" onClick={() => handleEventChange('number_of_holes', 9)} className={`flex-1 py-4 rounded-3xl font-medium ${event?.number_of_holes === 9 ? 'bg-blue-600 text-white' : 'hover:bg-gray-600 text-gray-300'}`}>9 Holes</button>
+              <button type="button" onClick={() => handleEventChange('number_of_holes', 18)} className={`flex-1 py-4 rounded-3xl font-medium ${event?.number_of_holes === 18 || !event?.number_of_holes ? 'bg-blue-600 text-white' : 'hover:bg-gray-600 text-gray-300'}`}>18 Holes</button>
+            </div>
+          </div>
+
+          {/* Players per Hole */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Players per Hole</label>
+            <input type="number" value={event.players_per_hole || 4} onChange={(e) => handleEventChange('players_per_hole', parseInt(e.target.value) || 4)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="1" />
+          </div>
+
+          {/* Start Format */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Start Format</label>
+            <select value={event.start_format || 'shotgun'} onChange={(e) => handleEventChange('start_format', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
+              <option value="shotgun">Shotgun Start</option>
+              <option value="tee_times">Tee Times</option>
+              <option value="double_tee">Double Tee</option>
+            </select>
+          </div>
+
+          {event.start_format === 'tee_times' && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">Minutes between Tee Times</label>
+              <input type="number" value={event.tee_time_interval || 10} onChange={(e) => handleEventChange('tee_time_interval', parseInt(e.target.value) || 10)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" min="5" />
+            </div>
+          )}
+
+          {/* Starting Hole */}
+          <div>
+            <label className="block text-sm text-gray-400 mb-2">Starting Hole</label>
+            <select value={event.starting_hole || 1} onChange={(e) => handleEventChange('starting_hole', parseInt(e.target.value))} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5">
+              {Array.from({ length: event?.number_of_holes || 18 }, (_, i) => (
+                <option key={i + 1} value={i + 1}>Hole {i + 1}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Event Contact */}
+          <div className="md:col-span-2">
+            <label className="block text-sm text-gray-400 mb-4">Event Contact (optional)</label>
+            <div className="space-y-6">
+              <div>
+                <label className="block text-xs text-gray-500 mb-2">Contact Name</label>
+                <input placeholder="John Smith" value={event.contact_name || ''} onChange={(e) => handleEventChange('contact_name', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-2">Email Address</label>
+                <input type="email" placeholder="John@friedeggevents.app" value={event.contact_email || ''} onChange={(e) => handleEventChange('contact_email', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-2">Phone Number</label>
+                <input type="tel" placeholder="(555) 555-5555" value={event.contact_phone || ''} onChange={(e) => handleEventChange('contact_phone', e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base" />
+              </div>
+            </div>
+          </div>
+
+          {/* Event Description */}
+          <div className="mt-10">
+            <h3 className="text-xl font-medium mb-4">Event Description</h3>
+            <textarea
+              value={event.description || ''}
+              onChange={(e) => handleEventChange('description', e.target.value)}
+              rows={6}
+              placeholder="18-hole stroke play tournament with flights based on handicap..."
+              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500 resize-y min-h-[140px]"
+            />
+            <p className="text-xs text-gray-500 mt-2">
+              This will appear on the event page and registration form.
+            </p>
+          </div>
+
+          {/* USGA Checkbox */}
+          <div className="md:col-span-2">
+            <label className="flex items-center gap-3 text-lg cursor-pointer">
+              <input type="checkbox" checked={!!event?.usga_event} onChange={(e) => handleEventChange('usga_event', e.target.checked)} className="w-6 h-6 accent-blue-600" />
+              <span className="font-medium">USGA Event (submit scores to USGA)</span>
+            </label>
+          </div>
+
+          {/* Handicaps Checkbox */}
+          <div className="md:col-span-2 mt-6 pt-8 border-t border-gray-700">
+            <label className="flex items-center gap-3 text-lg cursor-pointer">
+              <input type="checkbox" checked={!!event?.use_handicaps} onChange={(e) => handleEventChange('use_handicaps', e.target.checked)} className="w-6 h-6 accent-blue-600" />
+              <span className="font-medium">Use Handicaps for this Event</span>
+            </label>
+            <p className="text-sm text-gray-500 mt-2 ml-9">
+              When enabled, you can enter individual handicaps for each player or team in the Check-in tab.
+            </p>
           </div>
         </div>
-      </div>
 
-              {/* Event Description */}
-        <div className="mt-10">
-          <h3 className="text-xl font-medium mb-4">Event Description</h3>
-          <textarea
-            value={event.description || ''}
-            onChange={(e) => handleEventChange('description', e.target.value)}
-            rows={6}
-            placeholder="18-hole stroke play tournament with flights based on handicap..."
-            className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500 resize-y min-h-[140px]"
+        {/* Waiver / Terms Checkbox */}
+        <div className="md:col-span-2 flex items-start gap-3 bg-gray-900 p-5 rounded-2xl mt-6">
+          <input
+            type="checkbox"
+            id="event-terms"
+            checked={agreedToTerms}
+            onChange={(e) => setAgreedToTerms(e.target.checked)}
+            className="mt-1 w-5 h-5 accent-blue-600"
           />
-          <p className="text-xs text-gray-500 mt-2">
-            This will appear on the event page and registration form.
-          </p>
+          <label htmlFor="event-terms" className="text-sm text-gray-300 cursor-pointer">
+            I agree to Fried Egg Events Terms of Service and will ensure all participants sign the Waiver & Release of Liability.
+          </label>
         </div>
 
-      {/* USGA Checkbox */}
-      <div className="md:col-span-2">
-        <label className="flex items-center gap-3 text-lg cursor-pointer">
-          <input type="checkbox" checked={!!event?.usga_event} onChange={(e) => handleEventChange('usga_event', e.target.checked)} className="w-6 h-6 accent-blue-600" />
-          <span className="font-medium">USGA Event (submit scores to USGA)</span>
-        </label>
-      </div>
-
-      {/* Handicaps Checkbox */}
-      <div className="md:col-span-2 mt-6 pt-8 border-t border-gray-700">
-        <label className="flex items-center gap-3 text-lg cursor-pointer">
-          <input type="checkbox" checked={!!event?.use_handicaps} onChange={(e) => handleEventChange('use_handicaps', e.target.checked)} className="w-6 h-6 accent-blue-600" />
-          <span className="font-medium">Use Handicaps for this Event</span>
-        </label>
-        <p className="text-sm text-gray-500 mt-2 ml-9">
-          When enabled, you can enter individual handicaps for each player or team in the Check-in tab.
-        </p>
+        {/* Save / Postpone / Delete Buttons */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <button onClick={handleSaveEvent} disabled={saving} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg">
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
+          <button onClick={() => alert('Update the date and save to postpone the event')} className="bg-amber-600 hover:bg-amber-700 py-5 rounded-3xl font-semibold text-lg">
+            Postpone Event
+          </button>
+          <button
+            onClick={handleDeleteEvent}
+            disabled={saving}
+            className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded-3xl font-medium text-lg transition-colors flex items-center gap-2"
+          >
+            🗑️ Delete Event
+          </button>
+        </div>
       </div>
     </div>
-          {/* Waiver / Terms Checkbox for Event Creation */}
-      <div className="md:col-span-2 flex items-start gap-3 bg-gray-900 p-5 rounded-2xl mt-6">
-        <input
-          type="checkbox"
-          id="event-terms"
-          checked={agreedToTerms}
-          onChange={(e) => setAgreedToTerms(e.target.checked)}
-          className="mt-1 w-5 h-5 accent-blue-600"
-        />
-        <label htmlFor="event-terms" className="text-sm text-gray-300 cursor-pointer">
-          I agree to Fried Egg Events Terms of Service and will ensure all participants sign the Waiver & Release of Liability.
-        </label>
-      </div>
-
-    {/* Save / Postpone / Delete Buttons */}
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-      <button onClick={handleSaveEvent} disabled={saving} className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg">
-        {saving ? 'Saving...' : 'Save Changes'}
-      </button>
-      <button onClick={() => alert('Update the date and save to postpone the event')} className="bg-amber-600 hover:bg-amber-700 py-5 rounded-3xl font-semibold text-lg">
-        Postpone Event
-      </button>
-      <button
-  onClick={handleDeleteEvent}
-  disabled={saving}
-  className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded-3xl font-medium text-lg transition-colors flex items-center gap-2"
->
-  🗑️ Delete Event
-</button>
-    </div>
-    </div>
-
-  </div>
-);
+  );
 }

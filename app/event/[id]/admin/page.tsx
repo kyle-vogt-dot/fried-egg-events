@@ -1458,7 +1458,7 @@ const selectCourse = async (basicCourse: any) => {
       </div>
 
       <div>
-        <label className="block text-sm text-gray-400 mb-2">{event.event_type?.toLowerCase() === 'individual' ? 'Price' : 'Team Price'}</label>
+        <label className="block text-sm text-gray-400 mb-2">Price per Player</label>
         <input type="number" value={event.price || ''} onChange={(e) => handleEventChange('price', parseFloat(e.target.value) || 0)} className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5" />
       </div>
 

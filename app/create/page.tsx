@@ -95,9 +95,9 @@ export default function CreateTournament() {
     const description = formData.get('description') as string || null;
     const maxPlayers = parseInt(formData.get('maxPlayers') as string || '0');
 
-    // Fix date off-by-one issue
-    const eventDate = new Date(dateStr + 'T12:00:00');
-    const formattedDate = eventDate.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    // Keep the exact date the user selected (YYYY-MM-DD)
+const formattedDate = dateStr;
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
