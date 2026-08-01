@@ -162,12 +162,12 @@ export default function EventsPage() {
                       <div>
                         <p className="text-xs text-gray-500">DATE</p>
                         <p className="font-medium">
-                          {new Date(event.date).toLocaleDateString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric'
-                          })}
-                        </p>
+  {new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  })}
+</p>
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-gray-500">MAX PLAYERS</p>

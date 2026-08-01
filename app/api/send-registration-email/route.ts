@@ -3,6 +3,15 @@ import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY!);
 
+type RoundLine =
+  | string
+  | {
+      name?: string;
+      label?: string;
+      time?: string;
+      price?: number;
+    };
+
 export async function POST(request: NextRequest) {
   try {
     const {
@@ -21,23 +30,93 @@ export async function POST(request: NextRequest) {
       totalPaid = 0,
       playerCount = 1,
       rounds = [],
+      // 'event' | 'per_round' — same idea as registration
+      pricingMode = 'event',
     } = await request.json();
 
+    const isPerRound = pricingMode === 'per_round' || pricingMode === 'per-round';
+
+    const normalizedRounds = (Array.isArray(rounds) ? rounds : []).map((r: RoundLine) => {
+      if (typeof r === 'string') {
+        return { label: r, price: 0 };
+      }
+      return {
+        label: r.name || r.label || r.time || 'Round',
+        price: Number(r.price || 0),
+      };
+    });
+
     const roundsHtml =
-      Array.isArray(rounds) && rounds.length > 0
+      normalizedRounds.length > 0
         ? `
           <div style="background-color: #1f2937; padding: 25px; border-radius: 16px; margin: 30px 0;">
             <h3 style="margin-top: 0; color: #22c55e;">Rounds</h3>
             <ul style="margin: 0; padding-left: 18px; color: #e5e7eb;">
-              ${rounds.map((r: string) => `<li style="margin: 6px 0;">${r}</li>`).join('')}
+              ${normalizedRounds
+                .map((r) => `<li style="margin: 6px 0;">${r.label}</li>`)
+                .join('')}
             </ul>
           </div>
         `
         : '';
 
-    const { data, error } = await resend.emails.send({
+    // Receipt rows — match registration pricing rules
+    let receiptRows = '';
+
+    if (isPerRound) {
+      // Per-round: only round prices (ignore base event price)
+      if (normalizedRounds.some((r) => r.price > 0)) {
+        receiptRows += normalizedRounds
+          .map(
+            (r) => `
+            <tr>
+              <td style="padding: 8px 0;">${r.label}</td>
+              <td style="padding: 8px 0; text-align: right;">$${r.price.toFixed(2)}</td>
+            </tr>`
+          )
+          .join('');
+      } else {
+        // Fallback if caller only sent labels
+        receiptRows += `
+          <tr>
+            <td style="padding: 8px 0;">
+              Round fees${playerCount > 1 ? ` (${playerCount} players)` : ''}
+            </td>
+            <td style="padding: 8px 0; text-align: right;">
+              $${Math.max(0, Number(totalPaid) - Number(platformFee) - Number(processingFee)).toFixed(2)}
+            </td>
+          </tr>`;
+      }
+    } else {
+      // Event price mode: single event line (ignore round prices for $)
+      receiptRows += `
+        <tr>
+          <td style="padding: 8px 0;">
+            Event Registration${playerCount > 1 ? ` (${playerCount} players)` : ''}
+          </td>
+          <td style="padding: 8px 0; text-align: right;">$${Number(eventPrice).toFixed(2)}</td>
+        </tr>`;
+    }
+
+    if (Number(platformFee) > 0) {
+      receiptRows += `
+        <tr>
+          <td style="padding: 8px 0;">Platform Fee</td>
+          <td style="padding: 8px 0; text-align: right;">$${Number(platformFee).toFixed(2)}</td>
+        </tr>`;
+    }
+
+    if (Number(processingFee) > 0) {
+      receiptRows += `
+        <tr>
+          <td style="padding: 8px 0;">Processing Fee</td>
+          <td style="padding: 8px 0; text-align: right;">$${Number(processingFee).toFixed(2)}</td>
+        </tr>`;
+    }
+
+    const { error } = await resend.emails.send({
       from: 'Fried Egg Events <noreply@friedeggevents.app>',
-      to: to,
+      to,
       subject: isTeam
         ? `You're registered for ${eventName} as part of ${teamName}`
         : `You're registered for ${eventName}`,
@@ -65,20 +144,10 @@ export async function POST(request: NextRequest) {
 
           ${roundsHtml}
 
-          <!-- Receipt -->
           <div style="background-color: #1f2937; padding: 25px; border-radius: 16px; margin: 30px 0;">
             <h3 style="margin-top: 0; color: #22c55e;">Payment Receipt</h3>
             <table style="width: 100%; border-collapse: collapse; color: #e5e7eb;">
-              <tr>
-                <td style="padding: 8px 0;">
-                  Event Registration${playerCount > 1 ? ` (${playerCount} players)` : ''}
-                </td>
-                <td style="padding: 8px 0; text-align: right;">$${Number(eventPrice).toFixed(2)}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0;">Processing Fee</td>
-                <td style="padding: 8px 0; text-align: right;">$${Number(processingFee).toFixed(2)}</td>
-              </tr>
+              ${receiptRows}
               <tr style="border-top: 1px solid #374151;">
                 <td style="padding: 12px 0; font-weight: bold;">Total Paid</td>
                 <td style="padding: 12px 0; text-align: right; font-weight: bold; color: #22c55e;">

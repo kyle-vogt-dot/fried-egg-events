@@ -419,34 +419,43 @@ export default function EventManagePage() {
 
   // ====================== ROUNDS HANDLERS ======================
   const handleAddRound = async () => {
-    if (!newRound.name.trim()) {
-      alert('Round name is required');
-      return;
-    }
+  if (!newRound.name.trim()) {
+    alert('Round name is required');
+    return;
+  }
 
-    const { error } = await supabase.from('event_rounds').insert({
-      event_id: parseInt(eventId),
-      name: newRound.name.trim(),
-      start_time: newRound.start_time || null,
-      max_players: newRound.max_players,
-      pay_separately: newRound.pay_separately,
-      price: newRound.pay_separately ? Number(newRound.price) : 0,
-      sort_order: rounds.length,
-    });
+  const isPerRound = (event.pricing_mode || 'event') === 'per_round';
+  const paySeparately = isPerRound ? true : newRound.pay_separately;
+  const price = paySeparately ? Number(newRound.price) : 0;
 
-    if (error) {
-      alert('Failed to add round: ' + error.message);
-      return;
-    }
+  if (paySeparately && (!price || price <= 0)) {
+    alert('Enter a price for this round');
+    return;
+  }
 
-    const { data } = await supabase
-      .from('event_rounds')
-      .select('*')
-      .eq('event_id', parseInt(eventId))
-      .order('sort_order', { ascending: true });
-    setRounds(data || []);
-    setNewRound({ name: '', start_time: '', max_players: 40, pay_separately: false, price: 0 });
-  };
+  const { error } = await supabase.from('event_rounds').insert({
+    event_id: parseInt(eventId),
+    name: newRound.name.trim(),
+    start_time: newRound.start_time || null,
+    max_players: newRound.max_players,
+    pay_separately: paySeparately,
+    price,
+    sort_order: rounds.length,
+  });
+
+  if (error) {
+    alert('Failed to add round: ' + error.message);
+    return;
+  }
+
+  const { data } = await supabase
+    .from('event_rounds')
+    .select('*')
+    .eq('event_id', parseInt(eventId))
+    .order('sort_order', { ascending: true });
+  setRounds(data || []);
+  setNewRound({ name: '', start_time: '', max_players: 40, pay_separately: false, price: 0 });
+};
 
   const handleDeleteRound = async (id: number) => {
     if (!confirm('Remove this round?')) return;
@@ -579,6 +588,55 @@ export default function EventManagePage() {
           )}
         </div>
 
+
+        {/* Pricing Mode */}
+<div className="flex flex-wrap items-center gap-4 bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 mt-8 mb-2">
+  <div className="flex items-center gap-3 text-sm shrink-0">
+    <span className={(event.pricing_mode || 'event') === 'event' ? 'text-white' : 'text-gray-500'}>
+      Event
+    </span>
+    <button
+      type="button"
+      onClick={() =>
+        handleEventChange(
+          'pricing_mode',
+          (event.pricing_mode || 'event') === 'event' ? 'per_round' : 'event'
+        )
+      }
+      className={`relative w-12 h-7 rounded-full transition-colors ${
+        event.pricing_mode === 'per_round' ? 'bg-blue-600' : 'bg-gray-600'
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white transition-transform ${
+          event.pricing_mode === 'per_round' ? 'translate-x-5' : 'translate-x-0'
+        }`}
+      />
+    </button>
+    <span className={event.pricing_mode === 'per_round' ? 'text-white' : 'text-gray-500'}>
+      Per-round
+    </span>
+    <button
+      type="button"
+      onClick={() =>
+        alert(
+          'EVENT PRICE\nOne fee covers the event. Optional extra rounds can cost more.\nBest when most players play the same main round.\n\nPER-ROUND PRICE\nPlayers only pay for the rounds they select. No base event fee.\nBest when players can choose 1 of several rounds (e.g. morning / afternoon / evening).'
+        )
+      }
+      className="w-6 h-6 rounded-full bg-gray-700 hover:bg-gray-600 text-xs font-bold text-gray-300"
+      title="What do these mean?"
+    >
+      ⓘ
+    </button>
+  </div>
+
+  <p className="text-sm text-gray-400 flex-1 min-w-0">
+    {(event.pricing_mode || 'event') === 'event'
+      ? 'Players pay the event price. Extra rounds only if marked “charge separately.”'
+      : 'Event price ignored. Players only pay for rounds they select.'}
+  </p>
+</div>
+
         {/* Four Buttons */}
         <div className="flex flex-wrap gap-3 mt-8">
           <button
@@ -610,98 +668,130 @@ export default function EventManagePage() {
           </button>
         </div>
 
-        {/* Rounds Panel */}
-        {showRounds && (
-          <div className="bg-gray-900 border border-teal-500/30 rounded-3xl p-8 mt-8">
-            <h3 className="text-xl font-medium mb-6">Event Rounds</h3>
+       {/* Rounds Panel */}
+{showRounds && (
+  <div className="bg-gray-900 border border-teal-500/30 rounded-3xl p-8 mt-8">
+    <h3 className="text-xl font-medium mb-2">Event Rounds</h3>
+    <p className="text-sm text-gray-400 mb-6">
+      {(event.pricing_mode || 'event') === 'per_round'
+        ? 'Per-round pricing: set a price on each round. Players only pay for rounds they select.'
+        : 'Event pricing: rounds are included unless you check “Charge separately.”'}
+    </p>
 
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
-              <div className="md:col-span-3">
-                <label className="block text-sm text-gray-400 mb-2">Round Name</label>
-                <input
-                  value={newRound.name}
-                  onChange={(e) => setNewRound({ ...newRound, name: e.target.value })}
-                  placeholder="Morning Round"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-sm text-gray-400 mb-2">Start Time</label>
-                <input
-                  type="time"
-                  value={newRound.start_time}
-                  onChange={(e) => setNewRound({ ...newRound, start_time: e.target.value })}
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-sm text-gray-400 mb-2">Max Players</label>
-                <input
-                  type="number"
-                  value={newRound.max_players}
-                  onChange={(e) => setNewRound({ ...newRound, max_players: parseInt(e.target.value) || 0 })}
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-                />
-              </div>
-              <div className="md:col-span-3">
-                <label className="flex items-center gap-3 text-sm text-gray-300 mb-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={newRound.pay_separately}
-                    onChange={(e) => setNewRound({ ...newRound, pay_separately: e.target.checked })}
-                    className="w-5 h-5 accent-teal-600"
-                  />
-                  Charge separately
-                </label>
-                {newRound.pay_separately && (
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={newRound.price}
-                    onChange={(e) => setNewRound({ ...newRound, price: parseFloat(e.target.value) || 0 })}
-                    placeholder="Price per player"
-                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-                  />
-                )}
-              </div>
-              <div className="md:col-span-2">
-                <button
-                  onClick={handleAddRound}
-                  className="w-full bg-teal-600 hover:bg-teal-700 py-4 rounded-3xl font-medium"
-                >
-                  Add Round
-                </button>
-              </div>
-            </div>
+    <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
+      <div className="md:col-span-3">
+        <label className="block text-sm text-gray-400 mb-2">Round Name</label>
+        <input
+          value={newRound.name}
+          onChange={(e) => setNewRound({ ...newRound, name: e.target.value })}
+          placeholder="Morning Round"
+          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+        />
+      </div>
+      <div className="md:col-span-2">
+        <label className="block text-sm text-gray-400 mb-2">Start Time</label>
+        <input
+          type="time"
+          value={newRound.start_time}
+          onChange={(e) => setNewRound({ ...newRound, start_time: e.target.value })}
+          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+        />
+      </div>
+      <div className="md:col-span-2">
+        <label className="block text-sm text-gray-400 mb-2">Max Players</label>
+        <input
+          type="number"
+          value={newRound.max_players}
+          onChange={(e) => setNewRound({ ...newRound, max_players: parseInt(e.target.value) || 0 })}
+          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+        />
+      </div>
 
-            <div className="space-y-4">
-              {rounds.length === 0 && (
-                <p className="text-gray-500 text-sm">No rounds yet. Add one above (e.g. 8:00 AM, 12:00 PM, 4:00 PM).</p>
-              )}
-              {rounds.map((round) => (
-                <div key={round.id} className="bg-gray-800 p-6 rounded-3xl flex justify-between items-center">
-                  <div>
-                    <div className="font-semibold text-lg">{round.name}</div>
-                    <div className="text-sm text-gray-400 mt-1">
-                      {round.start_time ? String(round.start_time).slice(0, 5) : 'No time set'}
-                      {' · '}
-                      Max {round.max_players} players
-                      {round.pay_separately
-                        ? ` · $${Number(round.price).toFixed(2)} + platform fee`
-                        : ' · Included in event price'}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleDeleteRound(round.id)}
-                    className="text-red-500 hover:text-red-600 text-sm font-medium px-4 py-2"
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
+      {/* Price controls */}
+      <div className="md:col-span-3">
+        {(event.pricing_mode || 'event') === 'per_round' ? (
+          <>
+            <label className="block text-sm text-gray-400 mb-2">Price per player</label>
+            <input
+              type="number"
+              step="0.01"
+              value={newRound.price}
+              onChange={(e) =>
+                setNewRound({
+                  ...newRound,
+                  price: parseFloat(e.target.value) || 0,
+                  pay_separately: true,
+                })
+              }
+              placeholder="40.00"
+              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+            />
+          </>
+        ) : (
+          <>
+            <label className="flex items-center gap-3 text-sm text-gray-300 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newRound.pay_separately}
+                onChange={(e) => setNewRound({ ...newRound, pay_separately: e.target.checked })}
+                className="w-5 h-5 accent-teal-600"
+              />
+              Charge separately
+            </label>
+            {newRound.pay_separately && (
+              <input
+                type="number"
+                step="0.01"
+                value={newRound.price}
+                onChange={(e) => setNewRound({ ...newRound, price: parseFloat(e.target.value) || 0 })}
+                placeholder="Price per player"
+                className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+              />
+            )}
+          </>
+        )}
+      </div>
+
+      <div className="md:col-span-2">
+        <button
+          onClick={handleAddRound}
+          className="w-full bg-teal-600 hover:bg-teal-700 py-4 rounded-3xl font-medium"
+        >
+          Add Round
+        </button>
+      </div>
+    </div>
+
+    <div className="space-y-4">
+      {rounds.length === 0 && (
+        <p className="text-gray-500 text-sm">
+          No rounds yet. Add one above (e.g. 8:00 AM, 12:00 PM, 4:00 PM).
+        </p>
+      )}
+      {rounds.map((round) => (
+        <div key={round.id} className="bg-gray-800 p-6 rounded-3xl flex justify-between items-center">
+          <div>
+            <div className="font-semibold text-lg">{round.name}</div>
+            <div className="text-sm text-gray-400 mt-1">
+              {round.start_time ? String(round.start_time).slice(0, 5) : 'No time set'}
+              {' · '}
+              Max {round.max_players} players
+              {(event.pricing_mode || 'event') === 'per_round' || round.pay_separately
+                ? ` · $${Number(round.price).toFixed(2)} per player`
+                : ' · Included in event price'}
             </div>
           </div>
-        )}
+          <button
+            onClick={() => handleDeleteRound(round.id)}
+            className="text-red-500 hover:text-red-600 text-sm font-medium px-4 py-2"
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
         {/* Flights Panel */}
         {showFlights && (

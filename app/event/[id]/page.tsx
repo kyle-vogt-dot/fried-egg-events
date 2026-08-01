@@ -143,7 +143,6 @@ export default function EventDetailPage() {
               .is('user_id', null);
             teammates = data || [];
           }
-
           // Get rounds this player signed up for
           const selectedIds: number[] = myReg.selected_round_ids || [];
           let signedUpRounds: any[] = [];
@@ -157,8 +156,7 @@ export default function EventDetailPage() {
             signedUpRounds = roundRows || [];
           }
 
-          const playerCount = 1 + teammates.length;
-          const pricePerPlayer = Number(eventData.price) || 0;
+                    const playerCount = 1 + teammates.length;
 
           const { data: liveFeeData } = await supabase
             .from('platform_settings')
@@ -166,56 +164,85 @@ export default function EventDetailPage() {
             .eq('id', 1)
             .single();
 
-          const platformFeePerPlayer = Number(liveFeeData?.platform_fee) || 0;
+          const feePerPlayer = Number(liveFeeData?.platform_fee) || 0;
+          const isPerRound = (eventData.pricing_mode || 'event') === 'per_round';
 
-          // Extra cost from separately priced rounds
-          const paidRoundsExtra = signedUpRounds
-            .filter((r) => r.pay_separately)
-            .reduce((sum, r) => sum + Number(r.price || 0) + platformFeePerPlayer, 0);
+          let eventPriceTotal = 0; // shown as one "Event / round fees" line (includes platform fee)
+          let roundsSummary: any[] = [];
 
-          const perPlayerTotal = pricePerPlayer + platformFeePerPlayer + paidRoundsExtra;
-          const eventPriceTotal = perPlayerTotal * playerCount;
-          const platformFeeTotal = 0;
+          if (isPerRound) {
+            // Each round display price = round price + platform fee (matches checkout)
+            eventPriceTotal = signedUpRounds.reduce((sum, r) => {
+              return sum + (Number(r.price || 0) + feePerPlayer) * playerCount;
+            }, 0);
+
+            roundsSummary = signedUpRounds.map((r) => {
+              const time = r.start_time ? String(r.start_time).slice(0, 5) : '';
+              return {
+                label: `${r.name}${time ? ` at ${time}` : ''}`,
+                price: (Number(r.price || 0) + feePerPlayer) * playerCount,
+              };
+            });
+          } else {
+            const baseWithFee =
+              ((Number(eventData.price) || 0) + feePerPlayer) * playerCount;
+            const optionalRounds = signedUpRounds.filter((r) => r.pay_separately);
+            const optionalWithFee =
+              optionalRounds.reduce(
+                (sum, r) => sum + Number(r.price || 0) + feePerPlayer,
+                0
+              ) * playerCount;
+
+            eventPriceTotal = baseWithFee + optionalWithFee;
+
+            roundsSummary = signedUpRounds.map((r) => {
+              const time = r.start_time ? String(r.start_time).slice(0, 5) : '';
+              if (r.pay_separately) {
+                return {
+                  label: `${r.name}${time ? ` at ${time}` : ''}`,
+                  price: (Number(r.price || 0) + feePerPlayer) * playerCount,
+                };
+              }
+              return `${r.name}${time ? ` at ${time}` : ''} (included)`;
+            });
+          }
+
           const netAmount = eventPriceTotal;
-
           const netCents = Math.round(netAmount * 100);
           const totalCents = Math.ceil((netCents + 30) / (1 - 0.029));
           const processingFee = (totalCents - netCents) / 100;
           const totalPaid = totalCents / 100;
 
-          const roundsSummary = signedUpRounds.map((r) => {
-            const time = r.start_time ? String(r.start_time).slice(0, 5) : '';
-            const priceNote = r.pay_separately
-              ? ` (+$${(Number(r.price || 0) + platformFeePerPlayer).toFixed(2)})`
-              : ' (included)';
-            return `${r.name}${time ? ` at ${time}` : ''}${priceNote}`;
-          });
+          const emailPayloadBase = {
+            eventName: eventData.name,
+            eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
+              weekday: 'long',
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric',
+            }),
+            location: eventData.location,
+            course: eventData.course,
+            eventId: eventData.id,
+            pricingMode: isPerRound ? 'per_round' : 'event',
+            eventPrice: isPerRound ? 0 : eventPriceTotal,
+            platformFee: 0, // folded into event/round prices
+            processingFee,
+            totalPaid,
+            playerCount,
+            rounds: roundsSummary,
+          };
 
           // Email to main player
           await fetch('/api/send-registration-email', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+              ...emailPayloadBase,
               to: myReg.player_email,
               name: myReg.player_name,
-              eventName: eventData.name,
-              eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
-                weekday: 'long',
-                month: 'long',
-                day: 'numeric',
-                year: 'numeric',
-              }),
-              location: eventData.location,
-              course: eventData.course,
               teamName: myReg.team_name || null,
               isTeam: !!myReg.team_name,
-              eventId: eventData.id,
-              eventPrice: eventPriceTotal,
-              platformFee: platformFeeTotal,
-              processingFee: processingFee,
-              totalPaid: totalPaid,
-              playerCount: playerCount,
-              rounds: roundsSummary,
             }),
           });
 
@@ -225,29 +252,43 @@ export default function EventDetailPage() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
+                ...emailPayloadBase,
                 to: teammate.player_email,
                 name: teammate.player_name,
-                eventName: eventData.name,
-                eventDate: new Date(eventData.date + 'T12:00:00').toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  month: 'long',
-                  day: 'numeric',
-                  year: 'numeric',
-                }),
-                location: eventData.location,
-                course: eventData.course,
                 teamName: teammate.team_name,
                 isTeam: true,
-                eventId: eventData.id,
-                eventPrice: eventPriceTotal,
-                platformFee: platformFeeTotal,
-                processingFee: processingFee,
-                totalPaid: totalPaid,
-                playerCount: playerCount,
-                rounds: roundsSummary,
               }),
             });
           }
+
+          // Notify event creator
+          const roundsLabel = signedUpRounds
+            .map((r) => {
+              const time = r.start_time ? String(r.start_time).slice(0, 5) : '';
+              return `${r.name}${time ? ` (${time})` : ''}`;
+            })
+            .join(', ');
+
+                    await fetch('/api/send-organizer-registration-notice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              eventId: eventData.id,
+              eventName: eventData.name,
+              createdBy: eventData.created_by,
+              contactEmail: eventData.contact_email,
+              playerName: myReg.player_name,
+              playerEmail: myReg.player_email,
+              teamName: myReg.team_name || null,
+              rounds: roundsLabel || null,
+              eventFee: eventPriceTotal,
+              totalPaid,
+              teammates: teammates.map((t: any) => ({
+                name: t.player_name,
+                email: t.player_email,
+              })),
+            }),
+          });
         }
 
         await fetchData();
@@ -274,26 +315,38 @@ export default function EventDetailPage() {
     ? new Date() >= new Date(event.registration_open_date + 'T' + (event.registration_open_time || '00:00:00'))
     : false;
 
-  const includedRounds = rounds.filter((r) => !r.pay_separately);
-  const paidRounds = rounds.filter((r) => r.pay_separately);
+ 
 
-  const pricePerPlayer = Number(event?.price) || 0;
+
+  // Per-round mode: every round is choosable and priced
+    const isPerRound = (event?.pricing_mode || 'event') === 'per_round';
+
+  const includedRounds = isPerRound ? [] : rounds.filter((r) => !r.pay_separately);
+  const selectableRounds = isPerRound
+    ? rounds
+    : rounds.filter((r) => r.pay_separately);
+
+  const pricePerPlayer = isPerRound ? 0 : Number(event?.price) || 0;
   const feePerPlayer = platformFee;
   const totalPlayers = isOrganizerOnly
     ? additionalPlayers.length
     : 1 + additionalPlayers.length;
 
-  // Base event price + fee, plus any separately priced rounds selected
-  const paidRoundsCostPerPlayer = selectedPaidRoundIds.reduce((sum, id) => {
-    const round = paidRounds.find((r) => r.id === id);
+  // Each selected round = round price + platform fee
+  const selectedRoundsCostPerPlayer = selectedPaidRoundIds.reduce((sum, id) => {
+    const round = selectableRounds.find((r) => r.id === id) || rounds.find((r) => r.id === id);
     if (!round) return sum;
     return sum + Number(round.price || 0) + feePerPlayer;
   }, 0);
 
-  const totalCost =
-    totalPlayers * (pricePerPlayer + feePerPlayer + paidRoundsCostPerPlayer);
+  const totalCost = isPerRound
+    ? // Per-round: only selected rounds (fee included on each). $0 until something is selected.
+      totalPlayers * selectedRoundsCostPerPlayer
+    : // Event mode: event price + one platform fee, plus any optional paid rounds
+      totalPlayers * (pricePerPlayer + feePerPlayer + selectedRoundsCostPerPlayer);
 
   const getSelectedRoundIds = () => {
+    if (isPerRound) return [...selectedPaidRoundIds];
     const autoIds = includedRounds.map((r) => r.id);
     return [...autoIds, ...selectedPaidRoundIds];
   };
@@ -583,10 +636,20 @@ export default function EventDetailPage() {
                 {event.registration_open_time || '00:00'}
               </p>
             </div>
-            <div>
-              <p className="text-gray-500 text-sm mb-1">Price per Player</p>
+                        <div>
+              <p className="text-gray-500 text-sm mb-1">
+                {(event.pricing_mode || 'event') === 'per_round' ? 'From (per player)' : 'Price per Player'}
+              </p>
               <p className="text-xl font-medium">
-                {event.price ? `$${(Number(event.price) + platformFee).toFixed(2)}` : 'TBD'}
+                {(event.pricing_mode || 'event') === 'per_round'
+                  ? rounds.length > 0
+                    ? `$${(
+                        Math.min(...rounds.map((r) => Number(r.price) || 0)) + platformFee
+                      ).toFixed(2)}`
+                    : 'TBD'
+                  : event.price
+                    ? `$${(Number(event.price) + platformFee).toFixed(2)}`
+                    : 'TBD'}
               </p>
             </div>
             <div>
@@ -617,12 +680,12 @@ export default function EventDetailPage() {
                         </span>
                       )}
                     </div>
-                    <div className="text-sm text-gray-400">
-                      Max {round.max_players} players
-                      {round.pay_separately
-                        ? ` · +$${(Number(round.price) + platformFee).toFixed(2)}`
-                        : ' · Included'}
-                    </div>
+                                        <div className="text-sm text-gray-400">
+  Max {round.max_players} players
+  {(event.pricing_mode || 'event') === 'per_round' || round.pay_separately
+    ? ` · $${(Number(round.price || 0) + platformFee).toFixed(2)}`
+    : ' · Included'}
+</div>
                   </div>
                 ))}
               </div>
@@ -721,63 +784,72 @@ export default function EventDetailPage() {
             <div className="p-10">
               <h2 className="text-3xl font-bold mb-6">Register for {event.name}</h2>
 
-              {/* Included rounds notice */}
-              {includedRounds.length > 0 && (
-                <div className="bg-teal-900/30 border border-teal-600/40 rounded-2xl p-5 mb-6">
-                  <p className="text-sm text-teal-300 mb-2 font-medium">Included in registration:</p>
-                  <ul className="text-sm text-gray-300 space-y-1">
-                    {includedRounds.map((r) => (
-                      <li key={r.id}>
-                        {r.name}
-                        {r.start_time ? ` · ${String(r.start_time).slice(0, 5)}` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Optional paid rounds */}
-              {paidRounds.length > 0 && (
+                            {/* Rounds selection */}
+              {rounds.length > 0 && (
                 <div className="bg-gray-900 rounded-2xl p-5 mb-6">
                   <p className="text-sm text-gray-400 mb-4 font-medium">
-                    Optional rounds (extra charge)
+                    {(event.pricing_mode || 'event') === 'per_round'
+                      ? 'Select round(s) to play'
+                      : 'Rounds'}
                   </p>
-                  <div className="space-y-3">
-                    {paidRounds.map((round) => {
-                      const checked = selectedPaidRoundIds.includes(round.id);
-                      const roundTotal = Number(round.price || 0) + feePerPlayer;
-                      return (
-                        <label
-                          key={round.id}
-                          className={`flex items-center justify-between gap-4 p-4 rounded-2xl cursor-pointer border transition-colors ${
-                            checked
-                              ? 'border-teal-500 bg-teal-950/40'
-                              : 'border-gray-700 hover:border-gray-600'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => togglePaidRound(round.id)}
-                              className="w-5 h-5 accent-teal-600"
-                            />
-                            <div>
-                              <div className="font-medium">{round.name}</div>
-                              {round.start_time && (
-                                <div className="text-xs text-gray-400">
-                                  {String(round.start_time).slice(0, 5)}
-                                </div>
-                              )}
+
+                  {/* Included (event pricing only) */}
+                  {(event.pricing_mode || 'event') !== 'per_round' &&
+                    includedRounds.length > 0 && (
+                      <div className="mb-4">
+                        <p className="text-xs text-teal-300 mb-2">Included in registration</p>
+                        <ul className="text-sm text-gray-300 space-y-1">
+                          {includedRounds.map((r) => (
+                            <li key={r.id}>
+                              {r.name}
+                              {r.start_time ? ` · ${String(r.start_time).slice(0, 5)}` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                  {/* Selectable rounds */}
+                  {selectableRounds.length > 0 && (
+                    <div className="space-y-3">
+                      {(event.pricing_mode || 'event') !== 'per_round' && (
+                        <p className="text-xs text-gray-500 mb-1">Optional (extra charge)</p>
+                      )}
+                      {selectableRounds.map((round) => {
+                        const checked = selectedPaidRoundIds.includes(round.id);
+                        return (
+                          <label
+                            key={round.id}
+                            className={`flex items-center justify-between gap-4 p-4 rounded-2xl cursor-pointer border transition-colors ${
+                              checked
+                                ? 'border-teal-500 bg-teal-950/40'
+                                : 'border-gray-700 hover:border-gray-600'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => togglePaidRound(round.id)}
+                                className="w-5 h-5 accent-teal-600"
+                              />
+                              <div>
+                                <div className="font-medium">{round.name}</div>
+                                {round.start_time && (
+                                  <div className="text-xs text-gray-400">
+                                    {String(round.start_time).slice(0, 5)}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                          <div className="text-sm font-medium text-teal-300">
-                            +${roundTotal.toFixed(2)}
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
+                            <div className="text-sm font-medium text-teal-300">
+  ${(Number(round.price || 0) + platformFee).toFixed(2)}
+</div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -806,7 +878,11 @@ export default function EventDetailPage() {
 
                   <button
                     onClick={handleRegister}
-                    disabled={submitting || !agreedToWaiver}
+                    disabled={
+  submitting ||
+  !agreedToWaiver ||
+  ((event.pricing_mode || 'event') === 'per_round' && selectedPaidRoundIds.length === 0)
+}
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
                     {submitting
@@ -991,12 +1067,12 @@ export default function EventDetailPage() {
                   <button
                     onClick={handleRegister}
                     disabled={
-                      submitting ||
-                      !agreedToWaiver ||
-                      mode === '' ||
-                      (mode === 'create' && !newTeamName) ||
-                      (mode === 'join' && !selectedTeam)
-                    }
+  submitting ||
+  !agreedToWaiver ||
+  mode === '' ||
+  (mode === 'create' && !newTeamName) ||
+  (mode === 'join' && !selectedTeam)
+}
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
                     {submitting

@@ -66,7 +66,9 @@ export default function CreatedEventsPage() {
               {upcoming.map((event) => (
                 <div key={event.id} className="bg-gray-800 p-6 rounded-3xl hover:bg-gray-700 transition-colors">
                   <h3 className="text-xl font-semibold mb-1">{event.name}</h3>
-                  <p className="text-gray-400 mb-6 text-sm">{new Date(event.date).toLocaleDateString()} • {event.course}</p>
+                  <p className="text-gray-400 mb-6 text-sm">
+  {new Date(event.date + 'T12:00:00').toLocaleDateString()} • {event.course}
+</p>
                   
                   <div className="space-y-2 text-sm">
                     <Link 
@@ -119,7 +121,9 @@ export default function CreatedEventsPage() {
               {past.map((event) => (
                 <div key={event.id} className="bg-gray-800 p-6 rounded-3xl hover:bg-gray-700 transition-colors">
                   <h3 className="text-xl font-semibold mb-1">{event.name}</h3>
-                  <p className="text-gray-400 mb-6 text-sm">{new Date(event.date).toLocaleDateString()} • {event.course}</p>
+                  <p className="text-gray-400 mb-6 text-sm">
+  {new Date(event.date + 'T12:00:00').toLocaleDateString()} • {event.course}
+</p>
                   
                   <div className="space-y-2 text-sm">
                     <Link 
