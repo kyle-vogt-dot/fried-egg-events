@@ -41,6 +41,11 @@ export default function EventDetailPage() {
   const paymentHandledKey = `payment_handled_${eventId}`;
   const lastPaymentKey = `last_payment_${eventId}`;
 
+  const isValidEmail = (email: string) => {
+    const cleaned = (email || '').trim();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned);
+  };
+
   const fetchData = async () => {
     setLoading(true);
 
@@ -500,13 +505,12 @@ export default function EventDetailPage() {
   const pricePerPlayer = isPerRound ? 0 : Number(event?.price) || 0;
   const feePerPlayer = platformFee;
 
-  // Only count players with BOTH name and email
-  const completeAdditionalPlayers = additionalPlayers.filter(
-    (p) => (p.name || '').trim() && isValidEmail(p.email || '')
-  );
-
   const hasIncompleteAdditionalPlayers = additionalPlayers.some(
     (p) => !(p.name || '').trim() || !isValidEmail(p.email || '')
+  );
+
+  const completeAdditionalPlayers = additionalPlayers.filter(
+    (p) => (p.name || '').trim() && isValidEmail(p.email || '')
   );
 
   const totalPlayers = isOrganizerOnly
@@ -575,12 +579,6 @@ export default function EventDetailPage() {
     );
   };
 
-    const isValidEmail = (email: string) => {
-    const cleaned = (email || '').trim();
-    // basic real-email shape: something@something.tld
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned);
-  };
-
   const handleRegisterClick = async () => {
     const {
       data: { user },
@@ -628,8 +626,7 @@ export default function EventDetailPage() {
         return;
       }
 
-      // Require name + email for every additional player slot
-            const incomplete = additionalPlayers.filter(
+      const incomplete = additionalPlayers.filter(
         (p) => !(p.name || '').trim() || !isValidEmail(p.email || '')
       );
       if (incomplete.length > 0) {
@@ -1185,69 +1182,71 @@ export default function EventDetailPage() {
                       </span>
                     </div>
 
-                                        {additionalPlayers.map((player, index) => {
-                      const missingName = !(player.name || '').trim();
-                      const emailInvalid = !isValidEmail(player.email || '');
+                                                                {additionalPlayers.map((player, index) => {
+                      const nameValue = player.name || '';
+                      const emailValue = player.email || '';
+                      const nameOk = nameValue.trim().length > 0;
+                      const emailOk = isValidEmail(emailValue);
+
                       return (
                         <div
                           key={index}
                           className="bg-gray-900 p-5 rounded-2xl mb-4"
                         >
-                          <div className="flex gap-4 items-end">
+                          <div className="flex gap-4 items-start">
+                            {/* NAME */}
                             <div className="flex-1">
+                              <label className="block text-xs text-gray-400 mb-1">
+                                Player Name *
+                              </label>
                               <input
                                 type="text"
-                                value={player.name || ''}
+                                value={nameValue}
                                 onChange={(e) =>
-                                  updateExtraPlayer(
-                                    index,
-                                    'name',
-                                    e.target.value
-                                  )
+                                  updateExtraPlayer(index, 'name', e.target.value)
                                 }
-                                placeholder="Player Name *"
+                                placeholder="John Smith"
                                 className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
-                                  missingName
-                                    ? 'border-red-500'
-                                    : 'border-gray-600'
+                                  nameOk ? 'border-gray-600' : 'border-red-500'
                                 }`}
                               />
+                              {!nameOk && (
+                                <p className="text-red-400 text-xs mt-1">
+                                  Name is required
+                                </p>
+                              )}
                             </div>
+
+                            {/* EMAIL */}
                             <div className="flex-1">
+                              <label className="block text-xs text-gray-400 mb-1">
+                                Email *
+                              </label>
                               <input
                                 type="email"
-                                value={player.email || ''}
+                                value={emailValue}
                                 onChange={(e) =>
-                                  updateExtraPlayer(
-                                    index,
-                                    'email',
-                                    e.target.value
-                                  )
+                                  updateExtraPlayer(index, 'email', e.target.value)
                                 }
-                                placeholder="Email *"
+                                placeholder="name@email.com"
                                 className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
-                                  emailInvalid
-                                    ? 'border-red-500'
-                                    : 'border-gray-600'
+                                  emailOk ? 'border-gray-600' : 'border-red-500'
                                 }`}
                               />
+                              {!emailOk && (
+                                <p className="text-red-400 text-xs mt-1">
+                                  Enter a valid email (name@email.com)
+                                </p>
+                              )}
                             </div>
+
                             <button
                               onClick={() => removeExtraPlayer(index)}
-                              className="w-10 h-10 flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-xl text-xl font-bold transition-colors"
+                              className="mt-6 w-10 h-10 flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-xl text-xl font-bold"
                             >
                               −
                             </button>
                           </div>
-                          {(missingName || emailInvalid) && (
-                            <p className="text-red-400 text-xs mt-2">
-                              {missingName && emailInvalid
-                                ? 'Name and a valid email (name@email.com) are required'
-                                : missingName
-                                  ? 'Name is required'
-                                  : 'Enter a valid email (name@email.com)'}
-                            </p>
-                          )}
                         </div>
                       );
                     })}
@@ -1298,8 +1297,8 @@ export default function EventDetailPage() {
                     </div>
                     {hasIncompleteAdditionalPlayers && (
                       <p className="text-amber-400 text-sm mt-3">
-                        Fill in name and email for all additional players to
-                        continue.
+                        Fill in name and a valid email for all additional
+                        players to continue.
                       </p>
                     )}
                   </div>
