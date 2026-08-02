@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
 export default function EventDetailPage() {
-  const [agreedToWaiver, setAgreedToWaiver] = useState(false);
+  const [agreedToWaiver, setAgreedToWaiver] = useState(true); // default true while waiver UI is hidden
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -104,7 +104,6 @@ export default function EventDetailPage() {
           if (draft.mode === 'join') setSelectedTeam(draft.teamName || '');
           if (draft.mode === 'create') setNewTeamName(draft.teamName || '');
 
-          // teammates only (no user_id)
           setAdditionalPlayers(
             (draft.players || [])
               .filter((p: any) => !p.user_id)
@@ -142,7 +141,6 @@ export default function EventDetailPage() {
         const raw = sessionStorage.getItem(draftKey);
 
         if (raw) {
-          // NEW FLOW: create rows only after successful payment
           const draft = JSON.parse(raw);
           const rows = (draft.players || []).map((p: any) => ({
             event_id: draft.eventId || parseInt(eventId),
@@ -184,7 +182,6 @@ export default function EventDetailPage() {
             null;
           teammates = (inserted || []).filter((r: any) => r.id !== myReg?.id);
         } else {
-          // FALLBACK: old flow already inserted unpaid rows
           const { data: regs, error: findErr } = await supabase
             .from('event_registrations')
             .select('*')
@@ -550,7 +547,7 @@ export default function EventDetailPage() {
     setNewTeamName('');
     setAdditionalPlayers([]);
     setSelectedPaidRoundIds([]);
-    setAgreedToWaiver(false);
+    setAgreedToWaiver(true); // waiver UI hidden — treat as accepted
   };
 
   // ========== NO DB INSERT until payment succeeds ==========
@@ -582,7 +579,6 @@ export default function EventDetailPage() {
         return;
       }
 
-      // Build player list for the draft only
       const players: any[] = [];
 
       if (isIndividual) {
@@ -857,12 +853,14 @@ export default function EventDetailPage() {
                   Register for this Event
                 </button>
 
+                {/* HIDDEN FOR NOW — Sponsor / Donate
                 <button
                   onClick={() => router.push(`/event/${eventId}/sponsors`)}
                   className="flex-1 bg-amber-600 hover:bg-amber-700 py-5 rounded-2xl text-xl font-semibold transition-colors"
                 >
                   Sponsor / Donate
                 </button>
+                */}
 
                 <button
                   onClick={viewRegisteredPlayers}
@@ -1008,6 +1006,7 @@ export default function EventDetailPage() {
                     </p>
                   </div>
 
+                  {/* HIDDEN FOR NOW — Waiver checkbox
                   <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
                     <input
                       type="checkbox"
@@ -1031,12 +1030,12 @@ export default function EventDetailPage() {
                       </a>
                     </label>
                   </div>
+                  */}
 
                   <button
                     onClick={handleRegister}
                     disabled={
                       submitting ||
-                      !agreedToWaiver ||
                       ((event.pricing_mode || 'event') === 'per_round' &&
                         selectedPaidRoundIds.length === 0)
                     }
@@ -1238,6 +1237,7 @@ export default function EventDetailPage() {
                     </div>
                   </div>
 
+                  {/* HIDDEN FOR NOW — Waiver checkbox
                   <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
                     <input
                       type="checkbox"
@@ -1261,12 +1261,12 @@ export default function EventDetailPage() {
                       </a>
                     </label>
                   </div>
+                  */}
 
                   <button
                     onClick={handleRegister}
                     disabled={
                       submitting ||
-                      !agreedToWaiver ||
                       mode === '' ||
                       (mode === 'create' && !newTeamName) ||
                       (mode === 'join' && !selectedTeam) ||
@@ -1283,7 +1283,6 @@ export default function EventDetailPage() {
 
               <button
                 onClick={() => {
-                  // Clear draft if they abandon the form entirely
                   sessionStorage.removeItem(draftKey);
                   setShowRegisterModal(false);
                 }}
