@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
 export default function EventDetailPage() {
-  const [agreedToWaiver, setAgreedToWaiver] = useState(true); // default true while waiver UI is hidden
+  const [agreedToWaiver, setAgreedToWaiver] = useState(true);
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -38,6 +38,8 @@ export default function EventDetailPage() {
   );
 
   const draftKey = `registration_draft_${eventId}`;
+  const paymentHandledKey = `payment_handled_${eventId}`;
+  const lastPaymentKey = `last_payment_${eventId}`;
 
   const fetchData = async () => {
     setLoading(true);
@@ -93,9 +95,9 @@ export default function EventDetailPage() {
     const type = searchParams.get('type');
     const regIdParam = searchParams.get('registration_id');
 
-    // ---------- CANCEL: restore draft, reopen form, nothing in DB ----------
     if (paymentStatus === 'cancelled' && type === 'registration') {
       try {
+        sessionStorage.removeItem(paymentHandledKey);
         const raw = sessionStorage.getItem(draftKey);
         if (raw) {
           const draft = JSON.parse(raw);
@@ -124,8 +126,14 @@ export default function EventDetailPage() {
       return;
     }
 
-    // ---------- SUCCESS: insert from draft (or mark paid if already inserted) ----------
     if (paymentStatus === 'success' && type === 'registration') {
+      if (typeof window !== 'undefined') {
+        if (sessionStorage.getItem(paymentHandledKey) === '1') {
+          return;
+        }
+        sessionStorage.setItem(paymentHandledKey, '1');
+      }
+
       const handleRegistrationSuccess = async () => {
         const {
           data: { user },
@@ -136,12 +144,25 @@ export default function EventDetailPage() {
         }
 
         let myReg: any = null;
-        let teammates: any[] = [];
+        let paidThisCheckout: any[] = [];
+        let checkoutNetAmount: number | null = null;
 
         const raw = sessionStorage.getItem(draftKey);
 
         if (raw) {
           const draft = JSON.parse(raw);
+          checkoutNetAmount =
+            draft.totalCost != null ? Number(draft.totalCost) : null;
+
+          sessionStorage.setItem(
+            lastPaymentKey,
+            JSON.stringify({
+              totalCost: draft.totalCost,
+              players: draft.players || [],
+              selected_round_ids: draft.selected_round_ids || [],
+            })
+          );
+
           const rows = (draft.players || []).map((p: any) => ({
             event_id: draft.eventId || parseInt(eventId),
             user_id: p.user_id || null,
@@ -180,8 +201,18 @@ export default function EventDetailPage() {
             (inserted || []).find((r: any) => r.user_id === user.id) ||
             (inserted || [])[0] ||
             null;
-          teammates = (inserted || []).filter((r: any) => r.id !== myReg?.id);
+
+          paidThisCheckout = inserted || [];
         } else {
+          const lastRaw = sessionStorage.getItem(lastPaymentKey);
+          if (lastRaw) {
+            try {
+              const last = JSON.parse(lastRaw);
+              checkoutNetAmount =
+                last.totalCost != null ? Number(last.totalCost) : null;
+            } catch {}
+          }
+
           const { data: regs, error: findErr } = await supabase
             .from('event_registrations')
             .select('*')
@@ -200,26 +231,10 @@ export default function EventDetailPage() {
 
           myReg = regs[0];
 
-          let updateQuery = supabase
+          const { error: updateErr } = await supabase
             .from('event_registrations')
-            .update({ paid: true });
-
-          if (myReg.team_name) {
-            updateQuery = updateQuery
-              .eq('event_id', parseInt(eventId))
-              .eq('team_name', myReg.team_name);
-          } else {
-            updateQuery = updateQuery.eq('id', myReg.id);
-          }
-
-          const { data: updatedRows, error: updateErr } =
-            await updateQuery.select('id, player_name, team_name, paid');
-
-          console.log('Paid update result:', {
-            updatedRows,
-            updateErr,
-            team: myReg.team_name,
-          });
+            .update({ paid: true })
+            .eq('id', myReg.id);
 
           if (updateErr) {
             alert(
@@ -228,15 +243,7 @@ export default function EventDetailPage() {
             );
           }
 
-          if (myReg.team_name) {
-            const { data } = await supabase
-              .from('event_registrations')
-              .select('*')
-              .eq('event_id', parseInt(eventId))
-              .eq('team_name', myReg.team_name)
-              .neq('id', myReg.id);
-            teammates = data || [];
-          }
+          paidThisCheckout = [myReg];
         }
 
         const { data: feeData } = await supabase
@@ -280,7 +287,7 @@ export default function EventDetailPage() {
             signedUpRounds = roundRows || [];
           }
 
-          const playerCount = 1 + teammates.length;
+          const playerCountThisPayment = Math.max(1, paidThisCheckout.length);
 
           const { data: liveFeeData } = await supabase
             .from('platform_settings')
@@ -292,113 +299,124 @@ export default function EventDetailPage() {
           const isPerRoundMode =
             (eventData.pricing_mode || 'event') === 'per_round';
 
-          let eventPriceTotal = 0;
+          let netAmount =
+            checkoutNetAmount != null && !Number.isNaN(checkoutNetAmount)
+              ? checkoutNetAmount
+              : 0;
+
           let roundsSummary: any[] = [];
 
-          if (isPerRoundMode) {
-            eventPriceTotal = signedUpRounds.reduce((sum, r) => {
-              return sum + (Number(r.price || 0) + feePerPlayer) * playerCount;
-            }, 0);
-
-            roundsSummary = signedUpRounds.map((r) => {
-              const time = r.start_time
-                ? String(r.start_time).slice(0, 5)
-                : '';
-              return {
-                label: `${r.name}${time ? ` at ${time}` : ''}`,
-                price: (Number(r.price || 0) + feePerPlayer) * playerCount,
-              };
-            });
-          } else {
-            const baseWithFee =
-              ((Number(eventData.price) || 0) + feePerPlayer) * playerCount;
-            const optionalRounds = signedUpRounds.filter(
-              (r) => r.pay_separately
-            );
-            const optionalWithFee =
-              optionalRounds.reduce(
+          if (netAmount <= 0) {
+            if (isPerRoundMode) {
+              netAmount = signedUpRounds.reduce((sum, r) => {
+                return (
+                  sum +
+                  (Number(r.price || 0) + feePerPlayer) * playerCountThisPayment
+                );
+              }, 0);
+            } else {
+              const baseWithFee = (Number(eventData.price) || 0) + feePerPlayer;
+              const optionalRounds = signedUpRounds.filter(
+                (r) => r.pay_separately
+              );
+              const optionalPerPlayer = optionalRounds.reduce(
                 (sum, r) => sum + Number(r.price || 0) + feePerPlayer,
                 0
-              ) * playerCount;
-
-            eventPriceTotal = baseWithFee + optionalWithFee;
-
-            roundsSummary = signedUpRounds.map((r) => {
-              const time = r.start_time
-                ? String(r.start_time).slice(0, 5)
-                : '';
-              if (r.pay_separately) {
-                return {
-                  label: `${r.name}${time ? ` at ${time}` : ''}`,
-                  price: (Number(r.price || 0) + feePerPlayer) * playerCount,
-                };
-              }
-              return `${r.name}${time ? ` at ${time}` : ''} (included)`;
-            });
+              );
+              netAmount =
+                (baseWithFee + optionalPerPlayer) * playerCountThisPayment;
+            }
           }
 
-          const netAmount = eventPriceTotal;
+          roundsSummary = signedUpRounds.map((r) => {
+            const time = r.start_time ? String(r.start_time).slice(0, 5) : '';
+            if (isPerRoundMode || r.pay_separately) {
+              return {
+                label: `${r.name}${time ? ` at ${time}` : ''}`,
+                price:
+                  (Number(r.price || 0) + feePerPlayer) * playerCountThisPayment,
+              };
+            }
+            return `${r.name}${time ? ` at ${time}` : ''} (included)`;
+          });
+
           const netCents = Math.round(netAmount * 100);
           const totalCents = Math.ceil((netCents + 30) / (1 - 0.029));
           const processingFee = (totalCents - netCents) / 100;
           const totalPaid = totalCents / 100;
 
-          const emailPayloadBase = {
-            eventName: eventData.name,
-            eventDate: new Date(
-              eventData.date + 'T12:00:00'
-            ).toLocaleDateString('en-US', {
-              weekday: 'long',
-              month: 'long',
-              day: 'numeric',
-              year: 'numeric',
-            }),
-            location: eventData.location,
-            course: eventData.course,
-            eventId: eventData.id,
-            pricingMode: isPerRoundMode ? 'per_round' : 'event',
-            eventPrice: isPerRoundMode ? 0 : eventPriceTotal,
-            platformFee: 0,
-            processingFee,
-            totalPaid,
-            playerCount,
-            rounds: roundsSummary,
-          };
+          const eventDateStr = new Date(
+            eventData.date + 'T12:00:00'
+          ).toLocaleDateString('en-US', {
+            weekday: 'long',
+            month: 'long',
+            day: 'numeric',
+            year: 'numeric',
+          });
 
-          if (myReg.player_email) {
+          const rosterNames = paidThisCheckout
+            .map((p) => p.player_name)
+            .filter(Boolean);
+
+          const payer =
+            paidThisCheckout.find((p) => p.id === myReg.id) ||
+            paidThisCheckout.find((p) => p.user_id === user.id) ||
+            myReg;
+
+          if (payer?.player_email) {
             await fetch('/api/send-registration-email', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                ...emailPayloadBase,
-                to: myReg.player_email,
-                name: myReg.player_name,
-                teamName: myReg.team_name || null,
-                isTeam: !!myReg.team_name,
+                to: payer.player_email,
+                name: payer.player_name,
+                eventName: eventData.name,
+                eventDate: eventDateStr,
+                location: eventData.location,
+                course: eventData.course,
+                eventId: eventData.id,
+                teamName: payer.team_name || null,
+                isTeam: !!payer.team_name,
+                pricingMode: isPerRoundMode ? 'per_round' : 'event',
+                eventPrice: isPerRoundMode ? 0 : netAmount,
+                platformFee: 0,
+                processingFee,
+                totalPaid,
+                playerCount: playerCountThisPayment,
+                rounds: roundsSummary,
               }),
             });
           }
 
-          for (const teammate of teammates) {
-            if (!teammate.player_email) continue;
-            await fetch('/api/send-registration-email', {
+          const emailedTeammates = new Set<string>();
+          for (const person of paidThisCheckout) {
+            if (!person) continue;
+            if (person.id === payer?.id) continue;
+            if (person.user_id && person.user_id === user.id) continue;
+
+            const to = (person.player_email || '').trim().toLowerCase();
+            if (!to || emailedTeammates.has(to)) continue;
+            emailedTeammates.add(to);
+
+            await fetch('/api/send-teammate-registration-email', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                ...emailPayloadBase,
-                to: teammate.player_email,
-                name: teammate.player_name,
-                teamName: teammate.team_name,
-                isTeam: true,
+                to: person.player_email,
+                name: person.player_name,
+                eventName: eventData.name,
+                eventDate: eventDateStr,
+                location: eventData.location,
+                course: eventData.course,
+                teamName: person.team_name || null,
+                teammates: rosterNames,
               }),
             });
           }
 
           const roundsLabel = signedUpRounds
             .map((r) => {
-              const time = r.start_time
-                ? String(r.start_time).slice(0, 5)
-                : '';
+              const time = r.start_time ? String(r.start_time).slice(0, 5) : '';
               return `${r.name}${time ? ` (${time})` : ''}`;
             })
             .join(', ');
@@ -415,23 +433,39 @@ export default function EventDetailPage() {
               playerEmail: myReg.player_email,
               teamName: myReg.team_name || null,
               rounds: roundsLabel || null,
-              eventFee: eventPriceTotal,
+              eventFee: netAmount,
               totalPaid,
-              teammates: teammates.map((t: any) => ({
-                name: t.player_name,
-                email: t.player_email,
-              })),
+              teammates: paidThisCheckout
+                .filter((t) => t.id !== myReg.id)
+                .map((t: any) => ({
+                  name: t.player_name,
+                  email: t.player_email,
+                })),
             }),
           });
+
+          sessionStorage.removeItem(lastPaymentKey);
         }
 
         await fetchData();
+
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.delete('payment');
+          url.searchParams.delete('type');
+          window.history.replaceState({}, '', url.pathname + url.search);
+        } catch {}
       };
 
       handleRegistrationSuccess();
     }
 
     if (paymentStatus === 'success' && type === 'addon' && regIdParam) {
+      const addonKey = `addon_handled_${regIdParam}`;
+      if (typeof window !== 'undefined') {
+        if (sessionStorage.getItem(addonKey) === '1') return;
+        sessionStorage.setItem(addonKey, '1');
+      }
       const regId = parseInt(regIdParam);
       supabase
         .from('event_registrations')
@@ -465,9 +499,19 @@ export default function EventDetailPage() {
 
   const pricePerPlayer = isPerRound ? 0 : Number(event?.price) || 0;
   const feePerPlayer = platformFee;
+
+  // Only count players with BOTH name and email
+  const completeAdditionalPlayers = additionalPlayers.filter(
+    (p) => (p.name || '').trim() && (p.email || '').trim()
+  );
+
+  const hasIncompleteAdditionalPlayers = additionalPlayers.some(
+    (p) => !(p.name || '').trim() || !(p.email || '').trim()
+  );
+
   const totalPlayers = isOrganizerOnly
-    ? additionalPlayers.length
-    : 1 + additionalPlayers.length;
+    ? completeAdditionalPlayers.length
+    : 1 + completeAdditionalPlayers.length;
 
   const selectedRoundsCostPerPlayer = selectedPaidRoundIds.reduce(
     (sum, id) => {
@@ -547,10 +591,9 @@ export default function EventDetailPage() {
     setNewTeamName('');
     setAdditionalPlayers([]);
     setSelectedPaidRoundIds([]);
-    setAgreedToWaiver(true); // waiver UI hidden — treat as accepted
+    setAgreedToWaiver(true);
   };
 
-  // ========== NO DB INSERT until payment succeeds ==========
   const handleRegister = async () => {
     const {
       data: { user },
@@ -579,6 +622,22 @@ export default function EventDetailPage() {
         return;
       }
 
+      // Require name + email for every additional player slot
+      const incomplete = additionalPlayers.filter(
+        (p) => !(p.name || '').trim() || !(p.email || '').trim()
+      );
+      if (incomplete.length > 0) {
+        alert(
+          'Please enter a name and email for every additional player, or remove the empty slots.'
+        );
+        setSubmitting(false);
+        return;
+      }
+
+      const completeAdditional = additionalPlayers.filter(
+        (p) => (p.name || '').trim() && (p.email || '').trim()
+      );
+
       const players: any[] = [];
 
       if (isIndividual) {
@@ -595,11 +654,10 @@ export default function EventDetailPage() {
             user_id: user.id,
           });
         }
-        for (const p of additionalPlayers) {
-          if (!(p.name || '').trim()) continue;
+        for (const p of completeAdditional) {
           players.push({
             player_name: p.name.trim(),
-            player_email: (p.email || '').trim() || null,
+            player_email: p.email.trim(),
             user_id: null,
           });
         }
@@ -609,6 +667,8 @@ export default function EventDetailPage() {
           return;
         }
       }
+
+      sessionStorage.removeItem(paymentHandledKey);
 
       const draft = {
         eventId: parseInt(eventId),
@@ -853,15 +913,6 @@ export default function EventDetailPage() {
                   Register for this Event
                 </button>
 
-                {/* HIDDEN FOR NOW — Sponsor / Donate
-                <button
-                  onClick={() => router.push(`/event/${eventId}/sponsors`)}
-                  className="flex-1 bg-amber-600 hover:bg-amber-700 py-5 rounded-2xl text-xl font-semibold transition-colors"
-                >
-                  Sponsor / Donate
-                </button>
-                */}
-
                 <button
                   onClick={viewRegisteredPlayers}
                   className="flex-1 bg-blue-600 hover:bg-blue-700 py-5 rounded-2xl text-xl font-semibold transition-colors"
@@ -955,9 +1006,7 @@ export default function EventDetailPage() {
                         </p>
                       )}
                       {selectableRounds.map((round) => {
-                        const checked = selectedPaidRoundIds.includes(
-                          round.id
-                        );
+                        const checked = selectedPaidRoundIds.includes(round.id);
                         return (
                           <label
                             key={round.id}
@@ -985,9 +1034,9 @@ export default function EventDetailPage() {
                             </div>
                             <div className="text-sm font-medium text-teal-300">
                               $
-                              {(
-                                Number(round.price || 0) + platformFee
-                              ).toFixed(2)}
+                              {(Number(round.price || 0) + platformFee).toFixed(
+                                2
+                              )}
                             </div>
                           </label>
                         );
@@ -1005,32 +1054,6 @@ export default function EventDetailPage() {
                       ${totalCost.toFixed(2)}
                     </p>
                   </div>
-
-                  {/* HIDDEN FOR NOW — Waiver checkbox
-                  <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
-                    <input
-                      type="checkbox"
-                      id="waiver-individual"
-                      checked={agreedToWaiver}
-                      onChange={(e) => setAgreedToWaiver(e.target.checked)}
-                      className="mt-1 w-5 h-5 accent-blue-600"
-                    />
-                    <label
-                      htmlFor="waiver-individual"
-                      className="text-sm text-gray-300 cursor-pointer"
-                    >
-                      I have read and agree to the{' '}
-                      <strong>Waiver & Release of Liability</strong>.
-                      <a
-                        href="/waiver"
-                        target="_blank"
-                        className="text-blue-400 hover:underline ml-1"
-                      >
-                        (View Document)
-                      </a>
-                    </label>
-                  </div>
-                  */}
 
                   <button
                     onClick={handleRegister}
@@ -1151,45 +1174,73 @@ export default function EventDetailPage() {
                         Additional Players
                       </label>
                       <span className="text-xs text-gray-500">
+                        {completeAdditionalPlayers.length} complete /{' '}
                         {additionalPlayers.length} added
                       </span>
                     </div>
 
-                    {additionalPlayers.map((player, index) => (
-                      <div
-                        key={index}
-                        className="bg-gray-900 p-5 rounded-2xl mb-4 flex gap-4 items-end"
-                      >
-                        <div className="flex-1">
-                          <input
-                            type="text"
-                            value={player.name || ''}
-                            onChange={(e) =>
-                              updateExtraPlayer(index, 'name', e.target.value)
-                            }
-                            placeholder="Player Name"
-                            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
-                          />
-                        </div>
-                        <div className="flex-1">
-                          <input
-                            type="email"
-                            value={player.email || ''}
-                            onChange={(e) =>
-                              updateExtraPlayer(index, 'email', e.target.value)
-                            }
-                            placeholder="Email"
-                            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
-                          />
-                        </div>
-                        <button
-                          onClick={() => removeExtraPlayer(index)}
-                          className="w-10 h-10 flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-xl text-xl font-bold transition-colors"
+                    {additionalPlayers.map((player, index) => {
+                      const missingName = !(player.name || '').trim();
+                      const missingEmail = !(player.email || '').trim();
+                      return (
+                        <div
+                          key={index}
+                          className="bg-gray-900 p-5 rounded-2xl mb-4"
                         >
-                          −
-                        </button>
-                      </div>
-                    ))}
+                          <div className="flex gap-4 items-end">
+                            <div className="flex-1">
+                              <input
+                                type="text"
+                                value={player.name || ''}
+                                onChange={(e) =>
+                                  updateExtraPlayer(
+                                    index,
+                                    'name',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Player Name *"
+                                className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
+                                  missingName
+                                    ? 'border-red-500'
+                                    : 'border-gray-600'
+                                }`}
+                              />
+                            </div>
+                            <div className="flex-1">
+                              <input
+                                type="email"
+                                value={player.email || ''}
+                                onChange={(e) =>
+                                  updateExtraPlayer(
+                                    index,
+                                    'email',
+                                    e.target.value
+                                  )
+                                }
+                                placeholder="Email *"
+                                className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
+                                  missingEmail
+                                    ? 'border-red-500'
+                                    : 'border-gray-600'
+                                }`}
+                              />
+                            </div>
+                            <button
+                              onClick={() => removeExtraPlayer(index)}
+                              className="w-10 h-10 flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-xl text-xl font-bold transition-colors"
+                            >
+                              −
+                            </button>
+                          </div>
+                          {(missingName || missingEmail) && (
+                            <p className="text-red-400 text-xs mt-2">
+                              Name and email are required
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
 
                     <button
                       onClick={() => {
@@ -1235,33 +1286,13 @@ export default function EventDetailPage() {
                       <span>Total Cost</span>
                       <span>${totalCost.toFixed(2)}</span>
                     </div>
+                    {hasIncompleteAdditionalPlayers && (
+                      <p className="text-amber-400 text-sm mt-3">
+                        Fill in name and email for all additional players to
+                        continue.
+                      </p>
+                    )}
                   </div>
-
-                  {/* HIDDEN FOR NOW — Waiver checkbox
-                  <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl">
-                    <input
-                      type="checkbox"
-                      id="waiver-team"
-                      checked={agreedToWaiver}
-                      onChange={(e) => setAgreedToWaiver(e.target.checked)}
-                      className="mt-1 w-5 h-5 accent-blue-600"
-                    />
-                    <label
-                      htmlFor="waiver-team"
-                      className="text-sm text-gray-300 cursor-pointer"
-                    >
-                      I have read and agree to the{' '}
-                      <strong>Waiver & Release of Liability</strong>.
-                      <a
-                        href="/waiver"
-                        target="_blank"
-                        className="text-blue-400 hover:underline ml-1"
-                      >
-                        (View Document)
-                      </a>
-                    </label>
-                  </div>
-                  */}
 
                   <button
                     onClick={handleRegister}
@@ -1270,7 +1301,8 @@ export default function EventDetailPage() {
                       mode === '' ||
                       (mode === 'create' && !newTeamName) ||
                       (mode === 'join' && !selectedTeam) ||
-                      (isPerRound && selectedPaidRoundIds.length === 0)
+                      (isPerRound && selectedPaidRoundIds.length === 0) ||
+                      hasIncompleteAdditionalPlayers
                     }
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
