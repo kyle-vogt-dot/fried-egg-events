@@ -502,11 +502,11 @@ export default function EventDetailPage() {
 
   // Only count players with BOTH name and email
   const completeAdditionalPlayers = additionalPlayers.filter(
-    (p) => (p.name || '').trim() && (p.email || '').trim()
+    (p) => (p.name || '').trim() && isValidEmail(p.email || '')
   );
 
   const hasIncompleteAdditionalPlayers = additionalPlayers.some(
-    (p) => !(p.name || '').trim() || !(p.email || '').trim()
+    (p) => !(p.name || '').trim() || !isValidEmail(p.email || '')
   );
 
   const totalPlayers = isOrganizerOnly
@@ -575,6 +575,12 @@ export default function EventDetailPage() {
     );
   };
 
+    const isValidEmail = (email: string) => {
+    const cleaned = (email || '').trim();
+    // basic real-email shape: something@something.tld
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned);
+  };
+
   const handleRegisterClick = async () => {
     const {
       data: { user },
@@ -623,19 +629,19 @@ export default function EventDetailPage() {
       }
 
       // Require name + email for every additional player slot
-      const incomplete = additionalPlayers.filter(
-        (p) => !(p.name || '').trim() || !(p.email || '').trim()
+            const incomplete = additionalPlayers.filter(
+        (p) => !(p.name || '').trim() || !isValidEmail(p.email || '')
       );
       if (incomplete.length > 0) {
         alert(
-          'Please enter a name and email for every additional player, or remove the empty slots.'
+          'Please enter a name and a valid email (e.g. name@email.com) for every additional player, or remove the empty slots.'
         );
         setSubmitting(false);
         return;
       }
 
       const completeAdditional = additionalPlayers.filter(
-        (p) => (p.name || '').trim() && (p.email || '').trim()
+        (p) => (p.name || '').trim() && isValidEmail(p.email || '')
       );
 
       const players: any[] = [];
@@ -1179,9 +1185,9 @@ export default function EventDetailPage() {
                       </span>
                     </div>
 
-                    {additionalPlayers.map((player, index) => {
+                                        {additionalPlayers.map((player, index) => {
                       const missingName = !(player.name || '').trim();
-                      const missingEmail = !(player.email || '').trim();
+                      const emailInvalid = !isValidEmail(player.email || '');
                       return (
                         <div
                           key={index}
@@ -1220,7 +1226,7 @@ export default function EventDetailPage() {
                                 }
                                 placeholder="Email *"
                                 className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
-                                  missingEmail
+                                  emailInvalid
                                     ? 'border-red-500'
                                     : 'border-gray-600'
                                 }`}
@@ -1233,9 +1239,13 @@ export default function EventDetailPage() {
                               −
                             </button>
                           </div>
-                          {(missingName || missingEmail) && (
+                          {(missingName || emailInvalid) && (
                             <p className="text-red-400 text-xs mt-2">
-                              Name and email are required
+                              {missingName && emailInvalid
+                                ? 'Name and a valid email (name@email.com) are required'
+                                : missingName
+                                  ? 'Name is required'
+                                  : 'Enter a valid email (name@email.com)'}
                             </p>
                           )}
                         </div>
