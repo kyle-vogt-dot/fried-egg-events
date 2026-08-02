@@ -94,7 +94,7 @@ export default function SignupPage() {
               onChange={(e) => setName(e.target.value)}
               required
               className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
-              placeholder="Kyle Vogt"
+              placeholder="Tiger Woods"
             />
           </div>
 

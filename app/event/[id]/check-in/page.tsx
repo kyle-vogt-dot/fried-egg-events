@@ -1,8 +1,42 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+
+function formatRoundTime(startTime: string | null | undefined) {
+  if (!startTime) return null;
+  const parts = String(startTime).slice(0, 5).split(':');
+  if (parts.length < 2) return String(startTime);
+  let h = parseInt(parts[0], 10);
+  const m = parts[1];
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${m} ${ampm}`;
+}
+
+function getPairingLabel(reg: any, roundId: number | 'all') {
+  if (roundId !== 'all') {
+    const map = reg.round_pairings || {};
+    const entry = map[String(roundId)] || map[roundId as number];
+    if (entry?.hole && entry?.slot) return `${entry.hole} - ${entry.slot}`;
+    return '—';
+  }
+  if (reg.pairing_hole && reg.pairing_slot) {
+    return `${reg.pairing_hole} - ${reg.pairing_slot}`;
+  }
+  return '—';
+}
+
+function isCheckedInForRound(reg: any, roundId: number | 'all') {
+  if (roundId === 'all') return !!reg.checked_in;
+  const map = reg.round_checkins || {};
+  if (map[String(roundId)] != null) return !!map[String(roundId)];
+  if (map[roundId as number] != null) return !!map[roundId as number];
+  // fallback for older data
+  return !!reg.checked_in;
+}
 
 export default function EventCheckInPage() {
   const params = useParams();
@@ -16,10 +50,13 @@ export default function EventCheckInPage() {
 
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
+  const [rounds, setRounds] = useState<any[]>([]);
+  const [selectedRoundId, setSelectedRoundId] = useState<number | 'all'>('all');
   const [addons, setAddons] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [editingAddonRegId, setEditingAddonRegId] = useState<number | null>(null);
+  const [platformFee, setPlatformFee] = useState(0);
 
   const [showAddPlayerModal, setShowAddPlayerModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -36,24 +73,82 @@ export default function EventCheckInPage() {
 
   const lastNotificationRef = useRef<number>(0);
 
+  const [showRefundModal, setShowRefundModal] = useState(false);
+  const [refundReg, setRefundReg] = useState<any>(null);
+  const [refundMode, setRefundMode] = useState<'none' | 'full' | 'minus_greens' | 'custom'>('none');
+  const [customRefundAmount, setCustomRefundAmount] = useState('');
+  const [refunding, setRefunding] = useState(false);
+
   const showAddons = addons.length > 0;
   const showHandicaps = !!event?.use_handicaps;
+
+  const selectedRound = useMemo(() => {
+    if (selectedRoundId === 'all') return null;
+    return rounds.find((r) => r.id === selectedRoundId) || null;
+  }, [rounds, selectedRoundId]);
+
+  const filteredRegistrations = useMemo(() => {
+    let list = registrations;
+
+    if (selectedRoundId !== 'all') {
+      list = list.filter((r) => {
+        const ids: number[] = r.selected_round_ids || [];
+        if (!ids.length) return rounds.length <= 1;
+        return ids.includes(selectedRoundId as number);
+      });
+    }
+
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase();
+      list = list.filter(
+        (reg) =>
+          (reg.player_name || '').toLowerCase().includes(q) ||
+          (reg.team_name || '').toLowerCase().includes(q)
+      );
+    }
+
+    return [...list].sort((a, b) =>
+      (a.player_name || '').localeCompare(b.player_name || '')
+    );
+  }, [registrations, selectedRoundId, rounds.length, searchTerm]);
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+      const id = parseInt(eventId);
+
       const { data: eventData } = await supabase
         .from('tournaments')
         .select('*')
-        .eq('id', parseInt(eventId))
+        .eq('id', id)
         .single();
       setEvent(eventData);
+
+      const { data: roundsData } = await supabase
+        .from('event_rounds')
+        .select('*')
+        .eq('event_id', id)
+        .order('sort_order', { ascending: true });
+
+      setRounds(roundsData || []);
+      if (roundsData && roundsData.length > 0) {
+        setSelectedRoundId(roundsData[0].id);
+      }
 
       const { data: addonData } = await supabase
         .from('event_addons')
         .select('*')
-        .eq('event_id', parseInt(eventId));
+        .eq('event_id', id);
       setAddons(addonData || []);
+
+      const { data: feeData } = await supabase
+        .from('platform_settings')
+        .select('platform_fee')
+        .eq('id', 1)
+        .single();
+      if (feeData?.platform_fee != null) {
+        setPlatformFee(Number(feeData.platform_fee));
+      }
 
       await fetchRegistrations();
       setLoading(false);
@@ -70,7 +165,7 @@ export default function EventCheckInPage() {
     setRegistrations(data || []);
   };
 
-    useEffect(() => {
+  useEffect(() => {
     if (!eventId) return;
 
     const channel = supabase
@@ -84,7 +179,6 @@ export default function EventCheckInPage() {
           filter: `event_id=eq.${parseInt(eventId)}`,
         },
         () => {
-          // Any insert/update/delete — refresh table (covers paid_addons from Stripe)
           fetchRegistrations();
         }
       )
@@ -95,8 +189,99 @@ export default function EventCheckInPage() {
     };
   }, [eventId, supabase]);
 
+  const estimateAmountPaid = (reg: any) => {
+    if (reg.amount_paid != null && Number(reg.amount_paid) > 0) {
+      return Number(reg.amount_paid);
+    }
+    return (Number(event?.price) || 0) + platformFee;
+  };
+
+  const handleRemoveOrRefund = async () => {
+    if (!refundReg) return;
+    setRefunding(true);
+
+    try {
+      const greens = Number(event?.greens_fee || 0);
+      const amountPaid = estimateAmountPaid(refundReg);
+
+      let refundAmount = 0;
+      if (refundMode === 'full') refundAmount = amountPaid;
+      if (refundMode === 'minus_greens') refundAmount = Math.max(0, amountPaid - greens);
+      if (refundMode === 'custom') refundAmount = Math.max(0, Number(customRefundAmount) || 0);
+
+      if (refundAmount > 0 && refundReg.stripe_payment_intent_id) {
+        const res = await fetch('/api/refund-registration', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            registration_id: refundReg.id,
+            payment_intent_id: refundReg.stripe_payment_intent_id,
+            amount: refundAmount,
+            mode: refundMode,
+          }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || 'Stripe refund failed');
+        }
+      } else if (refundAmount > 0 && !refundReg.stripe_payment_intent_id) {
+        console.log('No Stripe payment intent; recording refund in DB only');
+      }
+
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        await supabase.from('event_refunds').insert({
+          event_id: parseInt(eventId),
+          registration_id: refundReg.id,
+          method: refundMode,
+          amount: refundAmount,
+          notes: refundMode === 'custom' ? `Custom $${refundAmount}` : null,
+          created_by: user?.id || null,
+        });
+      } catch {
+        // table may not exist yet
+      }
+
+      const { error } = await supabase
+        .from('event_registrations')
+        .delete()
+        .eq('id', refundReg.id);
+
+      if (error) throw error;
+
+      setShowRefundModal(false);
+      setRefundReg(null);
+      setCustomRefundAmount('');
+      setRefundMode('none');
+      await fetchRegistrations();
+
+      alert(
+        refundAmount > 0
+          ? `Removed. Refund recorded: $${refundAmount.toFixed(2)}${
+              refundReg.stripe_payment_intent_id
+                ? ''
+                : ' (cash/manual — no Stripe charge)'
+            }`
+          : 'Player removed (no refund).'
+      );
+    } catch (e: any) {
+      console.error(e);
+      alert(e.message || 'Failed to remove/refund');
+    } finally {
+      setRefunding(false);
+    }
+  };
+
   const handleAddPlayer = async () => {
     if (!newPlayerName.trim()) return alert('Player name is required');
+
+    const selected_round_ids =
+      selectedRoundId !== 'all'
+        ? [selectedRoundId as number]
+        : rounds.map((r) => r.id);
+
     const { error } = await supabase.from('event_registrations').insert({
       event_id: parseInt(eventId),
       player_name: newPlayerName.trim(),
@@ -104,6 +289,8 @@ export default function EventCheckInPage() {
       team_name: newPlayerTeam.trim() || null,
       paid: false,
       checked_in: false,
+      selected_round_ids,
+      round_checkins: {},
     });
     if (error) alert('Failed to add player: ' + error.message);
     else {
@@ -131,13 +318,6 @@ export default function EventCheckInPage() {
     setSubEmail('');
   };
 
-  const handleRemovePlayer = async (reg: any) => {
-    if (!confirm(`Remove ${reg.player_name}?`)) return;
-    const { error } = await supabase.from('event_registrations').delete().eq('id', reg.id);
-    if (error) alert('Failed to remove: ' + error.message);
-    else fetchRegistrations();
-  };
-
   const openPaymentModal = (reg: any) => {
     setCurrentPayReg(reg);
     setShowPaymentModal(true);
@@ -146,11 +326,17 @@ export default function EventCheckInPage() {
   const handlePaidCash = async () => {
     if (!currentPayReg) return;
 
+    const roundKey =
+      selectedRoundId === 'all' ? null : String(selectedRoundId);
+    const existing = { ...(currentPayReg.round_checkins || {}) };
+    if (roundKey) existing[roundKey] = true;
+
     const { error } = await supabase
       .from('event_registrations')
       .update({
         paid_addons: true,
         checked_in: true,
+        round_checkins: existing,
       })
       .eq('id', currentPayReg.id);
 
@@ -163,7 +349,7 @@ export default function EventCheckInPage() {
     }
   };
 
-    const handleSendAddonPaymentEmail = async () => {
+  const handleSendAddonPaymentEmail = async () => {
     if (!currentPayReg) return;
 
     const addonTotals =
@@ -183,7 +369,7 @@ export default function EventCheckInPage() {
       alert('This player has no email on file.');
       return;
     }
-        // Save selected quantities so they persist after payment
+
     await supabase
       .from('event_registrations')
       .update({ addon_quantities: addonTotals })
@@ -192,7 +378,6 @@ export default function EventCheckInPage() {
     try {
       const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
 
-      // 1) Create Stripe payment link
       const checkoutRes = await fetch('/api/create-checkout-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -215,7 +400,6 @@ export default function EventCheckInPage() {
         throw new Error(checkoutData.error || 'Failed to create payment link');
       }
 
-      // 2) Email the link
       const emailRes = await fetch('/api/send-addon-payment-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -242,12 +426,30 @@ export default function EventCheckInPage() {
   };
 
   const toggleCheckIn = async (reg: any) => {
-    const isCheckedIn = reg.checked_in || false;
-    if (isCheckedIn) {
+    const currentlyIn = isCheckedInForRound(reg, selectedRoundId);
+
+    if (currentlyIn) {
       if (!confirm(`Un-check in ${reg.player_name}?`)) return;
-      await supabase.from('event_registrations').update({ checked_in: false }).eq('id', reg.id);
-    } else {
-      await supabase.from('event_registrations').update({ checked_in: true }).eq('id', reg.id);
+    }
+
+    const existing = { ...(reg.round_checkins || {}) };
+
+    if (selectedRoundId !== 'all') {
+      existing[String(selectedRoundId)] = !currentlyIn;
+    }
+
+    const { error } = await supabase
+      .from('event_registrations')
+      .update({
+        round_checkins: existing,
+        // keep legacy field in sync with the round you're viewing
+        checked_in: !currentlyIn,
+      })
+      .eq('id', reg.id);
+
+    if (error) {
+      alert('Failed to update check-in: ' + error.message);
+      return;
     }
     fetchRegistrations();
   };
@@ -263,6 +465,25 @@ export default function EventCheckInPage() {
     );
   }
 
+  const greensFee = Number(event?.greens_fee || 0);
+  const previewPaid = refundReg ? estimateAmountPaid(refundReg) : 0;
+  const previewRefund =
+    refundMode === 'full'
+      ? previewPaid
+      : refundMode === 'minus_greens'
+        ? Math.max(0, previewPaid - greensFee)
+        : refundMode === 'custom'
+          ? Math.max(0, Number(customRefundAmount) || 0)
+          : 0;
+
+  const headerTeeTime = selectedRound
+    ? formatRoundTime(selectedRound.start_time)
+    : null;
+
+  const checkedInCount = filteredRegistrations.filter((r) =>
+    isCheckedInForRound(r, selectedRoundId)
+  ).length;
+
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
       <div className="max-w-6xl mx-auto">
@@ -273,8 +494,52 @@ export default function EventCheckInPage() {
           ← Back
         </button>
 
-        <h1 className="text-4xl font-bold mb-2">{event?.name}</h1>
-        <p className="text-gray-400 mb-8">Player Check-In</p>
+        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
+          <div>
+            <h1 className="text-4xl font-bold mb-2">{event?.name}</h1>
+            <p className="text-gray-400">
+              Player Check-In · {checkedInCount}/{filteredRegistrations.length}{' '}
+              checked in
+              {event?.course ? ` · ${event.course}` : ''}
+              {headerTeeTime ? ` · ${headerTeeTime}` : ''}
+            </p>
+            {selectedRound && (
+              <p className="text-sm text-teal-400 mt-1">
+                Round: {selectedRound.name}
+                {headerTeeTime ? ` (${headerTeeTime})` : ''}
+              </p>
+            )}
+          </div>
+
+          {rounds.length > 0 && (
+            <div className="w-full lg:w-72">
+              <label className="block text-sm text-gray-400 mb-2">
+                Check-in by round
+              </label>
+              <select
+                value={
+                  selectedRoundId === 'all' ? 'all' : String(selectedRoundId)
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSelectedRoundId(v === 'all' ? 'all' : parseInt(v, 10));
+                }}
+                className="w-full bg-gray-800 border border-gray-600 rounded-2xl px-5 py-4 text-white"
+              >
+                <option value="all">All rounds</option>
+                {rounds.map((r) => {
+                  const t = formatRoundTime(r.start_time);
+                  return (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                      {t ? ` · ${t}` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          )}
+        </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
           <h2 className="text-3xl font-semibold">Player Check-in</h2>
@@ -289,8 +554,9 @@ export default function EventCheckInPage() {
 
             <button
               onClick={async () => {
-                // Persist any pending addon quantity selections
-                for (const [regId, quantities] of Object.entries(selectedQuantities)) {
+                for (const [regId, quantities] of Object.entries(
+                  selectedQuantities
+                )) {
                   await supabase
                     .from('event_registrations')
                     .update({ addon_quantities: quantities })
@@ -323,9 +589,11 @@ export default function EventCheckInPage() {
           </button>
         </div>
 
-        {registrations.length === 0 ? (
+        {filteredRegistrations.length === 0 ? (
           <div className="text-center py-20 text-gray-400">
-            No registrations yet for this event.
+            {selectedRoundId === 'all'
+              ? 'No registrations yet for this event.'
+              : 'No players registered for this round.'}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -335,243 +603,336 @@ export default function EventCheckInPage() {
                   <th className="text-left py-3 px-6 font-medium">Player Name</th>
                   <th className="text-left py-3 px-6 font-medium">Team</th>
                   <th className="text-center py-3 px-6 font-medium">Handicap</th>
-                  <th className="text-center py-3 px-6 font-medium">Starting Hole</th>
+                  <th className="text-center py-3 px-6 font-medium">
+                    Starting Hole
+                  </th>
                   {showAddons &&
                     addons.map((addon: any) => (
-                      <th key={addon.id} className="text-center py-3 px-6 font-medium">
+                      <th
+                        key={addon.id}
+                        className="text-center py-3 px-6 font-medium"
+                      >
                         {addon.name}
                       </th>
                     ))}
                   {showAddons && (
-                    <th className="text-center py-3 px-6 font-medium">Add-on Total</th>
+                    <th className="text-center py-3 px-6 font-medium">
+                      Add-on Total
+                    </th>
                   )}
                   <th className="text-center py-3 px-6 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {registrations
-                  .filter(
-                    (reg: any) =>
-                      !searchTerm ||
-                      (reg.player_name || '')
-                        .toLowerCase()
-                        .includes(searchTerm.toLowerCase()) ||
-                      (reg.team_name || '')
-                        .toLowerCase()
-                        .includes(searchTerm.toLowerCase())
-                  )
-                  .sort((a: any, b: any) =>
-                    (a.player_name || '').localeCompare(b.player_name || '')
-                  )
-                  .map((reg: any) => {
-                    const isCheckedIn = reg.checked_in || false;
-                    const addonTotals =
-                      selectedQuantities[reg.id] || reg.addon_quantities || {};
+                {filteredRegistrations.map((reg: any) => {
+                  const isCheckedIn = isCheckedInForRound(reg, selectedRoundId);
+                  const addonTotals =
+                    selectedQuantities[reg.id] || reg.addon_quantities || {};
 
-                    const addonCost = addons.reduce((sum: number, addon: any) => {
-                      const qty = addonTotals[addon.id] || 0;
-                      return sum + qty * (addon.price_per_unit || 0);
-                    }, 0);
+                  const addonCost = addons.reduce((sum: number, addon: any) => {
+                    const qty = addonTotals[addon.id] || 0;
+                    return sum + qty * (addon.price_per_unit || 0);
+                  }, 0);
 
-                    return (
-                      <tr key={reg.id} className="border-b border-gray-700 hover:bg-gray-800/50">
-                        {/* Name */}
-                        <td className="py-3 px-6 font-medium">
-                          {reg.player_name || 'Unknown'}
-                        </td>
+                  const startingHole = getPairingLabel(reg, selectedRoundId);
 
-                        {/* Team */}
-                        <td className="py-3 px-6 text-gray-400">
-                          {reg.team_name || '—'}
-                        </td>
-
-                        {/* Handicap — always shown */}
-                        <td className="py-3 px-6 text-center">
-                          {showHandicaps ? (
-                            <input
-                              type="number"
-                              value={reg.handicap ?? ''}
-                              onChange={async (e) => {
-                                const newHandicap = e.target.value === ''
+                  return (
+                    <tr
+                      key={reg.id}
+                      className="border-b border-gray-700 hover:bg-gray-800/50"
+                    >
+                      <td className="py-3 px-6 font-medium">
+                        {reg.player_name || 'Unknown'}
+                      </td>
+                      <td className="py-3 px-6 text-gray-400">
+                        {reg.team_name || '—'}
+                      </td>
+                      <td className="py-3 px-6 text-center">
+                        {showHandicaps ? (
+                          <input
+                            type="number"
+                            value={reg.handicap ?? ''}
+                            onChange={async (e) => {
+                              const newHandicap =
+                                e.target.value === ''
                                   ? null
                                   : parseFloat(e.target.value);
-                                await supabase
-                                  .from('event_registrations')
-                                  .update({ handicap: newHandicap })
-                                  .eq('id', reg.id);
-                                fetchRegistrations();
-                              }}
-                              className="w-20 bg-gray-700 border border-gray-600 rounded-xl text-center py-2 focus:outline-none focus:border-blue-500"
-                            />
-                          ) : (
-                            <span className="text-gray-500">N/A</span>
-                          )}
-                        </td>
-
-                        {/* Starting Hole — pairings later */}
-                        <td className="py-3 px-6 text-center text-gray-500">
-                          {reg.starting_hole || '—'}
-                        </td>
-
-                        {/* Add-on checkboxes — only if event has add-ons */}
-                        {showAddons &&
-  addons.map((addon: any) => {
-    const qty = addonTotals[addon.id] || 0;
-    const isLocked = !!reg.paid_addons && editingAddonRegId !== reg.id;
-
-    return (
-      <td key={addon.id} className="py-3 px-6 text-center">
-        {isLocked ? (
-          <span className="text-gray-300 font-medium">{qty > 0 ? qty : '—'}</span>
-        ) : (
-          <div className="flex flex-col items-center gap-1">
-            <input
-              type="checkbox"
-              checked={qty > 0}
-              onChange={(e) => {
-                const newQty = e.target.checked ? 1 : 0;
-                setSelectedQuantities((prev) => ({
-                  ...prev,
-                  [reg.id]: {
-                    ...(prev[reg.id] || addonTotals),
-                    [addon.id]: newQty,
-                  },
-                }));
-              }}
-              className="w-5 h-5 accent-green-600"
-            />
-            {addon.quantity_available > 1 && qty > 0 && (
-              <select
-                value={qty}
-                onChange={(e) => {
-                  const newQty = parseInt(e.target.value);
-                  setSelectedQuantities((prev) => ({
-                    ...prev,
-                    [reg.id]: {
-                      ...(prev[reg.id] || addonTotals),
-                      [addon.id]: newQty,
-                    },
-                  }));
-                }}
-                className="bg-gray-700 border border-gray-600 rounded-xl text-xs px-2 py-1"
-              >
-                {Array.from({ length: addon.quantity_available }, (_, i) => i + 1).map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-        )}
-      </td>
-    );
-  })}
-
-                        {/* Add-on Total — only if event has add-ons */}
-                        {showAddons && (
-                          <td className="py-3 px-6 text-center text-gray-300">
-                            {addonCost > 0 ? `$${addonCost.toFixed(2)}` : '—'}
-                          </td>
+                              await supabase
+                                .from('event_registrations')
+                                .update({ handicap: newHandicap })
+                                .eq('id', reg.id);
+                              fetchRegistrations();
+                            }}
+                            className="w-20 bg-gray-700 border border-gray-600 rounded-xl text-center py-2 focus:outline-none focus:border-blue-500"
+                          />
+                        ) : (
+                          <span className="text-gray-500">N/A</span>
                         )}
+                      </td>
+                      <td className="py-3 px-6 text-center text-teal-300 font-medium">
+                        {startingHole}
+                      </td>
 
-                        {/* Actions — always last column */}
-                        <td className="py-3 px-6">
-                          <div className="flex flex-wrap items-center justify-center gap-2">
-                            {showAddons && addonCost > 0 && (
-  reg.paid_addons && editingAddonRegId !== reg.id ? (
-    <button
-      disabled
-      className="bg-gray-600 text-gray-300 px-4 py-2 rounded-2xl text-sm font-medium cursor-not-allowed opacity-70"
-    >
-      ✓ Paid
-    </button>
-  ) : (
-    <button
-      onClick={() => openPaymentModal(reg)}
-      className="bg-amber-600 hover:bg-amber-700 px-4 py-2 rounded-2xl text-sm font-medium text-white"
-    >
-      Pay ${addonCost.toFixed(2)}
-    </button>
-  )
-)}
+                      {showAddons &&
+                        addons.map((addon: any) => {
+                          const qty = addonTotals[addon.id] || 0;
+                          const isLocked =
+                            !!reg.paid_addons && editingAddonRegId !== reg.id;
 
-{showAddons && reg.paid_addons && (
-  editingAddonRegId === reg.id ? (
-    <button
-      onClick={async () => {
-        const quantities = selectedQuantities[reg.id] || reg.addon_quantities || {};
-        await supabase
-          .from('event_registrations')
-          .update({
-            addon_quantities: quantities,
-            paid_addons: false, // changing add-ons requires pay again
-          })
-          .eq('id', reg.id);
-        setEditingAddonRegId(null);
-        await fetchRegistrations();
-        alert('Add-ons updated. Player must pay again if total changed.');
-      }}
-      className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-2xl text-sm font-medium text-white"
-    >
-      Save Edit
-    </button>
-  ) : (
-    <button
-      onClick={() => {
-        if (!confirm('Edit paid add-ons? They will need to pay again after changes.')) return;
-        setSelectedQuantities((prev) => ({
-          ...prev,
-          [reg.id]: reg.addon_quantities || {},
-        }));
-        setEditingAddonRegId(reg.id);
-      }}
-      className="text-amber-400 hover:text-amber-300 text-sm font-medium px-2 py-2"
-    >
-      Edit
-    </button>
-  )
-)}
+                          return (
+                            <td key={addon.id} className="py-3 px-6 text-center">
+                              {isLocked ? (
+                                <span className="text-gray-300 font-medium">
+                                  {qty > 0 ? qty : '—'}
+                                </span>
+                              ) : (
+                                <div className="flex flex-col items-center gap-1">
+                                  <input
+                                    type="checkbox"
+                                    checked={qty > 0}
+                                    onChange={(e) => {
+                                      const newQty = e.target.checked ? 1 : 0;
+                                      setSelectedQuantities((prev) => ({
+                                        ...prev,
+                                        [reg.id]: {
+                                          ...(prev[reg.id] || addonTotals),
+                                          [addon.id]: newQty,
+                                        },
+                                      }));
+                                    }}
+                                    className="w-5 h-5 accent-green-600"
+                                  />
+                                  {addon.quantity_available > 1 && qty > 0 && (
+                                    <select
+                                      value={qty}
+                                      onChange={(e) => {
+                                        const newQty = parseInt(e.target.value);
+                                        setSelectedQuantities((prev) => ({
+                                          ...prev,
+                                          [reg.id]: {
+                                            ...(prev[reg.id] || addonTotals),
+                                            [addon.id]: newQty,
+                                          },
+                                        }));
+                                      }}
+                                      className="bg-gray-700 border border-gray-600 rounded-xl text-xs px-2 py-1"
+                                    >
+                                      {Array.from(
+                                        { length: addon.quantity_available },
+                                        (_, i) => i + 1
+                                      ).map((n) => (
+                                        <option key={n} value={n}>
+                                          {n}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
 
-                            <button
-                              onClick={() => toggleCheckIn(reg)}
-                              className={`px-5 py-2 rounded-2xl text-sm font-medium transition-all text-white ${
-                                isCheckedIn
-                                  ? 'bg-green-600 hover:bg-red-600'
-                                  : 'bg-blue-600 hover:bg-blue-700'
-                              }`}
-                            >
-                              {isCheckedIn ? '✓ Checked In' : 'Check In'}
-                            </button>
-
-                            <button
-                              onClick={() => handleRemovePlayer(reg)}
-                              className="text-red-400 hover:text-red-500 text-sm font-medium px-2 py-2"
-                            >
-                              Remove
-                            </button>
-
-                            <button
-                              onClick={() => {
-                                setSubPlayerReg(reg);
-                                setSubName('');
-                                setSubEmail('');
-                                setShowSubModal(true);
-                              }}
-                              className="text-blue-400 hover:text-blue-500 text-sm font-medium px-2 py-2"
-                            >
-                              Sub Player
-                            </button>
-                          </div>
+                      {showAddons && (
+                        <td className="py-3 px-6 text-center text-gray-300">
+                          {addonCost > 0 ? `$${addonCost.toFixed(2)}` : '—'}
                         </td>
-                      </tr>
-                    );
-                  })}
+                      )}
+
+                      <td className="py-3 px-6">
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                          {showAddons &&
+                            addonCost > 0 &&
+                            (reg.paid_addons &&
+                            editingAddonRegId !== reg.id ? (
+                              <button
+                                disabled
+                                className="bg-gray-600 text-gray-300 px-4 py-2 rounded-2xl text-sm font-medium cursor-not-allowed opacity-70"
+                              >
+                                ✓ Paid
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => openPaymentModal(reg)}
+                                className="bg-amber-600 hover:bg-amber-700 px-4 py-2 rounded-2xl text-sm font-medium text-white"
+                              >
+                                Pay ${addonCost.toFixed(2)}
+                              </button>
+                            ))}
+
+                          {showAddons &&
+                            reg.paid_addons &&
+                            (editingAddonRegId === reg.id ? (
+                              <button
+                                onClick={async () => {
+                                  const quantities =
+                                    selectedQuantities[reg.id] ||
+                                    reg.addon_quantities ||
+                                    {};
+                                  await supabase
+                                    .from('event_registrations')
+                                    .update({
+                                      addon_quantities: quantities,
+                                      paid_addons: false,
+                                    })
+                                    .eq('id', reg.id);
+                                  setEditingAddonRegId(null);
+                                  await fetchRegistrations();
+                                  alert(
+                                    'Add-ons updated. Player must pay again if total changed.'
+                                  );
+                                }}
+                                className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-2xl text-sm font-medium text-white"
+                              >
+                                Save Edit
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  if (
+                                    !confirm(
+                                      'Edit paid add-ons? They will need to pay again after changes.'
+                                    )
+                                  )
+                                    return;
+                                  setSelectedQuantities((prev) => ({
+                                    ...prev,
+                                    [reg.id]: reg.addon_quantities || {},
+                                  }));
+                                  setEditingAddonRegId(reg.id);
+                                }}
+                                className="text-amber-400 hover:text-amber-300 text-sm font-medium px-2 py-2"
+                              >
+                                Edit
+                              </button>
+                            ))}
+
+                          <button
+                            onClick={() => toggleCheckIn(reg)}
+                            className={`px-5 py-2 rounded-2xl text-sm font-medium transition-all text-white ${
+                              isCheckedIn
+                                ? 'bg-green-600 hover:bg-red-600'
+                                : 'bg-blue-600 hover:bg-blue-700'
+                            }`}
+                          >
+                            {isCheckedIn ? '✓ Checked In' : 'Check In'}
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setRefundReg(reg);
+                              setRefundMode('none');
+                              setCustomRefundAmount('');
+                              setShowRefundModal(true);
+                            }}
+                            className="text-red-400 hover:text-red-500 text-sm font-medium px-4 py-2"
+                          >
+                            Remove / Refund
+                          </button>
+
+                          <button
+                            onClick={() => {
+                              setSubPlayerReg(reg);
+                              setSubName('');
+                              setSubEmail('');
+                              setShowSubModal(true);
+                            }}
+                            className="text-blue-400 hover:text-blue-500 text-sm font-medium px-2 py-2"
+                          >
+                            Sub Player
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {/* Remove / Refund Modal */}
+      {showRefundModal && refundReg && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 rounded-3xl p-8 max-w-md w-full space-y-6">
+            <h3 className="text-2xl font-semibold text-center">
+              Remove / Refund
+            </h3>
+            <p className="text-center text-gray-400">
+              {refundReg.player_name}
+              {refundReg.team_name ? ` · ${refundReg.team_name}` : ''}
+            </p>
+            <p className="text-center text-sm text-gray-500">
+              Est. paid: ${previewPaid.toFixed(2)}
+              {greensFee > 0 ? ` · Greens fee: $${greensFee.toFixed(2)}` : ''}
+            </p>
+
+            <div className="space-y-3">
+              {[
+                { id: 'none', label: 'Remove (no refund)' },
+                { id: 'full', label: '100% refund' },
+                { id: 'minus_greens', label: 'Refund minus greens fees' },
+                { id: 'custom', label: 'Custom refund ($)' },
+              ].map((opt) => (
+                <label
+                  key={opt.id}
+                  className={`flex items-center gap-3 p-4 rounded-2xl border cursor-pointer ${
+                    refundMode === opt.id
+                      ? 'border-blue-500 bg-blue-950/40'
+                      : 'border-gray-700'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="refundMode"
+                    checked={refundMode === opt.id}
+                    onChange={() => setRefundMode(opt.id as any)}
+                  />
+                  <span>{opt.label}</span>
+                </label>
+              ))}
+            </div>
+
+            {refundMode === 'custom' && (
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={customRefundAmount}
+                onChange={(e) => setCustomRefundAmount(e.target.value)}
+                placeholder="Refund amount ($)"
+                className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+              />
+            )}
+
+            {refundMode !== 'none' && (
+              <p className="text-center text-emerald-400 font-medium">
+                Refund amount: ${previewRefund.toFixed(2)}
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => {
+                  setShowRefundModal(false);
+                  setRefundReg(null);
+                }}
+                className="py-4 rounded-2xl bg-gray-700 hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRemoveOrRefund}
+                disabled={refunding}
+                className="py-4 rounded-2xl bg-red-600 hover:bg-red-700 disabled:bg-gray-600 font-semibold"
+              >
+                {refunding ? 'Working...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Player Modal */}
       {showAddPlayerModal && (
@@ -661,7 +1022,8 @@ export default function EventCheckInPage() {
           <div className="bg-gray-900 rounded-3xl p-8 max-w-md w-full">
             <h3 className="text-2xl font-semibold mb-2">Substitute Player</h3>
             <p className="text-gray-400 mb-6">
-              Replacing: <span className="text-white">{subPlayerReg.player_name}</span>
+              Replacing:{' '}
+              <span className="text-white">{subPlayerReg.player_name}</span>
             </p>
             <div className="space-y-4">
               <input

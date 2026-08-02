@@ -84,7 +84,7 @@ export default function CreatedEventsPage() {
                       Check-In →
                     </Link>
                     <Link 
-                      href={`/event/${event.id}/admin`}
+                      href={`/event/${event.id}/scoring`}
                       className="block text-blue-400 hover:text-blue-300"
                     >
                       Scoring →
@@ -107,6 +107,12 @@ export default function CreatedEventsPage() {
                     >
                       Scorecards →
                     </Link>
+                        <Link
+      href={`/event/${event.id}/income`}
+      className="block text-blue-400 hover:text-blue-300"
+    >
+      Income →
+    </Link>
                   </div>
                 </div>
               ))}

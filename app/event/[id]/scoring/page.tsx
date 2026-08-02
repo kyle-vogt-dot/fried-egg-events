@@ -1,0 +1,671 @@
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import { createBrowserClient } from '@supabase/ssr';
+
+function formatRoundTime(startTime: string | null | undefined) {
+  if (!startTime) return null;
+  const parts = String(startTime).slice(0, 5).split(':');
+  if (parts.length < 2) return String(startTime);
+  let h = parseInt(parts[0], 10);
+  const m = parts[1];
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${h}:${m} ${ampm}`;
+}
+
+function defaultHoles(numHoles: number) {
+  return Array.from({ length: numHoles }, (_, i) => ({
+    hole: i + 1,
+    par: 4,
+    yardage: 400,
+    handicap: i + 1,
+  }));
+}
+
+function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
+  if (!courseData) return defaultHoles(numHoles);
+
+  let holes: any[] = [];
+
+  if (
+    courseData.scorecard &&
+    Array.isArray(courseData.scorecard) &&
+    courseData.scorecard.length > 0
+  ) {
+    holes = courseData.scorecard;
+  } else if (courseData.course) {
+    const inner = courseData.course;
+    if (inner.scorecard && Array.isArray(inner.scorecard)) {
+      holes = inner.scorecard;
+    } else if (inner.tees) {
+      const maleTees = inner.tees.male || inner.tees;
+      const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
+      if (teeSet?.holes) holes = teeSet.holes;
+    }
+  } else if (courseData.tees) {
+    const maleTees = courseData.tees.male || courseData.tees;
+    const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
+    if (teeSet?.holes) holes = teeSet.holes;
+    else if (Array.isArray(teeSet)) holes = teeSet;
+  } else if (courseData.holes && Array.isArray(courseData.holes)) {
+    holes = courseData.holes;
+  }
+
+  if (!holes.length) return defaultHoles(numHoles);
+
+  return holes.slice(0, numHoles).map((h: any, index: number) => ({
+    hole: Number(h.Hole || h.hole || index + 1),
+    par: Number(h.Par || h.par) || 4,
+    yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
+    handicap: Number(h.Handicap || h.handicap || index + 1),
+  }));
+}
+
+function isCheckedInForRound(reg: any, roundId: number | 'all') {
+  if (roundId === 'all') return !!reg.checked_in;
+  const map = reg.round_checkins || {};
+  if (map[String(roundId)] != null) return !!map[String(roundId)];
+  if (map[roundId as number] != null) return !!map[roundId as number];
+  return !!reg.checked_in;
+}
+
+function getPairingLabel(reg: any, roundId: number | 'all') {
+  if (roundId !== 'all') {
+    const map = reg.round_pairings || {};
+    const entry = map[String(roundId)] || map[roundId as number];
+    if (entry?.hole && entry?.slot) return `${entry.hole} - ${entry.slot}`;
+  }
+  if (reg.pairing_hole && reg.pairing_slot) {
+    return `${reg.pairing_hole} - ${reg.pairing_slot}`;
+  }
+  return '';
+}
+
+export default function EventScoringPage() {
+  const params = useParams();
+  const router = useRouter();
+  const eventId = params.id as string;
+
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+
+  const [event, setEvent] = useState<any>(null);
+  const [registrations, setRegistrations] = useState<any[]>([]);
+  const [rounds, setRounds] = useState<any[]>([]);
+  const [selectedRoundId, setSelectedRoundId] = useState<number | 'all'>('all');
+  const [playerScores, setPlayerScores] = useState<
+    Record<number, Record<number, number>>
+  >({});
+  const [loading, setLoading] = useState(true);
+  const [savingId, setSavingId] = useState<number | null>(null);
+
+  const numHoles = useMemo(() => {
+    const n = Number(event?.number_of_holes || 18);
+    return n === 9 ? 9 : 18;
+  }, [event]);
+
+  const holes = useMemo(
+    () => getHolesFromCourseData(event?.course_data, numHoles),
+    [event?.course_data, numHoles]
+  );
+
+  const selectedRound = useMemo(() => {
+    if (selectedRoundId === 'all') return null;
+    return rounds.find((r) => r.id === selectedRoundId) || null;
+  }, [rounds, selectedRoundId]);
+
+  const scoredRegs = useMemo(() => {
+    return registrations.filter((r) => {
+      if (!isCheckedInForRound(r, selectedRoundId)) return false;
+      if (selectedRoundId === 'all') return true;
+      const ids: number[] = r.selected_round_ids || [];
+      if (!ids.length) return rounds.length <= 1;
+      return ids.includes(selectedRoundId as number);
+    });
+  }, [registrations, selectedRoundId, rounds.length]);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      const id = parseInt(eventId);
+
+      const { data: eventData } = await supabase
+        .from('tournaments')
+        .select('*')
+        .eq('id', id)
+        .single();
+      setEvent(eventData);
+
+      const { data: roundsData } = await supabase
+        .from('event_rounds')
+        .select('*')
+        .eq('event_id', id)
+        .order('sort_order', { ascending: true });
+
+      setRounds(roundsData || []);
+      if (roundsData && roundsData.length > 0) {
+        setSelectedRoundId(roundsData[0].id);
+      }
+
+      const { data: regData } = await supabase
+        .from('event_registrations')
+        .select('*')
+        .eq('event_id', id);
+      setRegistrations(regData || []);
+
+      setLoading(false);
+    };
+
+    fetchData();
+  }, [eventId]);
+
+  // Load scores for current round
+  useEffect(() => {
+    const loadScores = async () => {
+      if (registrations.length === 0) return;
+
+      let query = supabase
+        .from('scores')
+        .select('*')
+        .in(
+          'registration_id',
+          registrations.map((r) => r.id)
+        );
+
+      if (selectedRoundId !== 'all') {
+        query = query.eq('round_id', selectedRoundId);
+      }
+
+      const { data: scoreData, error } = await query;
+
+      if (error) {
+        console.error('Failed to load scores:', error);
+        // Fallback without round filter (older schema)
+        const { data: fallback } = await supabase
+          .from('scores')
+          .select('*')
+          .in(
+            'registration_id',
+            registrations.map((r) => r.id)
+          );
+
+        const loaded: Record<number, Record<number, number>> = {};
+        (fallback || []).forEach((score: any) => {
+          if (!loaded[score.registration_id]) loaded[score.registration_id] = {};
+          loaded[score.registration_id][score.hole] = score.score;
+        });
+        setPlayerScores(loaded);
+        return;
+      }
+
+      const loaded: Record<number, Record<number, number>> = {};
+      (scoreData || []).forEach((score: any) => {
+        if (!loaded[score.registration_id]) loaded[score.registration_id] = {};
+        loaded[score.registration_id][score.hole] = score.score;
+      });
+      setPlayerScores(loaded);
+    };
+
+    loadScores();
+  }, [registrations, selectedRoundId, supabase]);
+
+  const updateScore = (regId: number, hole: number, score: number) => {
+    setPlayerScores((prev) => ({
+      ...prev,
+      [regId]: { ...(prev[regId] || {}), [hole]: score },
+    }));
+  };
+
+  const savePlayerScores = async (registrationId: number) => {
+    const playerScoresForReg = playerScores[registrationId] || {};
+
+    if (Object.keys(playerScoresForReg).length === 0) {
+      alert('No scores entered for this player.');
+      return;
+    }
+
+    setSavingId(registrationId);
+
+    const scoresToSave = Object.entries(playerScoresForReg).map(
+      ([hole, score]) => ({
+        registration_id: registrationId,
+        hole: parseInt(hole),
+        score: Number(score),
+        ...(selectedRoundId !== 'all' ? { round_id: selectedRoundId } : {}),
+      })
+    );
+
+    // Prefer upsert with round awareness
+    const { error } = await supabase.from('scores').upsert(scoresToSave, {
+      onConflict:
+        selectedRoundId !== 'all'
+          ? 'registration_id,hole,round_id'
+          : 'registration_id,hole',
+    });
+
+    setSavingId(null);
+
+    if (error) {
+      // Fallback: delete + insert for this player/round
+      console.warn('Upsert failed, trying delete+insert', error);
+
+      let del = supabase
+        .from('scores')
+        .delete()
+        .eq('registration_id', registrationId);
+
+      if (selectedRoundId !== 'all') {
+        del = del.eq('round_id', selectedRoundId);
+      }
+
+      await del;
+      const { error: insErr } = await supabase.from('scores').insert(scoresToSave);
+
+      if (insErr) {
+        alert('Failed to save scores: ' + (insErr.message || error.message));
+        return;
+      }
+    }
+
+    const name =
+      registrations.find((r) => r.id === registrationId)?.player_name ||
+      'player';
+    alert(`Score saved for ${name}${selectedRound ? ` · ${selectedRound.name}` : ''}`);
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+        Loading scoring...
+      </div>
+    );
+  }
+
+  const headerTeeTime = selectedRound
+    ? formatRoundTime(selectedRound.start_time)
+    : null;
+
+  const isTeamEvent = (event?.max_teammates || 1) > 1;
+  const frontCount = Math.min(9, numHoles);
+  const backCount = Math.max(0, numHoles - 9);
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
+      <div className="max-w-[1400px] mx-auto">
+        <button
+          onClick={() => router.back()}
+          className="mb-6 text-gray-400 hover:text-white"
+        >
+          ← Back
+        </button>
+
+        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
+          <div>
+            <h1 className="text-4xl font-bold">{event?.name}</h1>
+            <p className="text-gray-400 mt-1">
+              Live Scoring · {numHoles} holes
+              {event?.course ? ` · ${event.course}` : ''}
+              {headerTeeTime ? ` · ${headerTeeTime}` : ''}
+            </p>
+            {selectedRound && (
+              <p className="text-sm text-teal-400 mt-1">
+                Round: {selectedRound.name}
+                {headerTeeTime ? ` (${headerTeeTime})` : ''}
+              </p>
+            )}
+          </div>
+
+          {rounds.length > 0 && (
+            <div className="w-full lg:w-72">
+              <label className="block text-sm text-gray-400 mb-2">
+                Score by round
+              </label>
+              <select
+                value={
+                  selectedRoundId === 'all' ? 'all' : String(selectedRoundId)
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setSelectedRoundId(v === 'all' ? 'all' : parseInt(v, 10));
+                }}
+                className="w-full bg-gray-800 border border-gray-600 rounded-2xl px-5 py-4"
+              >
+                <option value="all">All rounds</option>
+                {rounds.map((r) => {
+                  const t = formatRoundTime(r.start_time);
+                  return (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                      {t ? ` · ${t}` : ''}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          )}
+        </div>
+
+        {scoredRegs.length === 0 ? (
+          <div className="bg-gray-800 rounded-3xl p-16 text-center text-gray-400">
+            No checked-in players
+            {selectedRoundId !== 'all' ? ' for this round' : ''}.
+            <br />
+            Check players in on the Check-In page first.
+          </div>
+        ) : (
+          <div className="bg-gray-800 rounded-3xl p-4 md:p-6 overflow-x-auto">
+            <table className="w-full border-collapse min-w-[1100px]">
+              <thead>
+                <tr className="border-b border-gray-700 bg-gray-900">
+                  <th className="text-left py-4 px-6 font-medium w-52">
+                    Team / Player
+                  </th>
+
+                  {Array.from({ length: frontCount }, (_, i) => (
+                    <th
+                      key={i}
+                      className="text-center py-4 px-4 font-medium text-sm"
+                    >
+                      {i + 1}
+                    </th>
+                  ))}
+
+                  <th className="text-center py-4 px-6 font-medium text-emerald-400 border-l-2 border-r-2 border-emerald-500">
+                    {numHoles > 9 ? 'Out' : 'Total'}
+                    <div className="text-xs text-gray-400 mt-1">
+                      {(() => {
+                        const frontHoles = holes.slice(0, frontCount);
+                        const par = frontHoles.reduce(
+                          (s, h) => s + (Number(h?.par) || 4),
+                          0
+                        );
+                        const yds = frontHoles.reduce(
+                          (s, h) => s + (Number(h?.yardage) || 0),
+                          0
+                        );
+                        return `P: ${par} • Y: ${yds}`;
+                      })()}
+                    </div>
+                  </th>
+
+                  {Array.from({ length: backCount }, (_, i) => (
+                    <th
+                      key={i + 9}
+                      className="text-center py-4 px-4 font-medium text-sm"
+                    >
+                      {i + 10}
+                    </th>
+                  ))}
+
+                  {numHoles > 9 && (
+                    <th className="text-center py-4 px-6 font-medium text-emerald-400">
+                      In
+                    </th>
+                  )}
+                  <th className="text-center py-4 px-6 font-medium">Gross</th>
+                  {event?.use_handicaps && (
+                    <th className="text-center py-4 px-6 font-medium text-emerald-400">
+                      Net
+                    </th>
+                  )}
+                  <th className="w-28"></th>
+                </tr>
+
+                {/* Par / HDCP / Yardage */}
+                <tr className="border-b border-gray-800 bg-gray-900 text-xs">
+                  <th className="text-left py-4 px-6 font-medium">
+                    <div className="mt-6">Par</div>
+                    <div className="mt-6">Handicap</div>
+                    <div className="mt-6">Yardage</div>
+                  </th>
+
+                  {Array.from({ length: frontCount }, (_, i) => {
+                    const holeData = holes[i];
+                    return (
+                      <th
+                        key={i}
+                        className="text-center py-2 px-2 text-[15px] leading-tight"
+                      >
+                        <div className="h-6"></div>
+                        <div>{holeData?.par || 4}</div>
+                        <div className="mt-6 text-blue-300">
+                          {holeData?.handicap || '—'}
+                        </div>
+                        <div className="mt-6 text-amber-300">
+                          {holeData?.yardage || 0}
+                        </div>
+                      </th>
+                    );
+                  })}
+
+                  <th className="border-l-2 border-r-2 border-emerald-500"></th>
+
+                  {Array.from({ length: backCount }, (_, i) => {
+                    const holeData = holes[i + 9];
+                    return (
+                      <th
+                        key={i + 9}
+                        className="text-center py-2 px-2 text-[15px] leading-tight"
+                      >
+                        <div className="h-6"></div>
+                        <div>{holeData?.par || 4}</div>
+                        <div className="mt-6 text-blue-300">
+                          {holeData?.handicap || '—'}
+                        </div>
+                        <div className="mt-6 text-amber-300">
+                          {holeData?.yardage || 0}
+                        </div>
+                      </th>
+                    );
+                  })}
+
+                  {numHoles > 9 && <th></th>}
+                  <th></th>
+                  {event?.use_handicaps && <th></th>}
+                  <th></th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {(() => {
+                  const grouped = scoredRegs.reduce((acc: any, reg) => {
+                    const key =
+                      isTeamEvent && reg.team_name
+                        ? reg.team_name
+                        : reg.player_name || 'Unknown';
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(reg);
+                    return acc;
+                  }, {});
+
+                  // Sort by pairing for this round
+                  const entries = Object.entries(grouped).sort(
+                    ([, aMembers]: any, [, bMembers]: any) => {
+                      const aLabel = getPairingLabel(aMembers[0], selectedRoundId);
+                      const bLabel = getPairingLabel(bMembers[0], selectedRoundId);
+                      return aLabel.localeCompare(bLabel);
+                    }
+                  );
+
+                  return entries.map(([teamKey, teamMembers]: any) => {
+                    const representativeId = teamMembers[0].id;
+                    const scores = playerScores[representativeId] || {};
+
+                    const front9 = Array.from(
+                      { length: frontCount },
+                      (_, i) => scores[i + 1] || 0
+                    ).reduce((a, b) => a + b, 0);
+
+                    const back9 = Array.from(
+                      { length: backCount },
+                      (_, i) => scores[i + 10] || 0
+                    ).reduce((a, b) => a + b, 0);
+
+                    const gross = front9 + back9;
+
+                    let net = gross;
+                    if (event?.use_handicaps) {
+                      const avgHandicap =
+                        teamMembers.reduce(
+                          (sum: number, r: any) => sum + (r.handicap || 0),
+                          0
+                        ) / teamMembers.length;
+                      net = Math.round(gross - avgHandicap);
+                    }
+
+                    const pairing = getPairingLabel(
+                      teamMembers[0],
+                      selectedRoundId
+                    );
+
+                    return (
+                      <tr
+                        key={teamKey}
+                        className="border-b border-gray-700 hover:bg-gray-700/50"
+                      >
+                        <td className="py-3 px-6 font-medium">
+                          {teamKey}
+                          {pairing && (
+                            <div className="text-xs text-teal-400 mt-0.5">
+                              {pairing}
+                            </div>
+                          )}
+                          {isTeamEvent && (
+                            <div className="text-xs text-gray-400">
+                              {teamMembers.length} players
+                            </div>
+                          )}
+                        </td>
+
+                        {Array.from({ length: frontCount }, (_, i) => {
+                          const hole = i + 1;
+                          const score = scores[hole];
+                          const par = holes[i]?.par || 4;
+                          const under =
+                            score != null ? Number(score) - par : 0;
+                          const isBirdie = under === -1;
+                          const isEagle = under <= -2;
+                          const isBogey = under === 1;
+                          const isDouble = under >= 2;
+
+                          return (
+                            <td key={hole} className="text-center py-2 px-2">
+                              <div
+                                className={`inline-flex items-center justify-center rounded-2xl transition-all
+                                ${isBirdie ? 'ring-2 ring-green-400' : ''}
+                                ${isEagle ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-gray-800' : ''}
+                                ${isBogey ? 'border-2 border-orange-400' : ''}
+                                ${isDouble ? 'border-4 border-orange-400' : ''}
+                              `}
+                              >
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="20"
+                                  value={score ?? ''}
+                                  onChange={(e) =>
+                                    updateScore(
+                                      representativeId,
+                                      hole,
+                                      parseInt(e.target.value) || 0
+                                    )
+                                  }
+                                  className="w-12 bg-gray-700 border border-gray-600 rounded-2xl text-center py-2 focus:outline-none focus:border-blue-500 no-spinner"
+                                />
+                              </div>
+                            </td>
+                          );
+                        })}
+
+                        <td className="text-center py-3 px-6 font-semibold text-emerald-400 text-lg border-l-2 border-r-2 border-emerald-500">
+                          {front9 || '—'}
+                        </td>
+
+                        {Array.from({ length: backCount }, (_, i) => {
+                          const hole = i + 10;
+                          const score = scores[hole];
+                          const par = holes[i + 9]?.par || 4;
+                          const under =
+                            score != null ? Number(score) - par : 0;
+                          const isBirdie = under === -1;
+                          const isEagle = under <= -2;
+                          const isBogey = under === 1;
+                          const isDouble = under >= 2;
+
+                          return (
+                            <td key={hole} className="text-center py-2 px-2">
+                              <div
+                                className={`inline-flex items-center justify-center rounded-2xl transition-all
+                                ${isBirdie ? 'ring-2 ring-green-400' : ''}
+                                ${isEagle ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-gray-800' : ''}
+                                ${isBogey ? 'border-2 border-orange-400' : ''}
+                                ${isDouble ? 'border-4 border-orange-400' : ''}
+                              `}
+                              >
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="20"
+                                  value={score ?? ''}
+                                  onChange={(e) =>
+                                    updateScore(
+                                      representativeId,
+                                      hole,
+                                      parseInt(e.target.value) || 0
+                                    )
+                                  }
+                                  className="w-12 bg-gray-700 border border-gray-600 rounded-2xl text-center py-2 focus:outline-none focus:border-blue-500 no-spinner"
+                                />
+                              </div>
+                            </td>
+                          );
+                        })}
+
+                        {numHoles > 9 && (
+                          <td className="text-center py-3 px-6 font-semibold text-emerald-400 text-lg">
+                            {back9 || '—'}
+                          </td>
+                        )}
+
+                        <td className="text-center py-3 px-6 font-bold text-2xl text-white">
+                          {gross || '—'}
+                        </td>
+
+                        {event?.use_handicaps && (
+                          <td className="text-center py-3 px-6 font-bold text-2xl text-emerald-400">
+                            {net || '—'}
+                          </td>
+                        )}
+
+                        <td className="text-center py-3 px-6">
+                          <button
+                            onClick={() => {
+                              if (confirm(`Submit score for ${teamKey}?`)) {
+                                savePlayerScores(representativeId);
+                              }
+                            }}
+                            disabled={savingId === representativeId}
+                            className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 px-6 py-2.5 rounded-2xl text-sm font-medium"
+                          >
+                            {savingId === representativeId
+                              ? 'Saving...'
+                              : 'Submit'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
