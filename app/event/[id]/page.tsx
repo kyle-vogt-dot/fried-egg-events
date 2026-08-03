@@ -94,6 +94,32 @@ export default function EventDetailPage() {
     fetchData();
   }, [eventId]);
 
+    const handleShare = async () => {
+    const url = `${window.location.origin}/event/${eventId}`;
+    const title = event?.name || 'Fried Egg Events';
+    const text = `Join me at ${title}!`;
+
+    // Native share on phones
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text, url });
+        return;
+      } catch (err: any) {
+        // User cancelled — do nothing
+        if (err?.name === 'AbortError') return;
+      }
+    }
+
+    // Fallback: copy link
+    try {
+      await navigator.clipboard.writeText(url);
+      alert('Link copied to clipboard!');
+    } catch {
+      // Last resort
+      prompt('Copy this link:', url);
+    }
+  };
+
   // Handle payment success / cancel
   useEffect(() => {
     const paymentStatus = searchParams.get('payment');
@@ -906,7 +932,7 @@ export default function EventDetailPage() {
             </div>
           )}
 
-          <div className="p-10 flex flex-col sm:flex-row gap-4">
+                    <div className="p-10 flex flex-col sm:flex-row gap-4">
             {registrationOpen ? (
               <>
                 <button
@@ -922,11 +948,27 @@ export default function EventDetailPage() {
                 >
                   View Registered Players
                 </button>
+
+                <button
+                  onClick={handleShare}
+                  className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors"
+                >
+                  Share Event
+                </button>
               </>
             ) : (
-              <button className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors">
-                Notify Me When Registration Opens
-              </button>
+              <>
+                <button className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors">
+                  Notify Me When Registration Opens
+                </button>
+
+                <button
+                  onClick={handleShare}
+                  className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors"
+                >
+                  Share Event
+                </button>
+              </>
             )}
           </div>
         </div>
