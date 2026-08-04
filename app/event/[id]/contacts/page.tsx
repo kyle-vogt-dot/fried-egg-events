@@ -39,10 +39,12 @@ export default function EventContactsPage() {
       }
       setEvent(ev);
 
-      // 2) Registrations — only columns we know exist
+      // 2) Registrations — include discount_code
       const { data: regs, error: regErr } = await supabase
         .from('event_registrations')
-        .select('id, player_name, player_email, team_name, paid, checked_in, user_id')
+        .select(
+          'id, player_name, player_email, team_name, paid, checked_in, user_id, discount_code, discount_amount'
+        )
         .eq('event_id', id)
         .order('player_name', { ascending: true });
 
@@ -101,7 +103,7 @@ export default function EventContactsPage() {
     const q = search.trim().toLowerCase();
     if (!q) return registrations;
     return registrations.filter((r) => {
-      const hay = `${r.player_name || ''} ${r.player_email || ''} ${r.phone || ''} ${r.team_name || ''}`.toLowerCase();
+      const hay = `${r.player_name || ''} ${r.player_email || ''} ${r.phone || ''} ${r.team_name || ''} ${r.discount_code || ''}`.toLowerCase();
       return hay.includes(q);
     });
   }, [registrations, search]);
@@ -135,7 +137,9 @@ export default function EventContactsPage() {
   const emailEveryone = () => {
     if (emails.length === 0) return alert('No emails found');
     const bcc = emails.join(',');
-    const subject = encodeURIComponent(event?.name ? `${event.name} – update` : 'Event update');
+    const subject = encodeURIComponent(
+      event?.name ? `${event.name} – update` : 'Event update'
+    );
     const body = encodeURIComponent(
       event?.name
         ? `Hi everyone,\n\nQuick update about ${event.name}.\n\n`
@@ -204,7 +208,7 @@ export default function EventContactsPage() {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search name, email, phone, team..."
+          placeholder="Search name, email, phone, team, discount..."
           className="w-full bg-gray-800 border border-gray-700 rounded-2xl px-5 py-4"
         />
 
@@ -217,6 +221,7 @@ export default function EventContactsPage() {
                   <th className="py-4 px-5">Email</th>
                   <th className="py-4 px-5">Phone</th>
                   <th className="py-4 px-5">Team</th>
+                  <th className="py-4 px-5">Discount</th>
                   <th className="py-4 px-5">Status</th>
                 </tr>
               </thead>
@@ -252,6 +257,20 @@ export default function EventContactsPage() {
                     </td>
                     <td className="py-4 px-5 text-gray-400">
                       {r.team_name || '—'}
+                    </td>
+                    <td className="py-4 px-5">
+                      {r.discount_code ? (
+                        <span className="text-emerald-400 font-medium">
+                          {r.discount_code}
+                          {r.discount_amount > 0 && (
+                            <span className="text-gray-400 text-xs ml-1">
+                              (−${Number(r.discount_amount).toFixed(2)})
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-gray-500">—</span>
+                      )}
                     </td>
                     <td className="py-4 px-5 text-gray-400">
                       {r.checked_in
