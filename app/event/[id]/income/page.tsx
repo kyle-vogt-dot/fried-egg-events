@@ -90,8 +90,7 @@ export default function EventIncomePage() {
     [registrations]
   );
 
-  // Greens: per-round = sum(players on round × round.greens_fee)
-  // Event mode = billable count × event.greens_fee
+  // Greens fees (expense)
   const { greensFeesTotal, greensLines } = useMemo(() => {
     const lines: { label: string; amount: number; detail: string }[] = [];
     let total = 0;
@@ -101,13 +100,11 @@ export default function EventIncomePage() {
         const roundFee = Number(round.greens_fee ?? event?.greens_fee ?? 0);
         if (roundFee <= 0) continue;
 
-        // Players who paid and selected this round
         let playersOnRound = paidPlayers.filter((r) => {
           const ids: number[] = r.selected_round_ids || [];
           return ids.includes(round.id);
         }).length;
 
-        // Fallback: if nobody has selected_round_ids, use all paid players
         const anyoneHasRounds = paidPlayers.some(
           (r) => (r.selected_round_ids || []).length > 0
         );
@@ -143,6 +140,7 @@ export default function EventIncomePage() {
     return { greensFeesTotal: total, greensLines: lines };
   }, [isPerRound, rounds, event, paidPlayers]);
 
+  // Registration revenue (includes platform fee portion charged to player)
   const registrationRevenue = useMemo(() => {
     const paid = registrations.filter((r) => r.paid);
     let total = 0;
@@ -167,6 +165,35 @@ export default function EventIncomePage() {
     return total;
   }, [registrations, rounds, event, isPerRound, fee]);
 
+  // Platform fee expense (what you owe / remitted to platform)
+  const { platformFeeTotal, platformFeeCount } = useMemo(() => {
+    const paid = registrations.filter((r) => r.paid);
+    let total = 0;
+    let feeUnits = 0;
+
+    for (const reg of paid) {
+      const selectedIds: number[] = reg.selected_round_ids || [];
+      const selectedRounds = rounds.filter((r) => selectedIds.includes(r.id));
+
+      if (isPerRound) {
+        const roundsToCharge =
+          selectedRounds.length > 0 ? selectedRounds : rounds;
+        const units = roundsToCharge.length || 1;
+        total += units * fee;
+        feeUnits += units;
+      } else {
+        total += fee;
+        feeUnits += 1;
+        for (const round of selectedRounds.filter((r) => r.pay_separately)) {
+          total += fee;
+          feeUnits += 1;
+        }
+      }
+    }
+
+    return { platformFeeTotal: total, platformFeeCount: feeUnits };
+  }, [registrations, rounds, isPerRound, fee]);
+
   const addonRevenue = useMemo(() => {
     let total = 0;
     for (const reg of registrations.filter((r) => r.paid_addons)) {
@@ -179,6 +206,11 @@ export default function EventIncomePage() {
     return total;
   }, [registrations, addons]);
 
+  const paidAddonPlayers = useMemo(
+    () => registrations.filter((r) => r.paid_addons).length,
+    [registrations]
+  );
+
   const manualIncomeTotal = useMemo(
     () => manualIncome.reduce((s, row) => s + Number(row.amount || 0), 0),
     [manualIncome]
@@ -189,7 +221,7 @@ export default function EventIncomePage() {
     [expenses]
   );
 
-  const totalExpenses = manualExpenseTotal + greensFeesTotal;
+  const totalExpenses = manualExpenseTotal + greensFeesTotal + platformFeeTotal;
   const grossIncome = registrationRevenue + addonRevenue + manualIncomeTotal;
   const net = grossIncome - totalExpenses;
 
@@ -309,8 +341,7 @@ export default function EventIncomePage() {
               ${addonRevenue.toFixed(2)}
             </p>
             <p className="text-xs text-gray-500 mt-1">
-              {registrations.filter((r) => r.paid_addons).length} paid add-on
-              players
+              {paidAddonPlayers} paid add-on players
             </p>
           </div>
           <div className="bg-gray-800 rounded-3xl p-6">
@@ -335,59 +366,52 @@ export default function EventIncomePage() {
           </div>
         </div>
 
-        {/* Paid players breakdown */}
+        {/* Income summary lines (no player list) */}
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
-          <h2 className="text-2xl font-semibold mb-6">Paid registrations</h2>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="text-gray-400 border-b border-gray-700">
-                <tr>
-                  <th className="py-3 pr-4">Player</th>
-                  <th className="py-3 pr-4">Team</th>
-                  <th className="py-3 pr-4">Paid</th>
-                  <th className="py-3 pr-4">Add-ons paid</th>
-                  <th className="py-3">Rounds</th>
-                </tr>
-              </thead>
-              <tbody>
-                {registrations
-                  .filter((r) => r.paid || r.paid_addons)
-                  .map((r) => {
-                    const ids: number[] = r.selected_round_ids || [];
-                    const names = rounds
-                      .filter((rd) => ids.includes(rd.id))
-                      .map((rd) => rd.name)
-                      .join(', ');
-                    return (
-                      <tr key={r.id} className="border-b border-gray-700/60">
-                        <td className="py-3 pr-4">{r.player_name}</td>
-                        <td className="py-3 pr-4 text-gray-400">
-                          {r.team_name || '—'}
-                        </td>
-                        <td className="py-3 pr-4">
-                          {r.paid ? (
-                            <span className="text-emerald-400">Yes</span>
-                          ) : (
-                            <span className="text-gray-500">No</span>
-                          )}
-                        </td>
-                        <td className="py-3 pr-4">
-                          {r.paid_addons ? (
-                            <span className="text-emerald-400">Yes</span>
-                          ) : (
-                            <span className="text-gray-500">No</span>
-                          )}
-                        </td>
-                        <td className="py-3 text-gray-400">{names || '—'}</td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
-            {registrations.filter((r) => r.paid || r.paid_addons).length ===
-              0 && (
-              <p className="text-gray-500 py-6">No paid registrations yet.</p>
-            )}
+          <h2 className="text-2xl font-semibold mb-6">Income summary</h2>
+          <div className="space-y-4">
+            <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
+              <div>
+                <div className="font-medium">Registered players</div>
+                <div className="text-sm text-gray-500">
+                  {paidPlayers.length} player{paidPlayers.length === 1 ? '' : 's'}
+                </div>
+              </div>
+              <span className="text-emerald-400 font-semibold text-lg">
+                ${registrationRevenue.toFixed(2)}
+              </span>
+            </div>
+
+            <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
+              <div>
+                <div className="font-medium">Add-ons</div>
+                <div className="text-sm text-gray-500">
+                  {paidAddonPlayers} player{paidAddonPlayers === 1 ? '' : 's'}
+                </div>
+              </div>
+              <span className="text-emerald-400 font-semibold text-lg">
+                ${addonRevenue.toFixed(2)}
+              </span>
+            </div>
+
+            <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
+              <div>
+                <div className="font-medium">Manual / cash income</div>
+                <div className="text-sm text-gray-500">
+                  {manualIncome.length} entr{manualIncome.length === 1 ? 'y' : 'ies'}
+                </div>
+              </div>
+              <span className="text-emerald-400 font-semibold text-lg">
+                ${manualIncomeTotal.toFixed(2)}
+              </span>
+            </div>
+
+            <div className="flex justify-between items-center border-t border-gray-700 pt-4 px-1">
+              <div className="font-semibold text-lg">Total income</div>
+              <span className="text-emerald-400 font-bold text-xl">
+                ${grossIncome.toFixed(2)}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -458,6 +482,25 @@ export default function EventIncomePage() {
         {/* Expenses */}
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8 space-y-6">
           <h2 className="text-2xl font-semibold">Expenses</h2>
+
+          {/* Platform fee (auto) */}
+          <div className="bg-gray-900 rounded-3xl p-6">
+            <div className="flex justify-between items-start gap-4">
+              <div>
+                <p className="text-gray-400 text-sm">Platform fee (auto)</p>
+                <p className="text-3xl font-bold text-amber-400 mt-2">
+                  ${platformFeeTotal.toFixed(2)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {platformFeeCount} fee unit{platformFeeCount === 1 ? '' : 's'} × $
+                  {fee.toFixed(2)}
+                  {paidPlayers.length > 0
+                    ? ` · ${paidPlayers.length} paid player${paidPlayers.length === 1 ? '' : 's'}`
+                    : ''}
+                </p>
+              </div>
+            </div>
+          </div>
 
           {/* Auto greens breakdown */}
           <div className="bg-gray-900 rounded-3xl p-6 space-y-3">

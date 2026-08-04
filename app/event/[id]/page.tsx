@@ -32,6 +32,20 @@ export default function EventDetailPage() {
 
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
+  // ---------- Discount state ----------
+  const [discountCode, setDiscountCode] = useState('');
+  const [discountLoading, setDiscountLoading] = useState(false);
+  const [appliedDiscount, setAppliedDiscount] = useState<null | {
+    code: string;
+    discount_code_id: number;
+    discount_type: string;
+    amount: number;
+    amount_saved: number;
+    label: string;
+    one_player_only: boolean;
+  }>(null);
+  const [discountError, setDiscountError] = useState('');
+
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -94,28 +108,32 @@ export default function EventDetailPage() {
     fetchData();
   }, [eventId]);
 
-    const handleShare = async () => {
+  // Force single player when a discount is applied
+  useEffect(() => {
+    if (appliedDiscount?.one_player_only) {
+      setAdditionalPlayers([]);
+      setIsOrganizerOnly(false);
+    }
+  }, [appliedDiscount]);
+
+  const handleShare = async () => {
     const url = `${window.location.origin}/event/${eventId}`;
     const title = event?.name || 'Fried Egg Events';
     const text = `Join me at ${title}!`;
 
-    // Native share on phones
     if (navigator.share) {
       try {
         await navigator.share({ title, text, url });
         return;
       } catch (err: any) {
-        // User cancelled — do nothing
         if (err?.name === 'AbortError') return;
       }
     }
 
-    // Fallback: copy link
     try {
       await navigator.clipboard.writeText(url);
       alert('Link copied to clipboard!');
     } catch {
-      // Last resort
       prompt('Copy this link:', url);
     }
   };
@@ -149,6 +167,21 @@ export default function EventDetailPage() {
           const ids: number[] = draft.selected_round_ids || [];
           setSelectedPaidRoundIds(ids);
           setAgreedToWaiver(true);
+
+          // Restore discount if present
+          if (draft.discount) {
+            setAppliedDiscount({
+              code: draft.discount.code,
+              discount_code_id: draft.discount.discount_code_id,
+              discount_type: 'fixed',
+              amount: draft.discount.amount_saved,
+              amount_saved: draft.discount.amount_saved,
+              label: draft.discount.code,
+              one_player_only: true,
+            });
+            setDiscountCode(draft.discount.code);
+          }
+
           setShowRegisterModal(true);
         }
       } catch (e) {
@@ -177,6 +210,7 @@ export default function EventDetailPage() {
         let myReg: any = null;
         let paidThisCheckout: any[] = [];
         let checkoutNetAmount: number | null = null;
+        let draftDiscount: any = null;
 
         const raw = sessionStorage.getItem(draftKey);
 
@@ -184,6 +218,7 @@ export default function EventDetailPage() {
           const draft = JSON.parse(raw);
           checkoutNetAmount =
             draft.totalCost != null ? Number(draft.totalCost) : null;
+          draftDiscount = draft.discount || null;
 
           sessionStorage.setItem(
             lastPaymentKey,
@@ -191,6 +226,7 @@ export default function EventDetailPage() {
               totalCost: draft.totalCost,
               players: draft.players || [],
               selected_round_ids: draft.selected_round_ids || [],
+              discount: draft.discount || null,
             })
           );
 
@@ -204,6 +240,8 @@ export default function EventDetailPage() {
             checked_in: false,
             addons_selected: {},
             selected_round_ids: draft.selected_round_ids || [],
+            discount_code: draft.discount?.code || null,
+            discount_amount: draft.discount?.amount_saved || 0,
           }));
 
           if (rows.length === 0) {
@@ -234,6 +272,30 @@ export default function EventDetailPage() {
             null;
 
           paidThisCheckout = inserted || [];
+
+          // ---------- Redeem the discount code ----------
+          if (draftDiscount && inserted && inserted.length > 0) {
+            const primary =
+              inserted.find((r: any) => r.user_id === user.id) || inserted[0];
+
+            try {
+              await fetch('/api/discount-codes/redeem', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  discount_code_id: draftDiscount.discount_code_id,
+                  event_id: parseInt(eventId),
+                  registration_id: primary.id,
+                  user_id: user.id,
+                  player_email: primary.player_email,
+                  amount_saved: draftDiscount.amount_saved,
+                }),
+              });
+            } catch (redeemErr) {
+              console.error('Discount redeem failed:', redeemErr);
+              // Non-fatal — registration already succeeded
+            }
+          }
         } else {
           const lastRaw = sessionStorage.getItem(lastPaymentKey);
           if (lastRaw) {
@@ -554,10 +616,22 @@ export default function EventDetailPage() {
     0
   );
 
+  // Discount is applied per player
+  const discountPerPlayer = appliedDiscount
+    ? Number(appliedDiscount.amount_saved)
+    : 0;
+
   const totalCost = isPerRound
-    ? totalPlayers * selectedRoundsCostPerPlayer
+    ? totalPlayers *
+      Math.max(0, selectedRoundsCostPerPlayer - discountPerPlayer)
     : totalPlayers *
-      (pricePerPlayer + feePerPlayer + selectedRoundsCostPerPlayer);
+      Math.max(
+        0,
+        pricePerPlayer +
+          feePerPlayer +
+          selectedRoundsCostPerPlayer -
+          discountPerPlayer
+      );
 
   const getSelectedRoundIds = () => {
     if (isPerRound) return [...selectedPaidRoundIds];
@@ -605,6 +679,56 @@ export default function EventDetailPage() {
     );
   };
 
+  // ---------- Discount helpers ----------
+  const applyDiscountCode = async () => {
+    if (!discountCode.trim()) {
+      setDiscountError('Enter a code');
+      return;
+    }
+
+    setDiscountLoading(true);
+    setDiscountError('');
+
+    try {
+      const basePerPlayer = isPerRound
+        ? selectedRoundsCostPerPlayer
+        : pricePerPlayer + feePerPlayer + selectedRoundsCostPerPlayer;
+
+      const res = await fetch('/api/discount-codes/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: discountCode.trim(),
+          eventId: parseInt(eventId),
+          baseAmount: basePerPlayer,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!data.valid) {
+        setAppliedDiscount(null);
+        setDiscountError(data.error || 'Invalid code');
+        return;
+      }
+
+      setAppliedDiscount(data);
+      setDiscountError('');
+    } catch (err) {
+      console.error(err);
+      setDiscountError('Could not validate code');
+      setAppliedDiscount(null);
+    } finally {
+      setDiscountLoading(false);
+    }
+  };
+
+  const clearDiscount = () => {
+    setAppliedDiscount(null);
+    setDiscountCode('');
+    setDiscountError('');
+  };
+
   const handleRegisterClick = async () => {
     const {
       data: { user },
@@ -622,6 +746,11 @@ export default function EventDetailPage() {
     setAdditionalPlayers([]);
     setSelectedPaidRoundIds([]);
     setAgreedToWaiver(true);
+
+    // Reset discount
+    setDiscountCode('');
+    setAppliedDiscount(null);
+    setDiscountError('');
   };
 
   const handleRegister = async () => {
@@ -708,6 +837,13 @@ export default function EventDetailPage() {
         selected_round_ids: selectedRoundIds,
         players,
         totalCost,
+        discount: appliedDiscount
+          ? {
+              code: appliedDiscount.code,
+              discount_code_id: appliedDiscount.discount_code_id,
+              amount_saved: appliedDiscount.amount_saved,
+            }
+          : null,
       };
 
       sessionStorage.setItem(draftKey, JSON.stringify(draft));
@@ -932,7 +1068,7 @@ export default function EventDetailPage() {
             </div>
           )}
 
-                    <div className="p-10 flex flex-col sm:flex-row gap-4">
+          <div className="p-10 flex flex-col sm:flex-row gap-4">
             {registrationOpen ? (
               <>
                 <button
@@ -1093,11 +1229,68 @@ export default function EventDetailPage() {
 
               {isIndividual ? (
                 <div className="space-y-8">
+                  {/* Discount Code (Individual) */}
+                  <div className="bg-gray-900 p-5 rounded-2xl">
+                    <label className="block text-sm text-gray-400 mb-2">
+                      Discount Code
+                    </label>
+
+                    {appliedDiscount ? (
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-emerald-400">
+                            {appliedDiscount.code} applied
+                          </p>
+                          <p className="text-sm text-gray-400">
+                            {appliedDiscount.label} · −$
+                            {appliedDiscount.amount_saved.toFixed(2)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={clearDiscount}
+                          className="text-sm text-red-400 hover:text-red-300"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-3">
+                        <input
+                          type="text"
+                          value={discountCode}
+                          onChange={(e) =>
+                            setDiscountCode(e.target.value.toUpperCase())
+                          }
+                          placeholder="Enter code"
+                          className="flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
+                        />
+                        <button
+                          type="button"
+                          onClick={applyDiscountCode}
+                          disabled={discountLoading || !discountCode.trim()}
+                          className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-5 py-3 rounded-xl font-medium"
+                        >
+                          {discountLoading ? '…' : 'Apply'}
+                        </button>
+                      </div>
+                    )}
+
+                    {discountError && (
+                      <p className="text-red-400 text-sm mt-2">{discountError}</p>
+                    )}
+                  </div>
+
                   <div className="bg-gray-900 p-6 rounded-2xl text-center">
                     <p className="text-xl">Individual Event</p>
                     <p className="text-3xl font-semibold mt-2">
                       ${totalCost.toFixed(2)}
                     </p>
+                    {appliedDiscount && (
+                      <p className="text-sm text-emerald-400 mt-1">
+                        Discount applied
+                      </p>
+                    )}
                   </div>
 
                   <button
@@ -1150,6 +1343,7 @@ export default function EventDetailPage() {
                       id="organizer-only"
                       checked={isOrganizerOnly}
                       onChange={(e) => setIsOrganizerOnly(e.target.checked)}
+                      disabled={!!appliedDiscount}
                       className="w-5 h-5 accent-blue-600"
                     />
                     <label
@@ -1224,7 +1418,14 @@ export default function EventDetailPage() {
                       </span>
                     </div>
 
-                                                                {additionalPlayers.map((player, index) => {
+                    {appliedDiscount && (
+                      <p className="text-amber-400 text-sm mb-3">
+                        Discount codes apply to one player only. Additional
+                        teammates must register separately.
+                      </p>
+                    )}
+
+                    {additionalPlayers.map((player, index) => {
                       const nameValue = player.name || '';
                       const emailValue = player.email || '';
                       const nameOk = nameValue.trim().length > 0;
@@ -1236,7 +1437,6 @@ export default function EventDetailPage() {
                           className="bg-gray-900 p-5 rounded-2xl mb-4"
                         >
                           <div className="flex gap-4 items-start">
-                            {/* NAME */}
                             <div className="flex-1">
                               <label className="block text-xs text-gray-400 mb-1">
                                 Player Name *
@@ -1245,7 +1445,11 @@ export default function EventDetailPage() {
                                 type="text"
                                 value={nameValue}
                                 onChange={(e) =>
-                                  updateExtraPlayer(index, 'name', e.target.value)
+                                  updateExtraPlayer(
+                                    index,
+                                    'name',
+                                    e.target.value
+                                  )
                                 }
                                 placeholder="John Smith"
                                 className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
@@ -1259,7 +1463,6 @@ export default function EventDetailPage() {
                               )}
                             </div>
 
-                            {/* EMAIL */}
                             <div className="flex-1">
                               <label className="block text-xs text-gray-400 mb-1">
                                 Email *
@@ -1268,11 +1471,17 @@ export default function EventDetailPage() {
                                 type="email"
                                 value={emailValue}
                                 onChange={(e) =>
-                                  updateExtraPlayer(index, 'email', e.target.value)
+                                  updateExtraPlayer(
+                                    index,
+                                    'email',
+                                    e.target.value
+                                  )
                                 }
                                 placeholder="name@email.com"
                                 className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
-                                  emailOk ? 'border-gray-600' : 'border-red-500'
+                                  emailOk
+                                    ? 'border-gray-600'
+                                    : 'border-red-500'
                                 }`}
                               />
                               {!emailOk && (
@@ -1315,6 +1524,7 @@ export default function EventDetailPage() {
                         }
                       }}
                       disabled={
+                        !!appliedDiscount ||
                         (mode === 'join' && !selectedTeam) ||
                         (mode === 'create' && !newTeamName) ||
                         additionalPlayers.length >=
@@ -1332,11 +1542,69 @@ export default function EventDetailPage() {
                     </button>
                   </div>
 
+                  {/* Discount Code (Team) */}
+                  <div className="bg-gray-900 p-5 rounded-2xl">
+                    <label className="block text-sm text-gray-400 mb-2">
+                      Discount Code
+                    </label>
+
+                    {appliedDiscount ? (
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-medium text-emerald-400">
+                            {appliedDiscount.code} applied
+                          </p>
+                          <p className="text-sm text-gray-400">
+                            {appliedDiscount.label} · −$
+                            {appliedDiscount.amount_saved.toFixed(2)} per player
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={clearDiscount}
+                          className="text-sm text-red-400 hover:text-red-300"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-3">
+                        <input
+                          type="text"
+                          value={discountCode}
+                          onChange={(e) =>
+                            setDiscountCode(e.target.value.toUpperCase())
+                          }
+                          placeholder="Enter code"
+                          className="flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
+                        />
+                        <button
+                          type="button"
+                          onClick={applyDiscountCode}
+                          disabled={discountLoading || !discountCode.trim()}
+                          className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-5 py-3 rounded-xl font-medium"
+                        >
+                          {discountLoading ? '…' : 'Apply'}
+                        </button>
+                      </div>
+                    )}
+
+                    {discountError && (
+                      <p className="text-red-400 text-sm mt-2">{discountError}</p>
+                    )}
+                  </div>
+
                   <div className="bg-gray-900 p-6 rounded-2xl">
                     <div className="flex justify-between text-xl font-semibold">
                       <span>Total Cost</span>
                       <span>${totalCost.toFixed(2)}</span>
                     </div>
+                    {appliedDiscount && (
+                      <p className="text-sm text-emerald-400 mt-1">
+                        Discount applied (−$
+                        {appliedDiscount.amount_saved.toFixed(2)} per player)
+                      </p>
+                    )}
                     {hasIncompleteAdditionalPlayers && (
                       <p className="text-amber-400 text-sm mt-3">
                         Fill in name and a valid email for all additional

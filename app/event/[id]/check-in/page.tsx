@@ -569,6 +569,12 @@ export default function EventCheckInPage() {
             >
               💾 Save
             </button>
+            <button
+  onClick={() => router.push(`/event/${eventId}/contacts`)}
+  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-2xl font-medium transition-colors"
+>
+  📇 Contacts
+</button>
           </div>
         </div>
 
