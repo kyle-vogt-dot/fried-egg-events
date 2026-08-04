@@ -30,8 +30,10 @@ export async function POST(request: NextRequest) {
       totalPaid = 0,
       playerCount = 1,
       rounds = [],
-      // 'event' | 'per_round' — same idea as registration
       pricingMode = 'event',
+      // NEW
+      discountCode = null,
+      discountAmount = 0,
     } = await request.json();
 
     const isPerRound = pricingMode === 'per_round' || pricingMode === 'per-round';
@@ -60,11 +62,10 @@ export async function POST(request: NextRequest) {
         `
         : '';
 
-    // Receipt rows — match registration pricing rules
+    // Receipt rows
     let receiptRows = '';
 
     if (isPerRound) {
-      // Per-round: only round prices (ignore base event price)
       if (normalizedRounds.some((r) => r.price > 0)) {
         receiptRows += normalizedRounds
           .map(
@@ -76,25 +77,36 @@ export async function POST(request: NextRequest) {
           )
           .join('');
       } else {
-        // Fallback if caller only sent labels
         receiptRows += `
           <tr>
             <td style="padding: 8px 0;">
               Round fees${playerCount > 1 ? ` (${playerCount} players)` : ''}
             </td>
             <td style="padding: 8px 0; text-align: right;">
-              $${Math.max(0, Number(totalPaid) - Number(platformFee) - Number(processingFee)).toFixed(2)}
+              $${Math.max(0, Number(totalPaid) - Number(platformFee) - Number(processingFee) + Number(discountAmount || 0)).toFixed(2)}
             </td>
           </tr>`;
       }
     } else {
-      // Event price mode: single event line (ignore round prices for $)
       receiptRows += `
         <tr>
           <td style="padding: 8px 0;">
             Event Registration${playerCount > 1 ? ` (${playerCount} players)` : ''}
           </td>
           <td style="padding: 8px 0; text-align: right;">$${Number(eventPrice).toFixed(2)}</td>
+        </tr>`;
+    }
+
+    // Discount line
+    if (discountCode && Number(discountAmount) > 0) {
+      receiptRows += `
+        <tr>
+          <td style="padding: 8px 0; color: #34d399;">
+            Discount (${discountCode})
+          </td>
+          <td style="padding: 8px 0; text-align: right; color: #34d399;">
+            −$${Number(discountAmount).toFixed(2)}
+          </td>
         </tr>`;
     }
 

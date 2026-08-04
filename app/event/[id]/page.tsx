@@ -213,6 +213,7 @@ export default function EventDetailPage() {
         let draftDiscount: any = null;
 
         const raw = sessionStorage.getItem(draftKey);
+        
 
         if (raw) {
           const draft = JSON.parse(raw);
@@ -477,6 +478,8 @@ export default function EventDetailPage() {
                 totalPaid,
                 playerCount: playerCountThisPayment,
                 rounds: roundsSummary,
+                discountCode: draftDiscount?.code || null,
+    discountAmount: draftDiscount?.amount_saved || 0,
               }),
             });
           }
