@@ -140,7 +140,7 @@ export default function EventIncomePage() {
     return { greensFeesTotal: total, greensLines: lines };
   }, [isPerRound, rounds, event, paidPlayers]);
 
-  // Registration revenue (includes platform fee portion charged to player)
+  // Full registration revenue (before discounts)
   const registrationRevenue = useMemo(() => {
     const paid = registrations.filter((r) => r.paid);
     let total = 0;
@@ -165,7 +165,32 @@ export default function EventIncomePage() {
     return total;
   }, [registrations, rounds, event, isPerRound, fee]);
 
-  // Platform fee expense (what you owe / remitted to platform)
+  // Discount summary (grouped by code)
+  const discountSummary = useMemo(() => {
+    const paid = registrations.filter((r) => r.paid && r.discount_code);
+    const byCode: Record<
+      string,
+      { code: string; players: number; totalSaved: number }
+    > = {};
+
+    for (const reg of paid) {
+      const code = String(reg.discount_code).toUpperCase();
+      if (!byCode[code]) {
+        byCode[code] = { code, players: 0, totalSaved: 0 };
+      }
+      byCode[code].players += 1;
+      byCode[code].totalSaved += Number(reg.discount_amount || 0);
+    }
+
+    return Object.values(byCode).sort((a, b) => a.code.localeCompare(b.code));
+  }, [registrations]);
+
+  const totalDiscounts = useMemo(
+    () => discountSummary.reduce((s, d) => s + d.totalSaved, 0),
+    [discountSummary]
+  );
+
+  // Platform fee expense
   const { platformFeeTotal, platformFeeCount } = useMemo(() => {
     const paid = registrations.filter((r) => r.paid);
     let total = 0;
@@ -222,7 +247,9 @@ export default function EventIncomePage() {
   );
 
   const totalExpenses = manualExpenseTotal + greensFeesTotal + platformFeeTotal;
-  const grossIncome = registrationRevenue + addonRevenue + manualIncomeTotal;
+  // Gross income after discounts
+  const grossIncome =
+    registrationRevenue - totalDiscounts + addonRevenue + manualIncomeTotal;
   const net = grossIncome - totalExpenses;
 
   const addManualIncome = async () => {
@@ -329,10 +356,16 @@ export default function EventIncomePage() {
           <div className="bg-gray-800 rounded-3xl p-6">
             <p className="text-gray-400 text-sm">Registrations (est.)</p>
             <p className="text-3xl font-bold text-emerald-400 mt-2">
-              ${registrationRevenue.toFixed(2)}
+              ${(registrationRevenue - totalDiscounts).toFixed(2)}
             </p>
             <p className="text-xs text-gray-500 mt-1">
               {paidPlayers.length} paid players
+              {totalDiscounts > 0 && (
+                <span className="text-amber-400">
+                  {' '}
+                  · −${totalDiscounts.toFixed(2)} discounts
+                </span>
+              )}
             </p>
           </div>
           <div className="bg-gray-800 rounded-3xl p-6">
@@ -366,15 +399,17 @@ export default function EventIncomePage() {
           </div>
         </div>
 
-        {/* Income summary lines (no player list) */}
+        {/* Income summary lines */}
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
           <h2 className="text-2xl font-semibold mb-6">Income summary</h2>
           <div className="space-y-4">
+            {/* Full price registered players */}
             <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
               <div>
                 <div className="font-medium">Registered players</div>
                 <div className="text-sm text-gray-500">
-                  {paidPlayers.length} player{paidPlayers.length === 1 ? '' : 's'}
+                  {paidPlayers.length} player
+                  {paidPlayers.length === 1 ? '' : 's'} (full price)
                 </div>
               </div>
               <span className="text-emerald-400 font-semibold text-lg">
@@ -382,11 +417,32 @@ export default function EventIncomePage() {
               </span>
             </div>
 
+            {/* Discount code lines */}
+            {discountSummary.map((d) => (
+              <div
+                key={d.code}
+                className="flex justify-between items-center bg-gray-900/70 rounded-2xl px-5 py-4 border border-amber-900/40"
+              >
+                <div>
+                  <div className="font-medium text-amber-300">
+                    {d.code}
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    {d.players} player{d.players === 1 ? '' : 's'}
+                  </div>
+                </div>
+                <span className="text-amber-400 font-semibold text-lg">
+                  −${d.totalSaved.toFixed(2)}
+                </span>
+              </div>
+            ))}
+
             <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
               <div>
                 <div className="font-medium">Add-ons</div>
                 <div className="text-sm text-gray-500">
-                  {paidAddonPlayers} player{paidAddonPlayers === 1 ? '' : 's'}
+                  {paidAddonPlayers} player
+                  {paidAddonPlayers === 1 ? '' : 's'}
                 </div>
               </div>
               <span className="text-emerald-400 font-semibold text-lg">
@@ -398,7 +454,8 @@ export default function EventIncomePage() {
               <div>
                 <div className="font-medium">Manual / cash income</div>
                 <div className="text-sm text-gray-500">
-                  {manualIncome.length} entr{manualIncome.length === 1 ? 'y' : 'ies'}
+                  {manualIncome.length} entr
+                  {manualIncome.length === 1 ? 'y' : 'ies'}
                 </div>
               </div>
               <span className="text-emerald-400 font-semibold text-lg">
@@ -492,10 +549,12 @@ export default function EventIncomePage() {
                   ${platformFeeTotal.toFixed(2)}
                 </p>
                 <p className="text-xs text-gray-500 mt-1">
-                  {platformFeeCount} fee unit{platformFeeCount === 1 ? '' : 's'} × $
-                  {fee.toFixed(2)}
+                  {platformFeeCount} fee unit
+                  {platformFeeCount === 1 ? '' : 's'} × ${fee.toFixed(2)}
                   {paidPlayers.length > 0
-                    ? ` · ${paidPlayers.length} paid player${paidPlayers.length === 1 ? '' : 's'}`
+                    ? ` · ${paidPlayers.length} paid player${
+                        paidPlayers.length === 1 ? '' : 's'
+                      }`
                     : ''}
                 </p>
               </div>
