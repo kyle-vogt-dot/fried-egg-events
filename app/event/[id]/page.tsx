@@ -1700,6 +1700,48 @@ setWaitlistPhone('');
                     </div>
                   </div>
 
+                  {mode === 'join' && (
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Select Team
+                      </label>
+                      <select
+                        value={selectedTeam}
+                        onChange={(e) => setSelectedTeam(e.target.value)}
+                        className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+                      >
+                        <option value="">Choose a team</option>
+                        {existingTeams.map((team) => {
+                          const spots = getSpotsLeft(team);
+                          return (
+                            <option
+                              key={team}
+                              value={team}
+                              disabled={spots <= 0}
+                            >
+                              {team} ({spots} spot{spots !== 1 ? 's' : ''} left)
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  )}
+
+                  {mode === 'create' && (
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        New Team Name
+                      </label>
+                      <input
+                        type="text"
+                        value={newTeamName}
+                        onChange={(e) => setNewTeamName(e.target.value)}
+                        placeholder="Enter team name"
+                        className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+                      />
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-3 bg-gray-900 p-4 rounded-2xl">
                     <input
                       type="checkbox"
