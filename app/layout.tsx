@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import { Montserrat, Montserrat_Alternates } from 'next/font/google';
-import Navigation from './navigation';   // This line must exist
-
+import Navigation from './navigation';
 import './globals.css';
 
 const montserrat = Montserrat({
@@ -18,6 +17,13 @@ const montserratAlternates = Montserrat_Alternates({
 export const metadata: Metadata = {
   title: 'Fried Egg Events',
   description: 'Golf Tournaments & Events',
+  manifest: '/manifest.webmanifest',
+  themeColor: '#111827',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'Fried Egg Events',
+  },
   icons: {
     icon: [
       { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
@@ -29,14 +35,18 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en">
-      <body className={`${montserrat.variable} ${montserratAlternates.variable} bg-gray-900 text-white`}>
+      <body
+        className={`${montserrat.variable} ${montserratAlternates.variable} bg-gray-900 text-white`}
+      >
         <Navigation />
-        <main className="min-h-screen">
-          {children}
-        </main>
+        <main className="min-h-screen">{children}</main>
       </body>
     </html>
   );

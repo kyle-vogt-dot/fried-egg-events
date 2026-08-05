@@ -26,7 +26,6 @@ export default function EventContactsPage() {
       setError(null);
       const id = parseInt(eventId);
 
-      // 1) Event
       const { data: ev, error: evErr } = await supabase
         .from('tournaments')
         .select('id, name, date, course')
@@ -39,7 +38,6 @@ export default function EventContactsPage() {
       }
       setEvent(ev);
 
-      // 2) Registrations — include discount_code
       const { data: regs, error: regErr } = await supabase
         .from('event_registrations')
         .select(
@@ -57,9 +55,7 @@ export default function EventContactsPage() {
       }
 
       let rows = regs || [];
-      console.log('Loaded registrations:', rows.length, rows);
 
-      // 3) Optional: phones + names from profiles
       const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
       if (userIds.length > 0) {
         const { data: profiles, error: profErr } = await supabase
@@ -92,7 +88,66 @@ export default function EventContactsPage() {
         });
       }
 
-      setRegistrations(rows);
+      // Dedupe: one contact per email (or name if no email)
+      const byKey = new Map<string, any>();
+      for (const r of rows) {
+        const email = (r.player_email || '').trim().toLowerCase();
+        const key =
+          email ||
+          `name:${String(r.player_name || '')
+            .trim()
+            .toLowerCase()}`;
+
+        const existing = byKey.get(key);
+        if (!existing) {
+          byKey.set(key, {
+            ...r,
+            team_names: r.team_name ? [r.team_name] : [],
+            discount_codes: r.discount_code ? [r.discount_code] : [],
+            reg_count: 1,
+          });
+          continue;
+        }
+
+        existing.reg_count += 1;
+        existing.paid = existing.paid || r.paid;
+        existing.checked_in = existing.checked_in || r.checked_in;
+        if (!existing.phone && r.phone) existing.phone = r.phone;
+        if (!existing.player_name && r.player_name)
+          existing.player_name = r.player_name;
+        if (r.team_name && !existing.team_names.includes(r.team_name)) {
+          existing.team_names.push(r.team_name);
+        }
+        if (
+          r.discount_code &&
+          !existing.discount_codes.includes(r.discount_code)
+        ) {
+          existing.discount_codes.push(r.discount_code);
+        }
+        // Keep highest discount_amount shown if multiple
+        if (
+          Number(r.discount_amount || 0) > Number(existing.discount_amount || 0)
+        ) {
+          existing.discount_amount = r.discount_amount;
+          existing.discount_code = r.discount_code;
+        }
+      }
+
+      const deduped = Array.from(byKey.values()).map((r) => ({
+        ...r,
+        team_name: r.team_names?.length
+          ? r.team_names.join(', ')
+          : r.team_name || '',
+        discount_code: r.discount_codes?.length
+          ? r.discount_codes.join(', ')
+          : r.discount_code || null,
+      }));
+
+      deduped.sort((a, b) =>
+        String(a.player_name || '').localeCompare(String(b.player_name || ''))
+      );
+
+      setRegistrations(deduped);
       setLoading(false);
     };
 
@@ -103,7 +158,8 @@ export default function EventContactsPage() {
     const q = search.trim().toLowerCase();
     if (!q) return registrations;
     return registrations.filter((r) => {
-      const hay = `${r.player_name || ''} ${r.player_email || ''} ${r.phone || ''} ${r.team_name || ''} ${r.discount_code || ''}`.toLowerCase();
+      const hay =
+        `${r.player_name || ''} ${r.player_email || ''} ${r.phone || ''} ${r.team_name || ''} ${r.discount_code || ''}`.toLowerCase();
       return hay.includes(q);
     });
   }, [registrations, search]);
@@ -128,7 +184,9 @@ export default function EventContactsPage() {
     if (!text) return alert(`No ${label} to copy`);
     try {
       await navigator.clipboard.writeText(text);
-      alert(`${label} copied (${text.split(/[\n,;]/).filter(Boolean).length})`);
+      alert(
+        `${label} copied (${text.split(/[\n,;]/).filter(Boolean).length})`
+      );
     } catch {
       prompt(`Copy ${label}:`, text);
     }
@@ -176,7 +234,7 @@ export default function EventContactsPage() {
         <div>
           <h1 className="text-4xl font-bold">Player contacts</h1>
           <p className="text-gray-400 mt-1">
-            {event?.name || 'Event'} · {filtered.length} player
+            {event?.name || 'Event'} · {filtered.length} unique contact
             {filtered.length === 1 ? '' : 's'}
           </p>
           {error && (
@@ -227,9 +285,17 @@ export default function EventContactsPage() {
               </thead>
               <tbody>
                 {filtered.map((r) => (
-                  <tr key={r.id} className="border-b border-gray-700/60">
+                  <tr
+                    key={r.player_email || r.id}
+                    className="border-b border-gray-700/60"
+                  >
                     <td className="py-4 px-5 font-medium">
                       {r.player_name || '—'}
+                      {r.reg_count > 1 && (
+                        <span className="ml-2 text-xs text-gray-500">
+                          ({r.reg_count} regs)
+                        </span>
+                      )}
                     </td>
                     <td className="py-4 px-5">
                       {r.player_email ? (
@@ -276,8 +342,8 @@ export default function EventContactsPage() {
                       {r.checked_in
                         ? 'Checked in'
                         : r.paid
-                        ? 'Paid'
-                        : 'Registered'}
+                          ? 'Paid'
+                          : 'Registered'}
                     </td>
                   </tr>
                 ))}

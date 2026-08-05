@@ -75,14 +75,6 @@ function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
   }));
 }
 
-function isCheckedInForRound(reg: any, roundId: number | 'all') {
-  if (roundId === 'all') return !!reg.checked_in;
-  const map = reg.round_checkins || {};
-  if (map[String(roundId)] != null) return !!map[String(roundId)];
-  if (map[roundId as number] != null) return !!map[roundId as number];
-  return !!reg.checked_in;
-}
-
 function getPairingLabel(reg: any, roundId: number | 'all') {
   if (roundId !== 'all') {
     const map = reg.round_pairings || {};
@@ -250,8 +242,6 @@ function ScorecardPDF({
     .slice(frontCount, numHoles)
     .reduce((s, h) => s + (Number(h?.yardage) || 0), 0);
 
-  // Team event → one score row with team name
-  // Individual → one row per player
   const scoreRows = isTeamEvent
     ? [team.name]
     : team.players?.length
@@ -261,7 +251,6 @@ function ScorecardPDF({
   return (
     <Document>
       <Page size="LETTER" style={pdfStyles.page}>
-        {/* Header + QR top right */}
         <View style={pdfStyles.headerRow}>
           <View style={pdfStyles.headerLeft}>
             <Text style={pdfStyles.title}>{event?.name || 'Tournament'}</Text>
@@ -292,7 +281,6 @@ function ScorecardPDF({
         </View>
 
         <View style={pdfStyles.table}>
-          {/* HOLE numbers */}
           <View style={pdfStyles.row}>
             <View style={[pdfStyles.labelCell, { backgroundColor: '#111' }]}>
               <Text style={{ color: '#fff', fontSize: 8, fontWeight: 'bold' }}>
@@ -328,7 +316,6 @@ function ScorecardPDF({
             </View>
           </View>
 
-          {/* PAR */}
           <View style={pdfStyles.row}>
             <View style={pdfStyles.labelCell}>
               <Text>PAR</Text>
@@ -356,7 +343,6 @@ function ScorecardPDF({
             </View>
           </View>
 
-          {/* YDS */}
           <View style={pdfStyles.row}>
             <View style={pdfStyles.labelCell}>
               <Text>YDS</Text>
@@ -384,7 +370,6 @@ function ScorecardPDF({
             </View>
           </View>
 
-          {/* HCP */}
           <View style={pdfStyles.row}>
             <View style={pdfStyles.labelCell}>
               <Text>HCP</Text>
@@ -412,7 +397,6 @@ function ScorecardPDF({
             </View>
           </View>
 
-          {/* Score grid — team name only for team events */}
           {scoreRows.map((label, idx) => (
             <View key={idx} style={pdfStyles.row}>
               <View style={pdfStyles.scoreLabelCell}>
@@ -509,11 +493,13 @@ export default function EventScorecardsPage() {
     fetchData();
   }, [eventId]);
 
+  // Scorecards from registered players + pairings (NOT check-in)
   const teams = useMemo(() => {
     const filtered = registrations.filter((r) => {
-      if (!isCheckedInForRound(r, selectedRoundId)) return false;
+      // Include all registered players for this event/round
       if (selectedRoundId === 'all') return true;
       const ids: number[] = r.selected_round_ids || [];
+      // If no rounds selected on the reg, include when event has 0–1 rounds
       if (!ids.length) return rounds.length <= 1;
       return ids.includes(selectedRoundId as number);
     });
@@ -541,7 +527,12 @@ export default function EventScorecardsPage() {
     return (Object.values(grouped) as any[]).sort((a, b) => {
       const aP = getPairingLabel(a.regs[0], selectedRoundId);
       const bP = getPairingLabel(b.regs[0], selectedRoundId);
-      return aP.localeCompare(bP);
+      // Paired groups first, then alphabetical by pairing / name
+      if (aP === '—' && bP !== '—') return 1;
+      if (aP !== '—' && bP === '—') return -1;
+      const cmp = aP.localeCompare(bP);
+      if (cmp !== 0) return cmp;
+      return String(a.name).localeCompare(String(b.name));
     });
   }, [registrations, selectedRoundId, rounds.length, event]);
 
@@ -557,7 +548,6 @@ export default function EventScorecardsPage() {
     return `${liveBase}/event/${eventId}/live?${q.toString()}`;
   };
 
-  // Build QR data URLs for PDF embedding
   useEffect(() => {
     const build = async () => {
       if (!teams.length) {
@@ -630,6 +620,10 @@ export default function EventScorecardsPage() {
     ? formatRoundTime(selectedRound.start_time)
     : null;
 
+  const pairedCount = teams.filter(
+    (t) => getPairingLabel(t.regs[0], selectedRoundId) !== '—'
+  ).length;
+
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-6xl mx-auto">
@@ -650,6 +644,14 @@ export default function EventScorecardsPage() {
             {selectedRound && (
               <p className="text-sm text-teal-400 mt-1">
                 Round: {selectedRound.name}
+              </p>
+            )}
+            {teams.length > 0 && (
+              <p className="text-sm text-gray-500 mt-1">
+                {teams.length} group{teams.length === 1 ? '' : 's'}
+                {pairedCount > 0
+                  ? ` · ${pairedCount} with starting hole`
+                  : ' · set pairings to show starting holes'}
               </p>
             )}
           </div>
@@ -694,10 +696,10 @@ export default function EventScorecardsPage() {
 
         {teams.length === 0 ? (
           <div className="bg-gray-800 rounded-3xl p-16 text-center text-gray-400">
-            No checked-in players
+            No registered players
             {selectedRoundId !== 'all' ? ' for this round' : ''}.
             <br />
-            Check players in first, then print scorecards.
+            Register players and save pairings, then print scorecards.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -716,7 +718,7 @@ export default function EventScorecardsPage() {
                       <p className="text-sm text-gray-400 mt-1">
                         {team.players?.length || 0} player
                         {(team.players?.length || 0) !== 1 ? 's' : ''}
-                        {pairing !== '—' ? ` · Start ${pairing}` : ''}
+                        {pairing !== '—' ? ` · Start ${pairing}` : ' · No pairing yet'}
                       </p>
                       <p className="text-xs text-gray-500 mt-1">
                         {(team.players || []).join(', ')}

@@ -3,6 +3,303 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import {
+  Document,
+  Page,
+  Text,
+  View,
+  StyleSheet,
+  PDFDownloadLink,
+} from '@react-pdf/renderer';
+
+const pdfStyles = StyleSheet.create({
+  page: {
+    paddingTop: 40,
+    paddingBottom: 40,
+    paddingHorizontal: 48,
+    fontSize: 10,
+    fontFamily: 'Helvetica',
+    color: '#111',
+  },
+  header: {
+    marginBottom: 20,
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#111',
+    paddingBottom: 12,
+  },
+  brand: {
+    fontSize: 11,
+    color: '#666',
+    marginBottom: 4,
+  },
+  title: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 10,
+    color: '#444',
+    marginBottom: 2,
+  },
+  sectionTitle: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    marginTop: 16,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 3,
+  },
+  rowIndent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 2,
+    paddingLeft: 12,
+  },
+  label: {
+    flex: 1,
+    fontSize: 10,
+  },
+  labelMuted: {
+    flex: 1,
+    fontSize: 9,
+    color: '#555',
+  },
+  amount: {
+    width: 90,
+    textAlign: 'right',
+    fontSize: 10,
+  },
+  amountMuted: {
+    width: 90,
+    textAlign: 'right',
+    fontSize: 9,
+    color: '#555',
+  },
+  divider: {
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#ccc',
+    marginVertical: 6,
+  },
+  totalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 5,
+    borderTopWidth: 1,
+    borderTopColor: '#111',
+    marginTop: 4,
+  },
+  totalLabel: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  totalAmount: {
+    width: 90,
+    textAlign: 'right',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  netRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderTopWidth: 1.5,
+    borderBottomWidth: 1.5,
+    borderColor: '#111',
+    marginTop: 12,
+  },
+  footer: {
+    position: 'absolute',
+    bottom: 28,
+    left: 48,
+    right: 48,
+    fontSize: 8,
+    color: '#888',
+    textAlign: 'center',
+  },
+});
+
+function money(n: number) {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v).toFixed(2);
+  return v < 0 ? `($${abs})` : `$${abs}`;
+}
+
+function IncomeStatementPDF({
+  event,
+  registrationRevenue,
+  totalDiscounts,
+  discountLines,
+  addonRevenue,
+  paidAddonPlayers,
+  manualIncome,
+  manualIncomeTotal,
+  platformFeeTotal,
+  platformFeeCount,
+  platformFeeRate,
+  greensFeesTotal,
+  greensLines,
+  expenses,
+  manualExpenseTotal,
+  totalExpenses,
+  grossIncome,
+  net,
+  paidPlayerCount,
+  generatedAt,
+}: {
+  event: any;
+  registrationRevenue: number;
+  totalDiscounts: number;
+  discountLines: { code: string; players: number; totalSaved: number }[];
+  addonRevenue: number;
+  paidAddonPlayers: number;
+  manualIncome: any[];
+  manualIncomeTotal: number;
+  platformFeeTotal: number;
+  platformFeeCount: number;
+  platformFeeRate: number;
+  greensFeesTotal: number;
+  greensLines: { label: string; amount: number; detail: string }[];
+  expenses: any[];
+  manualExpenseTotal: number;
+  totalExpenses: number;
+  grossIncome: number;
+  net: number;
+  paidPlayerCount: number;
+  generatedAt: string;
+}) {
+  const eventDate = event?.date
+    ? new Date(String(event.date) + 'T12:00:00').toLocaleDateString()
+    : '';
+
+  return (
+    <Document>
+      <Page size="LETTER" style={pdfStyles.page}>
+        <View style={pdfStyles.header}>
+          <Text style={pdfStyles.brand}>Fried Egg Events</Text>
+          <Text style={pdfStyles.title}>Income Statement</Text>
+          <Text style={pdfStyles.subtitle}>{event?.name || 'Event'}</Text>
+          <Text style={pdfStyles.subtitle}>
+            {[eventDate, event?.course, event?.location].filter(Boolean).join(' · ')}
+          </Text>
+          <Text style={pdfStyles.subtitle}>Generated {generatedAt}</Text>
+        </View>
+
+        {/* Revenue */}
+        <Text style={pdfStyles.sectionTitle}>Revenue</Text>
+
+        <View style={pdfStyles.row}>
+          <Text style={pdfStyles.label}>
+            Registration fees ({paidPlayerCount} player
+            {paidPlayerCount === 1 ? '' : 's'}, full price)
+          </Text>
+          <Text style={pdfStyles.amount}>{money(registrationRevenue)}</Text>
+        </View>
+
+        {discountLines.map((d) => (
+          <View key={d.code} style={pdfStyles.rowIndent}>
+            <Text style={pdfStyles.labelMuted}>
+              Less: discount {d.code} ({d.players} player
+              {d.players === 1 ? '' : 's'})
+            </Text>
+            <Text style={pdfStyles.amountMuted}>
+              {money(-d.totalSaved)}
+            </Text>
+          </View>
+        ))}
+
+        {totalDiscounts > 0 && (
+          <View style={pdfStyles.row}>
+            <Text style={pdfStyles.label}>Net registration revenue</Text>
+            <Text style={pdfStyles.amount}>
+              {money(registrationRevenue - totalDiscounts)}
+            </Text>
+          </View>
+        )}
+
+        <View style={pdfStyles.row}>
+          <Text style={pdfStyles.label}>
+            Add-ons ({paidAddonPlayers} player
+            {paidAddonPlayers === 1 ? '' : 's'})
+          </Text>
+          <Text style={pdfStyles.amount}>{money(addonRevenue)}</Text>
+        </View>
+
+        {manualIncome.map((row) => (
+          <View key={row.id} style={pdfStyles.row}>
+            <Text style={pdfStyles.label}>
+              {row.label}
+              {row.category ? ` (${row.category})` : ''}
+            </Text>
+            <Text style={pdfStyles.amount}>{money(Number(row.amount))}</Text>
+          </View>
+        ))}
+
+        <View style={pdfStyles.totalRow}>
+          <Text style={pdfStyles.totalLabel}>Total revenue</Text>
+          <Text style={pdfStyles.totalAmount}>{money(grossIncome)}</Text>
+        </View>
+
+        {/* Expenses */}
+        <Text style={pdfStyles.sectionTitle}>Expenses</Text>
+
+        <View style={pdfStyles.row}>
+          <Text style={pdfStyles.label}>
+            Platform fees ({platformFeeCount} × {money(platformFeeRate)})
+          </Text>
+          <Text style={pdfStyles.amount}>{money(platformFeeTotal)}</Text>
+        </View>
+
+        {greensLines.map((line) => (
+          <View key={line.label} style={pdfStyles.row}>
+            <Text style={pdfStyles.label}>
+              {line.label} ({line.detail})
+            </Text>
+            <Text style={pdfStyles.amount}>{money(line.amount)}</Text>
+          </View>
+        ))}
+
+        {greensLines.length === 0 && greensFeesTotal > 0 && (
+          <View style={pdfStyles.row}>
+            <Text style={pdfStyles.label}>Greens fees</Text>
+            <Text style={pdfStyles.amount}>{money(greensFeesTotal)}</Text>
+          </View>
+        )}
+
+        {expenses.map((row) => (
+          <View key={row.id} style={pdfStyles.row}>
+            <Text style={pdfStyles.label}>
+              {row.label}
+              {row.category ? ` (${row.category})` : ''}
+            </Text>
+            <Text style={pdfStyles.amount}>{money(Number(row.amount))}</Text>
+          </View>
+        ))}
+
+        <View style={pdfStyles.totalRow}>
+          <Text style={pdfStyles.totalLabel}>Total expenses</Text>
+          <Text style={pdfStyles.totalAmount}>{money(totalExpenses)}</Text>
+        </View>
+
+        {/* Net */}
+        <View style={pdfStyles.netRow}>
+          <Text style={pdfStyles.totalLabel}>Net income (loss)</Text>
+          <Text style={pdfStyles.totalAmount}>{money(net)}</Text>
+        </View>
+
+        <Text style={pdfStyles.footer}>
+          Prepared for record-keeping · Not a formal tax return · Fried Egg Events
+        </Text>
+      </Page>
+    </Document>
+  );
+}
 
 export default function EventIncomePage() {
   const params = useParams();
@@ -23,7 +320,6 @@ export default function EventIncomePage() {
   const [expenses, setExpenses] = useState<any[]>([]);
   const [platformFee, setPlatformFee] = useState(0);
 
-  // forms
   const [incomeLabel, setIncomeLabel] = useState('');
   const [incomeAmount, setIncomeAmount] = useState('');
   const [incomeCategory, setIncomeCategory] = useState('cash');
@@ -90,7 +386,6 @@ export default function EventIncomePage() {
     [registrations]
   );
 
-  // Greens fees (expense)
   const { greensFeesTotal, greensLines } = useMemo(() => {
     const lines: { label: string; amount: number; detail: string }[] = [];
     let total = 0;
@@ -140,7 +435,6 @@ export default function EventIncomePage() {
     return { greensFeesTotal: total, greensLines: lines };
   }, [isPerRound, rounds, event, paidPlayers]);
 
-  // Full registration revenue (before discounts)
   const registrationRevenue = useMemo(() => {
     const paid = registrations.filter((r) => r.paid);
     let total = 0;
@@ -165,7 +459,6 @@ export default function EventIncomePage() {
     return total;
   }, [registrations, rounds, event, isPerRound, fee]);
 
-  // Discount summary (grouped by code)
   const discountSummary = useMemo(() => {
     const paid = registrations.filter((r) => r.paid && r.discount_code);
     const byCode: Record<
@@ -190,7 +483,6 @@ export default function EventIncomePage() {
     [discountSummary]
   );
 
-  // Platform fee expense
   const { platformFeeTotal, platformFeeCount } = useMemo(() => {
     const paid = registrations.filter((r) => r.paid);
     let total = 0;
@@ -247,10 +539,22 @@ export default function EventIncomePage() {
   );
 
   const totalExpenses = manualExpenseTotal + greensFeesTotal + platformFeeTotal;
-  // Gross income after discounts
   const grossIncome =
     registrationRevenue - totalDiscounts + addonRevenue + manualIncomeTotal;
   const net = grossIncome - totalExpenses;
+
+  const generatedAt = useMemo(
+    () =>
+      new Date().toLocaleString(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      }),
+    [loading, registrations, manualIncome, expenses]
+  );
+
+  const pdfFileName = `${String(event?.name || 'event')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-|-$/g, '')}-income-statement.pdf`;
 
   const addManualIncome = async () => {
     if (!incomeLabel.trim() || !incomeAmount)
@@ -346,9 +650,44 @@ export default function EventIncomePage() {
           ← Back
         </button>
 
-        <div>
-          <h1 className="text-4xl font-bold">{event?.name}</h1>
-          <p className="text-gray-400 mt-1">Income & Expenses</p>
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
+          <div>
+            <h1 className="text-4xl font-bold">{event?.name}</h1>
+            <p className="text-gray-400 mt-1">Income & Expenses</p>
+          </div>
+
+          <PDFDownloadLink
+            document={
+              <IncomeStatementPDF
+                event={event}
+                registrationRevenue={registrationRevenue}
+                totalDiscounts={totalDiscounts}
+                discountLines={discountSummary}
+                addonRevenue={addonRevenue}
+                paidAddonPlayers={paidAddonPlayers}
+                manualIncome={manualIncome}
+                manualIncomeTotal={manualIncomeTotal}
+                platformFeeTotal={platformFeeTotal}
+                platformFeeCount={platformFeeCount}
+                platformFeeRate={fee}
+                greensFeesTotal={greensFeesTotal}
+                greensLines={greensLines}
+                expenses={expenses}
+                manualExpenseTotal={manualExpenseTotal}
+                totalExpenses={totalExpenses}
+                grossIncome={grossIncome}
+                net={net}
+                paidPlayerCount={paidPlayers.length}
+                generatedAt={generatedAt}
+              />
+            }
+            fileName={pdfFileName}
+            className="inline-flex justify-center px-6 py-4 bg-emerald-600 hover:bg-emerald-700 rounded-2xl font-semibold text-center"
+          >
+            {({ loading: pdfLoading }) =>
+              pdfLoading ? 'Preparing PDF…' : '📄 Download Income Statement'
+            }
+          </PDFDownloadLink>
         </div>
 
         {/* Summary cards */}
@@ -403,7 +742,6 @@ export default function EventIncomePage() {
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
           <h2 className="text-2xl font-semibold mb-6">Income summary</h2>
           <div className="space-y-4">
-            {/* Full price registered players */}
             <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
               <div>
                 <div className="font-medium">Registered players</div>
@@ -417,16 +755,13 @@ export default function EventIncomePage() {
               </span>
             </div>
 
-            {/* Discount code lines */}
             {discountSummary.map((d) => (
               <div
                 key={d.code}
                 className="flex justify-between items-center bg-gray-900/70 rounded-2xl px-5 py-4 border border-amber-900/40"
               >
                 <div>
-                  <div className="font-medium text-amber-300">
-                    {d.code}
-                  </div>
+                  <div className="font-medium text-amber-300">{d.code}</div>
                   <div className="text-sm text-gray-500">
                     {d.players} player{d.players === 1 ? '' : 's'}
                   </div>
@@ -540,7 +875,6 @@ export default function EventIncomePage() {
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8 space-y-6">
           <h2 className="text-2xl font-semibold">Expenses</h2>
 
-          {/* Platform fee (auto) */}
           <div className="bg-gray-900 rounded-3xl p-6">
             <div className="flex justify-between items-start gap-4">
               <div>
@@ -561,7 +895,6 @@ export default function EventIncomePage() {
             </div>
           </div>
 
-          {/* Auto greens breakdown */}
           <div className="bg-gray-900 rounded-3xl p-6 space-y-3">
             <div className="flex justify-between items-start gap-4">
               <div>
