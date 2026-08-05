@@ -3,6 +3,191 @@
 import { useState, useEffect } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import { useMemo } from 'react'; // if not already imported with useState/useEffect
+import QRCode from 'qrcode';
+import {
+  Document,
+  Page,
+  Text,
+  View,
+  StyleSheet,
+  PDFDownloadLink,
+  Image,
+} from '@react-pdf/renderer';
+const flyerStyles = StyleSheet.create({
+  page: {
+    padding: 28,
+    fontFamily: 'Helvetica',
+    backgroundColor: '#111827',
+    color: '#f3f4f6',
+  },
+  brand: {
+    fontSize: 11,
+    color: '#22c55e',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    marginBottom: 12,
+    color: '#ffffff',
+  },
+  row: {
+    fontSize: 12,
+    marginBottom: 6,
+    color: '#e5e7eb',
+  },
+  label: {
+    color: '#9ca3af',
+  },
+  box: {
+    marginTop: 20,
+    padding: 16,
+    backgroundColor: '#1f2937',
+    borderRadius: 8,
+  },
+  desc: {
+    fontSize: 11,
+    lineHeight: 1.5,
+    color: '#d1d5db',
+    marginTop: 16,
+  },
+  qrWrap: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  qr: {
+    width: 120,
+    height: 120,
+    backgroundColor: '#fff',
+    padding: 8,
+  },
+  qrHint: {
+    marginTop: 10,
+    fontSize: 10,
+    color: '#9ca3af',
+    textAlign: 'center',
+  },
+  footer: {
+    position: 'absolute',
+    bottom: 20,
+    left: 40,
+    right: 40,
+    fontSize: 9,
+    color: '#6b7280',
+    textAlign: 'center',
+  },
+});
+
+function EventFlyerPDF({
+  event,
+  qrDataUrl,
+  registerUrl,
+}: {
+  event: any;
+  qrDataUrl: string | null;
+  registerUrl: string;
+}) {
+  const dateStr = event?.date
+    ? new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : '';
+
+  const price =
+    (event?.pricing_mode || 'event') === 'per_round'
+      ? 'Per-round pricing — see registration'
+      : event?.price != null
+        ? `$${Number(event.price).toFixed(2)} per player`
+        : '';
+
+  const imageUrl = event?.image_url || null;
+
+  return (
+    <Document>
+      <Page size="LETTER" style={flyerStyles.page}>
+        <Text style={flyerStyles.brand}>Fried Egg Events</Text>
+        <Text style={flyerStyles.title}>{event?.name || 'Golf Event'}</Text>
+
+        {imageUrl ? (
+  <View
+    style={{
+      width: '100%',
+      height: 220,
+      marginBottom: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}
+  >
+    <Image
+      src={imageUrl}
+      style={{
+        maxWidth: '100%',
+        maxHeight: 220,
+        objectFit: 'contain',
+      }}
+    />
+  </View>
+) : null}
+
+        <View style={flyerStyles.box}>
+          {dateStr ? (
+            <Text style={flyerStyles.row}>
+              <Text style={flyerStyles.label}>Date: </Text>
+              {dateStr}
+            </Text>
+          ) : null}
+          {event?.course ? (
+            <Text style={flyerStyles.row}>
+              <Text style={flyerStyles.label}>Course: </Text>
+              {event.course}
+            </Text>
+          ) : null}
+          {event?.location ? (
+            <Text style={flyerStyles.row}>
+              <Text style={flyerStyles.label}>Location: </Text>
+              {event.location}
+            </Text>
+          ) : null}
+          {price ? (
+            <Text style={flyerStyles.row}>
+              <Text style={flyerStyles.label}>Price: </Text>
+              {price}
+            </Text>
+          ) : null}
+          {event?.number_of_holes ? (
+            <Text style={flyerStyles.row}>
+              <Text style={flyerStyles.label}>Format: </Text>
+              {event.number_of_holes}-hole
+              {event.event_type ? ` · ${event.event_type}` : ''}
+            </Text>
+          ) : null}
+        </View>
+
+        {event?.description ? (
+          <Text style={flyerStyles.desc}>
+            {String(event.description).slice(0, 400)}
+          </Text>
+        ) : null}
+
+        <View style={flyerStyles.qrWrap}>
+          {qrDataUrl ? (
+            <Image src={qrDataUrl} style={flyerStyles.qr} />
+          ) : null}
+          <Text style={flyerStyles.qrHint}>Scan to register</Text>
+          <Text style={flyerStyles.qrHint}>{registerUrl}</Text>
+        </View>
+
+        <Text style={flyerStyles.footer}>friedeggevents.app</Text>
+      </Page>
+    </Document>
+  );
+}
 
 export default function EventDetailPage() {
   const [agreedToWaiver, setAgreedToWaiver] = useState(true);
@@ -32,6 +217,10 @@ export default function EventDetailPage() {
 
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
+  const [isEventAdmin, setIsEventAdmin] = useState(false);
+const [flyerQrDataUrl, setFlyerQrDataUrl] = useState<string | null>(null);
+  
+
   // ---------- Discount state ----------
   const [discountCode, setDiscountCode] = useState('');
   const [discountLoading, setDiscountLoading] = useState(false);
@@ -45,6 +234,12 @@ export default function EventDetailPage() {
     one_player_only: boolean;
   }>(null);
   const [discountError, setDiscountError] = useState('');
+
+  const [waitlistName, setWaitlistName] = useState('');
+const [waitlistEmail, setWaitlistEmail] = useState('');
+const [waitlistPhone, setWaitlistPhone] = useState('');
+const [waitlistSubmitting, setWaitlistSubmitting] = useState(false);
+const [waitlistDone, setWaitlistDone] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -60,53 +255,75 @@ export default function EventDetailPage() {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned);
   };
 
-  const fetchData = async () => {
-    setLoading(true);
+ const fetchData = async () => {
+  setLoading(true);
 
-    const { data: eventData } = await supabase
-      .from('tournaments')
-      .select('*')
-      .eq('id', parseInt(eventId))
-      .single();
+  const { data: eventData } = await supabase
+    .from('tournaments')
+    .select('*')
+    .eq('id', parseInt(eventId))
+    .single();
 
-    if (eventData) setEvent(eventData);
+  if (eventData) setEvent(eventData);
 
-    const { data: regData } = await supabase
-      .from('event_registrations')
-      .select('*')
-      .eq('event_id', parseInt(eventId));
+  const { data: regData } = await supabase
+    .from('event_registrations')
+    .select('*')
+    .eq('event_id', parseInt(eventId));
 
-    setRegistrations(regData || []);
+  setRegistrations(regData || []);
 
-    const { data: roundsData } = await supabase
-      .from('event_rounds')
-      .select('*')
+  const { data: roundsData } = await supabase
+    .from('event_rounds')
+    .select('*')
+    .eq('event_id', parseInt(eventId))
+    .order('sort_order', { ascending: true });
+
+  setRounds(roundsData || []);
+
+  const { data: feeData } = await supabase
+    .from('platform_settings')
+    .select('platform_fee')
+    .eq('id', 1)
+    .single();
+
+  if (feeData?.platform_fee !== undefined && feeData?.platform_fee !== null) {
+    setPlatformFee(Number(feeData.platform_fee));
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  setCurrentUser(user);
+
+  if (user && eventData) {
+    const isCreator = eventData.created_by === user.id;
+    const { data: adminRow } = await supabase
+      .from('event_admins')
+      .select('id')
       .eq('event_id', parseInt(eventId))
-      .order('sort_order', { ascending: true });
+      .or(`user_id.eq.${user.id},email.eq.${user.email}`)
+      .maybeSingle();
 
-    setRounds(roundsData || []);
+    setIsEventAdmin(isCreator || !!adminRow);
+  } else {
+    setIsEventAdmin(false);
+  }
 
-    const { data: feeData } = await supabase
-      .from('platform_settings')
-      .select('platform_fee')
-      .eq('id', 1)
-      .single();
+  setLoading(false);
+};
 
-    if (feeData?.platform_fee !== undefined && feeData?.platform_fee !== null) {
-      setPlatformFee(Number(feeData.platform_fee));
-    }
+useEffect(() => {
+  fetchData();
+}, [eventId]);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    setCurrentUser(user);
-
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, [eventId]);
+useEffect(() => {
+  if (!eventId || typeof window === 'undefined') return;
+  const url = `${window.location.origin}/event/${eventId}`;
+  QRCode.toDataURL(url, { width: 280, margin: 1, errorCorrectionLevel: 'M' })
+    .then(setFlyerQrDataUrl)
+    .catch((e) => console.error('Flyer QR failed', e));
+}, [eventId]);
 
   // Force single player when a discount is applied
   useEffect(() => {
@@ -585,6 +802,18 @@ export default function EventDetailPage() {
     : false;
 
   const isPerRound = (event?.pricing_mode || 'event') === 'per_round';
+  const maxPlayers =
+  event?.max_players != null && Number(event.max_players) > 0
+    ? Number(event.max_players)
+    : null;
+
+const registeredCount = registrations.length;
+
+const isSoldOut =
+  maxPlayers != null && registeredCount >= maxPlayers;
+
+const spotsLeft =
+  maxPlayers != null ? Math.max(0, maxPlayers - registeredCount) : null;
 
   const includedRounds = isPerRound
     ? []
@@ -731,11 +960,58 @@ export default function EventDetailPage() {
     setDiscountCode('');
     setDiscountError('');
   };
+  const handleJoinWaitlist = async () => {
+  if (!waitlistName.trim() || !waitlistEmail.trim()) {
+    return alert('Name and email are required');
+  }
+  if (!isValidEmail(waitlistEmail)) {
+    return alert('Enter a valid email');
+  }
+
+  setWaitlistSubmitting(true);
+  try {
+    const { error } = await supabase.from('event_waitlist').insert({
+      event_id: parseInt(eventId),
+      name: waitlistName.trim(),
+      email: waitlistEmail.trim().toLowerCase(),
+      phone: waitlistPhone.trim() || null,
+    });
+
+    if (error) throw error;
+
+// Notify organizers (non-blocking)
+fetch('/api/send-waitlist-notice', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    eventId: parseInt(eventId),
+    name: waitlistName.trim(),
+    email: waitlistEmail.trim().toLowerCase(),
+    phone: waitlistPhone.trim() || null,
+  }),
+}).catch((e) => console.error('Waitlist notice failed:', e));
+
+setWaitlistDone(true);
+setWaitlistName('');
+setWaitlistEmail('');
+setWaitlistPhone('');
+  } catch (e: any) {
+    console.error(e);
+    alert(e.message || 'Could not join waitlist');
+  } finally {
+    setWaitlistSubmitting(false);
+  }
+};
 
   const handleRegisterClick = async () => {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+  if (isSoldOut) {
+    alert('This event is sold out. You can join the waitlist instead.');
+    return;
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
     if (!user) {
       router.push(`/login?redirect=/event/${eventId}`);
       return;
@@ -912,6 +1188,36 @@ export default function EventDetailPage() {
         >
           ← Back to All Events
         </button>
+        {isEventAdmin && event && (
+  <div className="flex items-center gap-2 justify-center">
+    <PDFDownloadLink
+      document={
+        <EventFlyerPDF
+          event={event}
+          qrDataUrl={flyerQrDataUrl}
+          registerUrl={
+            typeof window !== 'undefined'
+              ? `${window.location.origin}/event/${eventId}`
+              : `https://friedeggevents.app/event/${eventId}`
+          }
+        />
+      }
+      fileName={`${String(event.name || 'event')
+        .replace(/[^a-z0-9]+/gi, '-')
+        .replace(/^-|-$/g, '')}-flyer.pdf`}
+      className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 px-5 py-3 rounded-2xl font-semibold text-sm"
+    >
+      {({ loading }) => (loading ? 'Preparing…' : '📄 Create Flyer')}
+    </PDFDownloadLink>
+    <span
+      title="Create a PDF flyer for this event"
+      className="text-gray-400 text-sm cursor-help select-none"
+      aria-label="Create a PDF flyer for this event"
+    >
+      ⓘ
+    </span>
+  </div>
+)}
 
         {showSuccessMessage && (
           <div className="mb-8 bg-green-900/50 border border-green-600 rounded-3xl p-8 text-center">
@@ -961,6 +1267,7 @@ export default function EventDetailPage() {
               )}
             </div>
           </div>
+          
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 p-10 border-b border-gray-700">
             <div>
@@ -1045,6 +1352,7 @@ export default function EventDetailPage() {
               </div>
             </div>
           )}
+          
 
           {event.flights && event.flights.length > 0 && (
             <div className="p-10 border-b border-gray-700">
@@ -1074,12 +1382,71 @@ export default function EventDetailPage() {
           <div className="p-10 flex flex-col sm:flex-row gap-4">
             {registrationOpen ? (
               <>
-                <button
-                  onClick={handleRegisterClick}
-                  className="flex-1 bg-green-600 hover:bg-green-700 py-5 rounded-2xl text-xl font-semibold transition-colors"
-                >
-                  Register for this Event
-                </button>
+                {maxPlayers != null && (
+  <p className="text-sm text-gray-400 mb-3 text-center">
+    {isSoldOut
+      ? 'Sold out'
+      : `${spotsLeft} spot${spotsLeft === 1 ? '' : 's'} left · ${registeredCount}/${maxPlayers}`}
+  </p>
+)}
+
+{isSoldOut ? (
+  <div className="bg-gray-800 border border-amber-500/40 rounded-3xl p-6 space-y-4 max-w-md mx-auto w-full">
+    <div>
+      <h3 className="text-xl font-semibold text-amber-300">Sold Out</h3>
+      <p className="text-sm text-gray-400 mt-1">
+        Join the waitlist and we’ll reach out if a spot opens.
+      </p>
+    </div>
+
+    {waitlistDone ? (
+      <p className="text-emerald-400 font-medium">
+        You’re on the waitlist. We’ll email you if a spot opens.
+      </p>
+    ) : (
+      <>
+        <input
+          type="text"
+          placeholder="Full name"
+          value={waitlistName}
+          onChange={(e) => setWaitlistName(e.target.value)}
+          className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+        />
+        <input
+          type="email"
+          placeholder="Email"
+          value={waitlistEmail}
+          onChange={(e) => setWaitlistEmail(e.target.value)}
+          className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+        />
+        <input
+          type="tel"
+          placeholder="Phone (optional)"
+          value={waitlistPhone}
+          onChange={(e) => setWaitlistPhone(e.target.value)}
+          className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+        />
+        <button
+          type="button"
+          onClick={handleJoinWaitlist}
+          disabled={waitlistSubmitting}
+          className="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
+        >
+          {waitlistSubmitting ? 'Submitting…' : 'Join Waitlist'}
+        </button>
+      </>
+    )}
+  </div>
+) : registrationOpen ? (
+  <button
+    onClick={handleRegisterClick}
+    className="w-full bg-green-600 hover:bg-green-700 py-5 rounded-3xl text-xl font-semibold"
+  >
+    Register
+  </button>
+) : (
+  <p className="text-gray-400 text-center">Registration is not open yet.</p>
+)}
 
                 <button
                   onClick={viewRegisteredPlayers}
@@ -1087,6 +1454,8 @@ export default function EventDetailPage() {
                 >
                   View Registered Players
                 </button>
+
+
 
                 <button
                   onClick={handleShare}
@@ -1258,25 +1627,23 @@ export default function EventDetailPage() {
                         </button>
                       </div>
                     ) : (
-                      <div className="flex gap-3">
-                        <input
-                          type="text"
-                          value={discountCode}
-                          onChange={(e) =>
-                            setDiscountCode(e.target.value.toUpperCase())
-                          }
-                          placeholder="Enter code"
-                          className="flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
-                        />
-                        <button
-                          type="button"
-                          onClick={applyDiscountCode}
-                          disabled={discountLoading || !discountCode.trim()}
-                          className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-5 py-3 rounded-xl font-medium"
-                        >
-                          {discountLoading ? '…' : 'Apply'}
-                        </button>
-                      </div>
+                      <div className="flex flex-col sm:flex-row gap-3">
+  <input
+    type="text"
+    value={discountCode}
+    onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
+    placeholder="Enter code"
+    className="w-full sm:flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
+  />
+  <button
+    type="button"
+    onClick={applyDiscountCode}
+    disabled={discountLoading || !discountCode.trim()}
+    className="w-full sm:w-auto bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-5 py-3 rounded-xl font-medium shrink-0"
+  >
+    {discountLoading ? '…' : 'Apply'}
+  </button>
+</div>
                     )}
 
                     {discountError && (
@@ -1571,25 +1938,23 @@ export default function EventDetailPage() {
                         </button>
                       </div>
                     ) : (
-                      <div className="flex gap-3">
-                        <input
-                          type="text"
-                          value={discountCode}
-                          onChange={(e) =>
-                            setDiscountCode(e.target.value.toUpperCase())
-                          }
-                          placeholder="Enter code"
-                          className="flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
-                        />
-                        <button
-                          type="button"
-                          onClick={applyDiscountCode}
-                          disabled={discountLoading || !discountCode.trim()}
-                          className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-5 py-3 rounded-xl font-medium"
-                        >
-                          {discountLoading ? '…' : 'Apply'}
-                        </button>
-                      </div>
+                      <div className="flex flex-col sm:flex-row gap-3">
+  <input
+    type="text"
+    value={discountCode}
+    onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
+    placeholder="Enter code"
+    className="w-full sm:flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
+  />
+  <button
+    type="button"
+    onClick={applyDiscountCode}
+    disabled={discountLoading || !discountCode.trim()}
+    className="w-full sm:w-auto bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-5 py-3 rounded-xl font-medium shrink-0"
+  >
+    {discountLoading ? '…' : 'Apply'}
+  </button>
+</div>
                     )}
 
                     {discountError && (

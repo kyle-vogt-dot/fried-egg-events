@@ -130,12 +130,16 @@ const [adminPerms, setAdminPerms] = useState({
 
       await fetchAdmins();
 
-      const { data: roundsData } = await supabase
-        .from('event_rounds')
-        .select('id, name, email, user_id, permissions')
-        .eq('event_id', parseInt(eventId))
-        .order('sort_order', { ascending: true });
-      setRounds(roundsData || []);
+      const { data: roundsData, error: roundsError } = await supabase
+  .from('event_rounds')
+  .select('*')
+  .eq('event_id', parseInt(eventId))
+  .order('sort_order', { ascending: true });
+
+if (roundsError) {
+  console.error('Rounds load error:', roundsError);
+}
+setRounds(roundsData || []);
 
       const { data: feeData } = await supabase
         .from('platform_settings')
@@ -177,8 +181,8 @@ const [adminPerms, setAdminPerms] = useState({
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-        <div className="text-center">
+      <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8 overflow-x-hidden">
+  <div className="max-w-6xl mx-auto w-full">
           <div className="w-12 h-12 border-4 border-gray-700 border-t-blue-500 rounded-full animate-spin mx-auto mb-6"></div>
           <p className="text-gray-400">Loading event details...</p>
         </div>
@@ -532,12 +536,16 @@ const [adminPerms, setAdminPerms] = useState({
     return;
   }
 
-  const { data } = await supabase
-    .from('event_rounds')
-    .select('*')
-    .eq('event_id', parseInt(eventId))
-    .order('sort_order', { ascending: true });
-  setRounds(data || []);
+  const { data: roundsData, error: roundsError } = await supabase
+  .from('event_rounds')
+  .select('*')
+  .eq('event_id', parseInt(eventId))
+  .order('sort_order', { ascending: true });
+
+if (roundsError) {
+  console.error('Rounds load error:', roundsError);
+}
+setRounds(roundsData || []);
 
   setNewRound({
     name: '',
@@ -595,7 +603,7 @@ const [adminPerms, setAdminPerms] = useState({
   const teamSize = teamSizeFromEventType(event.event_type || '');
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-8">
+    <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8 overflow-x-hidden">
       <div className="max-w-6xl mx-auto">
         <button
           onClick={() => router.back()}
@@ -706,66 +714,55 @@ const [adminPerms, setAdminPerms] = useState({
         </div>
 
         {/* Pricing Mode */}
-        <div className="flex flex-wrap items-center gap-4 bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 mt-8 mb-2">
-          <div className="flex items-center gap-3 text-sm shrink-0">
-            <span
-              className={
-                (event.pricing_mode || 'event') === 'event'
-                  ? 'text-white'
-                  : 'text-gray-500'
-              }
-            >
-              Event
-            </span>
-            <button
-              type="button"
-              onClick={() =>
-                handleEventChange(
-                  'pricing_mode',
-                  (event.pricing_mode || 'event') === 'event'
-                    ? 'per_round'
-                    : 'event'
-                )
-              }
-              className={`relative w-12 h-7 rounded-full transition-colors ${
-                event.pricing_mode === 'per_round' ? 'bg-blue-600' : 'bg-gray-600'
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 left-0.5 w-6 h-6 rounded-full bg-white transition-transform ${
-                  event.pricing_mode === 'per_round'
-                    ? 'translate-x-5'
-                    : 'translate-x-0'
-                }`}
-              />
-            </button>
-            <span
-              className={
-                event.pricing_mode === 'per_round' ? 'text-white' : 'text-gray-500'
-              }
-            >
-              Per-round
-            </span>
-            <button
-              type="button"
-              onClick={() =>
-                alert(
-                  'EVENT PRICE\nOne fee covers the event. Optional extra rounds can cost more.\nBest when most players play the same main round.\n\nPER-ROUND PRICE\nPlayers only pay for the rounds they select. No base event fee.\nBest when players can choose 1 of several rounds (e.g. morning / afternoon / evening).'
-                )
-              }
-              className="w-6 h-6 rounded-full bg-gray-700 hover:bg-gray-600 text-xs font-bold text-gray-300"
-              title="What do these mean?"
-            >
-              ⓘ
-            </button>
-          </div>
-
-          <p className="text-sm text-gray-400 flex-1 min-w-0">
-            {(event.pricing_mode || 'event') === 'event'
-              ? 'Players pay the event price. Extra rounds only if marked “charge separately.”'
-              : 'Event price ignored. Players only pay for rounds they select.'}
-          </p>
-        </div>
+<div className="bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 mt-8 mb-2">
+  <div className="flex items-center justify-center gap-3 text-sm">
+    <span
+      className={
+        (event.pricing_mode || 'event') === 'event'
+          ? 'text-white'
+          : 'text-gray-500'
+      }
+    >
+      Event
+    </span>
+    <button
+      type="button"
+      onClick={() =>
+        handleEventChange(
+          'pricing_mode',
+          (event.pricing_mode || 'event') === 'event' ? 'per_round' : 'event'
+        )
+      }
+      className={`relative w-14 h-8 rounded-full transition-colors ${
+        (event.pricing_mode || 'event') === 'per_round'
+          ? 'bg-blue-600'
+          : 'bg-gray-600'
+      }`}
+    >
+      <span
+        className={`absolute top-1 left-1 w-6 h-6 rounded-full bg-white transition-transform ${
+          (event.pricing_mode || 'event') === 'per_round'
+            ? 'translate-x-6'
+            : 'translate-x-0'
+        }`}
+      />
+    </button>
+    <span
+      className={
+        (event.pricing_mode || 'event') === 'per_round'
+          ? 'text-white'
+          : 'text-gray-500'
+      }
+    >
+      Per-round
+    </span>
+  </div>
+  <p className="text-xs text-gray-400 text-center mt-3 leading-relaxed">
+    {(event.pricing_mode || 'event') === 'per_round'
+      ? 'Event price ignored. Players only pay for rounds they select.'
+      : 'Players pay the event price (plus any rounds marked pay separately).'}
+  </p>
+</div>
 
         {/* Four Buttons */}
         <div className="flex flex-wrap gap-3 mt-8">
@@ -1277,6 +1274,27 @@ const [adminPerms, setAdminPerms] = useState({
                   : ' (4-man)'}
             </p>
           </div>
+          <div>
+  <label className="block text-sm text-gray-400 mb-2">
+    Max players
+  </label>
+  <input
+    type="number"
+    min="1"
+    value={event.max_players ?? ''}
+    onChange={(e) =>
+      handleEventChange(
+        'max_players',
+        e.target.value === '' ? null : parseInt(e.target.value, 10) || null
+      )
+    }
+    placeholder="e.g. 40"
+    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+  />
+  <p className="text-xs text-gray-500 mt-2">
+    Registration stops at this number (Sold Out). Leave blank for unlimited.
+  </p>
+</div>
 
           <div>
             <label className="block text-sm text-gray-400 mb-2">

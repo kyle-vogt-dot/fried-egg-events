@@ -34,7 +34,6 @@ function isCheckedInForRound(reg: any, roundId: number | 'all') {
   const map = reg.round_checkins || {};
   if (map[String(roundId)] != null) return !!map[String(roundId)];
   if (map[roundId as number] != null) return !!map[roundId as number];
-  // fallback for older data
   return !!reg.checked_in;
 }
 
@@ -67,6 +66,10 @@ export default function EventCheckInPage() {
   const [newPlayerName, setNewPlayerName] = useState('');
   const [newPlayerEmail, setNewPlayerEmail] = useState('');
   const [newPlayerTeam, setNewPlayerTeam] = useState('');
+  // free | cash | link
+  const [addChargeType, setAddChargeType] = useState<'free' | 'cash' | 'link'>('cash');
+  const [addingPlayer, setAddingPlayer] = useState(false);
+
   const [subName, setSubName] = useState('');
   const [subEmail, setSubEmail] = useState('');
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, any>>({});
@@ -86,6 +89,23 @@ export default function EventCheckInPage() {
     if (selectedRoundId === 'all') return null;
     return rounds.find((r) => r.id === selectedRoundId) || null;
   }, [rounds, selectedRoundId]);
+
+  const isPerRound = (event?.pricing_mode || 'event') === 'per_round';
+
+  // Estimate registration charge for admin-add (event or selected round)
+  const estimateRegCharge = () => {
+    const fee = platformFee || 0;
+    if (isPerRound) {
+      if (selectedRoundId !== 'all' && selectedRound) {
+        return Number(selectedRound.price || 0) + fee;
+      }
+      // all rounds selected → sum round prices + fee per round
+      if (rounds.length > 0) {
+        return rounds.reduce((s, r) => s + Number(r.price || 0) + fee, 0);
+      }
+    }
+    return Number(event?.price || 0) + fee;
+  };
 
   const filteredRegistrations = useMemo(() => {
     let list = registrations;
@@ -276,30 +296,138 @@ export default function EventCheckInPage() {
 
   const handleAddPlayer = async () => {
     if (!newPlayerName.trim()) return alert('Player name is required');
+    if (addChargeType === 'link' && !newPlayerEmail.trim()) {
+      return alert('Email is required to send a payment link');
+    }
 
-    const selected_round_ids =
-      selectedRoundId !== 'all'
-        ? [selectedRoundId as number]
-        : rounds.map((r) => r.id);
+    setAddingPlayer(true);
+    try {
+      const selected_round_ids =
+        selectedRoundId !== 'all'
+          ? [selectedRoundId as number]
+          : rounds.map((r) => r.id);
 
-    const { error } = await supabase.from('event_registrations').insert({
-      event_id: parseInt(eventId),
-      player_name: newPlayerName.trim(),
-      player_email: newPlayerEmail.trim() || null,
-      team_name: newPlayerTeam.trim() || null,
-      paid: false,
-      checked_in: false,
-      selected_round_ids,
-      round_checkins: {},
-    });
-    if (error) alert('Failed to add player: ' + error.message);
-    else {
-      fetchRegistrations();
+      const chargeAmount = estimateRegCharge();
+      const isCash = addChargeType === 'cash';
+      const isFree = addChargeType === 'free';
+      const isLink = addChargeType === 'link';
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const { data: inserted, error } = await supabase
+        .from('event_registrations')
+        .insert({
+          event_id: parseInt(eventId),
+          player_name: newPlayerName.trim(),
+          player_email: newPlayerEmail.trim() || null,
+          team_name: newPlayerTeam.trim() || null,
+          paid: isCash, // link stays unpaid until they pay; free = unpaid/comp
+          checked_in: false,
+          selected_round_ids,
+          round_checkins: {},
+          amount_paid: isCash ? chargeAmount : null,
+          payment_method: isCash ? 'cash' : isFree ? 'comp' : null,
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Document cash on income so books + platform fee visibility stay honest
+      if (isCash && chargeAmount > 0) {
+        try {
+          await supabase.from('event_income_entries').insert({
+            event_id: parseInt(eventId),
+            label: `Paid cash – ${newPlayerName.trim()}`,
+            category: 'registration',
+            amount: chargeAmount,
+            created_by: user?.id || null,
+          });
+        } catch (incErr) {
+          console.warn('Income entry failed (reg still created):', incErr);
+        }
+      }
+
+      // Email Stripe payment link (same pattern as add-ons)
+      if (isLink && inserted) {
+        const baseUrl =
+          process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+
+        const checkoutRes = await fetch('/api/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: chargeAmount,
+            player_name: newPlayerName.trim(),
+            email: newPlayerEmail.trim(),
+            description: `Registration – ${event?.name || 'event'}`,
+            event_name: event?.name,
+            event_id: event?.id || parseInt(eventId),
+            type: 'registration',
+            registration_id: inserted.id,
+            success_url: `${baseUrl}/api/confirm-registration-payment?registration_id=${inserted.id}&event_id=${eventId}`,
+            cancel_url: `${baseUrl}/event/${eventId}/check-in`,
+          }),
+        });
+
+        const checkoutData = await checkoutRes.json();
+        if (!checkoutRes.ok || !checkoutData.url) {
+          throw new Error(
+            checkoutData.error ||
+              'Player added, but payment link failed. You can retry from their row later.'
+          );
+        }
+
+        // Prefer registration email API if you have one; fall back to addon email shape
+        const emailRes = await fetch('/api/send-addon-payment-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: newPlayerEmail.trim(),
+            name: newPlayerName.trim(),
+            eventName: event?.name || 'Event',
+            amount: chargeAmount,
+            paymentUrl: checkoutData.url,
+          }),
+        });
+
+        if (!emailRes.ok) {
+          const emailData = await emailRes.json().catch(() => ({}));
+          alert(
+            `Player added. Payment link created but email failed: ${
+              emailData.error || 'unknown'
+            }\n\nLink: ${checkoutData.url}`
+          );
+        } else {
+          alert(
+            `✅ ${newPlayerName.trim()} added. Payment link ($${chargeAmount.toFixed(
+              2
+            )}) emailed to ${newPlayerEmail.trim()}`
+          );
+        }
+      } else if (isCash) {
+        alert(
+          `✅ ${newPlayerName.trim()} added as Paid cash ($${chargeAmount.toFixed(
+            2
+          )}). Logged on Income.`
+        );
+      } else {
+        alert(`✅ ${newPlayerName.trim()} added (comp / free).`);
+      }
+
+      await fetchRegistrations();
       setShowAddPlayerModal(false);
       setNewPlayerName('');
       setNewPlayerEmail('');
       setNewPlayerTeam('');
-      alert('Player added successfully!');
+      setAddChargeType('cash');
+    } catch (e: any) {
+      console.error(e);
+      alert(e.message || 'Failed to add player');
+    } finally {
+      setAddingPlayer(false);
     }
   };
 
@@ -353,7 +481,9 @@ export default function EventCheckInPage() {
     if (!currentPayReg) return;
 
     const addonTotals =
-      selectedQuantities[currentPayReg.id] || currentPayReg.addon_quantities || {};
+      selectedQuantities[currentPayReg.id] ||
+      currentPayReg.addon_quantities ||
+      {};
 
     const addonCost = addons.reduce((sum: number, addon: any) => {
       const qty = addonTotals[addon.id] || 0;
@@ -376,7 +506,8 @@ export default function EventCheckInPage() {
       .eq('id', currentPayReg.id);
 
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+      const baseUrl =
+        process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
 
       const checkoutRes = await fetch('/api/create-checkout-session', {
         method: 'POST',
@@ -442,7 +573,6 @@ export default function EventCheckInPage() {
       .from('event_registrations')
       .update({
         round_checkins: existing,
-        // keep legacy field in sync with the round you're viewing
         checked_in: !currentlyIn,
       })
       .eq('id', reg.id);
@@ -484,8 +614,10 @@ export default function EventCheckInPage() {
     isCheckedInForRound(r, selectedRoundId)
   ).length;
 
+  const addChargePreview = estimateRegCharge();
+
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-8">
+    <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8">
       <div className="max-w-6xl mx-auto">
         <button
           onClick={() => router.back()}
@@ -496,8 +628,8 @@ export default function EventCheckInPage() {
 
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
           <div>
-            <h1 className="text-4xl font-bold mb-2">{event?.name}</h1>
-            <p className="text-gray-400">
+            <h1 className="text-3xl sm:text-4xl font-bold mb-2">{event?.name}</h1>
+            <p className="text-gray-400 text-sm sm:text-base">
               Player Check-In · {checkedInCount}/{filteredRegistrations.length}{' '}
               checked in
               {event?.course ? ` · ${event.course}` : ''}
@@ -542,16 +674,15 @@ export default function EventCheckInPage() {
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <h2 className="text-3xl font-semibold">Player Check-in</h2>
+          <h2 className="text-2xl sm:text-3xl font-semibold">Player Check-in</h2>
 
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
             <button
               onClick={fetchRegistrations}
-              className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 px-6 py-3 rounded-2xl font-medium transition-colors"
+              className="flex items-center gap-2 bg-gray-700 hover:bg-gray-600 px-4 sm:px-6 py-3 rounded-2xl font-medium text-sm sm:text-base"
             >
               🔄 Refresh
             </button>
-
             <button
               onClick={async () => {
                 for (const [regId, quantities] of Object.entries(
@@ -565,16 +696,16 @@ export default function EventCheckInPage() {
                 await fetchRegistrations();
                 alert('✅ Changes saved and table refreshed.');
               }}
-              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 px-6 py-3 rounded-2xl font-medium transition-colors"
+              className="flex items-center gap-2 bg-green-600 hover:bg-green-700 px-4 sm:px-6 py-3 rounded-2xl font-medium text-sm sm:text-base"
             >
               💾 Save
             </button>
             <button
-  onClick={() => router.push(`/event/${eventId}/contacts`)}
-  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 px-6 py-3 rounded-2xl font-medium transition-colors"
->
-  📇 Contacts
-</button>
+              onClick={() => router.push(`/event/${eventId}/contacts`)}
+              className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 px-4 sm:px-6 py-3 rounded-2xl font-medium text-sm sm:text-base"
+            >
+              📇 Contacts
+            </button>
           </div>
         </div>
 
@@ -586,7 +717,6 @@ export default function EventCheckInPage() {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="flex-1 bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4 focus:outline-none focus:border-blue-500 text-base"
           />
-
           <button
             onClick={() => setShowAddPlayerModal(true)}
             className="bg-blue-600 hover:bg-blue-700 px-8 py-4 rounded-3xl font-medium flex items-center justify-center gap-2 whitespace-nowrap"
@@ -602,31 +732,31 @@ export default function EventCheckInPage() {
               : 'No players registered for this round.'}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse">
+          <div className="overflow-x-auto -mx-4 sm:mx-0">
+            <table className="w-full border-collapse min-w-[640px]">
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-900">
-                  <th className="text-left py-3 px-6 font-medium">Player Name</th>
-                  <th className="text-left py-3 px-6 font-medium">Team</th>
-                  <th className="text-center py-3 px-6 font-medium">Handicap</th>
-                  <th className="text-center py-3 px-6 font-medium">
-                    Starting Hole
-                  </th>
+                  <th className="text-left py-3 px-3 sm:px-6 font-medium">Player</th>
+                  <th className="text-left py-3 px-3 sm:px-6 font-medium">Team</th>
+                  <th className="text-center py-3 px-3 sm:px-6 font-medium">HCP</th>
+                  <th className="text-center py-3 px-3 sm:px-6 font-medium">Hole</th>
                   {showAddons &&
                     addons.map((addon: any) => (
                       <th
                         key={addon.id}
-                        className="text-center py-3 px-6 font-medium"
+                        className="text-center py-3 px-3 sm:px-6 font-medium"
                       >
                         {addon.name}
                       </th>
                     ))}
                   {showAddons && (
-                    <th className="text-center py-3 px-6 font-medium">
-                      Add-on Total
+                    <th className="text-center py-3 px-3 sm:px-6 font-medium">
+                      Add-on
                     </th>
                   )}
-                  <th className="text-center py-3 px-6 font-medium">Actions</th>
+                  <th className="text-center py-3 px-3 sm:px-6 font-medium">
+                    Actions
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -647,13 +777,22 @@ export default function EventCheckInPage() {
                       key={reg.id}
                       className="border-b border-gray-700 hover:bg-gray-800/50"
                     >
-                      <td className="py-3 px-6 font-medium">
-                        {reg.player_name || 'Unknown'}
+                      <td className="py-3 px-3 sm:px-6 font-medium">
+                        <div>{reg.player_name || 'Unknown'}</div>
+                        {reg.payment_method === 'cash' && (
+                          <div className="text-xs text-emerald-400">Paid cash</div>
+                        )}
+                        {reg.payment_method === 'comp' && (
+                          <div className="text-xs text-gray-500">Comp</div>
+                        )}
+                        {!reg.paid && reg.payment_method !== 'comp' && (
+                          <div className="text-xs text-amber-400">Unpaid</div>
+                        )}
                       </td>
-                      <td className="py-3 px-6 text-gray-400">
+                      <td className="py-3 px-3 sm:px-6 text-gray-400">
                         {reg.team_name || '—'}
                       </td>
-                      <td className="py-3 px-6 text-center">
+                      <td className="py-3 px-3 sm:px-6 text-center">
                         {showHandicaps ? (
                           <input
                             type="number"
@@ -669,13 +808,13 @@ export default function EventCheckInPage() {
                                 .eq('id', reg.id);
                               fetchRegistrations();
                             }}
-                            className="w-20 bg-gray-700 border border-gray-600 rounded-xl text-center py-2 focus:outline-none focus:border-blue-500"
+                            className="w-16 sm:w-20 bg-gray-700 border border-gray-600 rounded-xl text-center py-2"
                           />
                         ) : (
                           <span className="text-gray-500">N/A</span>
                         )}
                       </td>
-                      <td className="py-3 px-6 text-center text-teal-300 font-medium">
+                      <td className="py-3 px-3 sm:px-6 text-center text-teal-300 font-medium">
                         {startingHole}
                       </td>
 
@@ -686,7 +825,10 @@ export default function EventCheckInPage() {
                             !!reg.paid_addons && editingAddonRegId !== reg.id;
 
                           return (
-                            <td key={addon.id} className="py-3 px-6 text-center">
+                            <td
+                              key={addon.id}
+                              className="py-3 px-3 sm:px-6 text-center"
+                            >
                               {isLocked ? (
                                 <span className="text-gray-300 font-medium">
                                   {qty > 0 ? qty : '—'}
@@ -740,35 +882,32 @@ export default function EventCheckInPage() {
                         })}
 
                       {showAddons && (
-                        <td className="py-3 px-6 text-center text-gray-300">
+                        <td className="py-3 px-3 sm:px-6 text-center text-gray-300">
                           {addonCost > 0 ? `$${addonCost.toFixed(2)}` : '—'}
                         </td>
                       )}
 
-                      <td className="py-3 px-6">
-                        <div className="flex flex-wrap items-center justify-center gap-2">
+                      {/* Actions — compact row for mobile */}
+                      <td className="py-3 px-2 sm:px-4">
+                        <div className="flex flex-row flex-wrap items-center justify-end gap-1.5 sm:gap-2">
                           {showAddons &&
                             addonCost > 0 &&
                             (reg.paid_addons &&
                             editingAddonRegId !== reg.id ? (
-                              <button
-                                disabled
-                                className="bg-gray-600 text-gray-300 px-4 py-2 rounded-2xl text-sm font-medium cursor-not-allowed opacity-70"
-                              >
+                              <span className="bg-gray-600 text-gray-300 px-2.5 py-1.5 rounded-xl text-xs font-medium opacity-70">
                                 ✓ Paid
-                              </button>
+                              </span>
                             ) : (
                               <button
                                 onClick={() => openPaymentModal(reg)}
-                                className="bg-amber-600 hover:bg-amber-700 px-4 py-2 rounded-2xl text-sm font-medium text-white"
+                                className="bg-amber-600 hover:bg-amber-700 px-2.5 py-1.5 rounded-xl text-xs font-medium text-white whitespace-nowrap"
                               >
                                 Pay ${addonCost.toFixed(2)}
                               </button>
                             ))}
 
-                          {showAddons &&
-                            reg.paid_addons &&
-                            (editingAddonRegId === reg.id ? (
+                          {showAddons && reg.paid_addons && (
+                            editingAddonRegId === reg.id ? (
                               <button
                                 onClick={async () => {
                                   const quantities =
@@ -788,9 +927,9 @@ export default function EventCheckInPage() {
                                     'Add-ons updated. Player must pay again if total changed.'
                                   );
                                 }}
-                                className="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-2xl text-sm font-medium text-white"
+                                className="bg-blue-600 hover:bg-blue-700 px-2.5 py-1.5 rounded-xl text-xs font-medium text-white"
                               >
-                                Save Edit
+                                Save
                               </button>
                             ) : (
                               <button
@@ -807,21 +946,22 @@ export default function EventCheckInPage() {
                                   }));
                                   setEditingAddonRegId(reg.id);
                                 }}
-                                className="text-amber-400 hover:text-amber-300 text-sm font-medium px-2 py-2"
+                                className="text-amber-400 hover:text-amber-300 text-xs font-medium px-1.5 py-1.5"
                               >
                                 Edit
                               </button>
-                            ))}
+                            )
+                          )}
 
                           <button
                             onClick={() => toggleCheckIn(reg)}
-                            className={`px-5 py-2 rounded-2xl text-sm font-medium transition-all text-white ${
+                            className={`px-2.5 py-1.5 rounded-xl text-xs font-medium text-white whitespace-nowrap ${
                               isCheckedIn
                                 ? 'bg-green-600 hover:bg-red-600'
                                 : 'bg-blue-600 hover:bg-blue-700'
                             }`}
                           >
-                            {isCheckedIn ? '✓ Checked In' : 'Check In'}
+                            {isCheckedIn ? '✓ In' : 'Check In'}
                           </button>
 
                           <button
@@ -831,9 +971,9 @@ export default function EventCheckInPage() {
                               setCustomRefundAmount('');
                               setShowRefundModal(true);
                             }}
-                            className="text-red-400 hover:text-red-500 text-sm font-medium px-4 py-2"
+                            className="text-red-400 hover:text-red-500 text-xs font-medium px-1.5 py-1.5 whitespace-nowrap"
                           >
-                            Remove / Refund
+                            Remove
                           </button>
 
                           <button
@@ -843,9 +983,9 @@ export default function EventCheckInPage() {
                               setSubEmail('');
                               setShowSubModal(true);
                             }}
-                            className="text-blue-400 hover:text-blue-500 text-sm font-medium px-2 py-2"
+                            className="text-blue-400 hover:text-blue-500 text-xs font-medium px-1.5 py-1.5 whitespace-nowrap"
                           >
-                            Sub Player
+                            Sub
                           </button>
                         </div>
                       </td>
@@ -858,7 +998,7 @@ export default function EventCheckInPage() {
         )}
       </div>
 
-      {/* Remove / Refund Modal */}
+      {/* Remove / Refund Modal — unchanged logic */}
       {showRefundModal && refundReg && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-900 rounded-3xl p-8 max-w-md w-full space-y-6">
@@ -940,11 +1080,21 @@ export default function EventCheckInPage() {
         </div>
       )}
 
-      {/* Add Player Modal */}
+      {/* Add Player Modal — with charge options */}
       {showAddPlayerModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-900 rounded-3xl p-8 max-w-md w-full">
-            <h3 className="text-2xl font-semibold mb-6">Add Player</h3>
+          <div className="bg-gray-900 rounded-3xl p-6 sm:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-2xl font-semibold mb-2">Add Player</h3>
+            <p className="text-sm text-gray-400 mb-6">
+              Est. charge:{' '}
+              <span className="text-emerald-400 font-medium">
+                ${addChargePreview.toFixed(2)}
+              </span>
+              <span className="text-gray-500">
+                {' '}
+                (includes ${platformFee.toFixed(2)} platform fee)
+              </span>
+            </p>
             <div className="space-y-4">
               <input
                 type="text"
@@ -955,7 +1105,7 @@ export default function EventCheckInPage() {
               />
               <input
                 type="email"
-                placeholder="Email (optional)"
+                placeholder="Email (required for payment link)"
                 value={newPlayerEmail}
                 onChange={(e) => setNewPlayerEmail(e.target.value)}
                 className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
@@ -967,12 +1117,58 @@ export default function EventCheckInPage() {
                 onChange={(e) => setNewPlayerTeam(e.target.value)}
                 className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
               />
+
+              <div className="space-y-2">
+                <p className="text-sm text-gray-400">Payment</p>
+                {(
+                  [
+                    {
+                      id: 'cash',
+                      label: '💵 Paid cash',
+                      hint: 'Marks paid + logs on Income',
+                    },
+                    {
+                      id: 'link',
+                      label: '📧 Send payment link',
+                      hint: 'Same flow as add-ons email',
+                    },
+                    {
+                      id: 'free',
+                      label: '🆓 Comp / free',
+                      hint: 'No charge (document as comp)',
+                    },
+                  ] as const
+                ).map((opt) => (
+                  <label
+                    key={opt.id}
+                    className={`flex items-start gap-3 p-4 rounded-2xl border cursor-pointer ${
+                      addChargeType === opt.id
+                        ? 'border-blue-500 bg-blue-950/40'
+                        : 'border-gray-700'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="addCharge"
+                      className="mt-1"
+                      checked={addChargeType === opt.id}
+                      onChange={() => setAddChargeType(opt.id)}
+                    />
+                    <span>
+                      <span className="font-medium block">{opt.label}</span>
+                      <span className="text-xs text-gray-500">{opt.hint}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={handleAddPlayer}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 py-4 rounded-2xl font-semibold"
+                  disabled={addingPlayer}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
                 >
-                  Add Player
+                  {addingPlayer ? 'Adding…' : 'Add Player'}
                 </button>
                 <button
                   onClick={() => {
@@ -980,6 +1176,7 @@ export default function EventCheckInPage() {
                     setNewPlayerName('');
                     setNewPlayerEmail('');
                     setNewPlayerTeam('');
+                    setAddChargeType('cash');
                   }}
                   className="flex-1 bg-gray-700 hover:bg-gray-600 py-4 rounded-2xl font-semibold"
                 >
@@ -991,10 +1188,10 @@ export default function EventCheckInPage() {
         </div>
       )}
 
-      {/* Payment Modal */}
+      {/* Payment Modal (add-ons) */}
       {showPaymentModal && currentPayReg && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-900 rounded-3xl p-10 max-w-md w-full">
+          <div className="bg-gray-900 rounded-3xl p-8 sm:p-10 max-w-md w-full">
             <h3 className="text-2xl font-semibold mb-8 text-center">
               Add-ons for {currentPayReg.player_name}
             </h3>

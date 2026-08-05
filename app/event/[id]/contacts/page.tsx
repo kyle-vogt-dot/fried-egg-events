@@ -17,6 +17,7 @@ export default function EventContactsPage() {
   const [loading, setLoading] = useState(true);
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
+  const [waitlist, setWaitlist] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -50,104 +51,55 @@ export default function EventContactsPage() {
         console.error('Registrations load error:', regErr);
         setError(regErr.message);
         setRegistrations([]);
-        setLoading(false);
-        return;
-      }
+      } else {
+        let rows = regs || [];
 
-      let rows = regs || [];
+        const userIds = [
+          ...new Set(rows.map((r) => r.user_id).filter(Boolean)),
+        ];
+        if (userIds.length > 0) {
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id, phone, full_name, name, email')
+            .in('id', userIds);
 
-      const userIds = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
-      if (userIds.length > 0) {
-        const { data: profiles, error: profErr } = await supabase
-          .from('profiles')
-          .select('id, phone, full_name, name, email')
-          .in('id', userIds);
-
-        if (profErr) {
-          console.warn('Profiles load error (phones may be missing):', profErr);
-        }
-
-        const byId: Record<string, any> = {};
-        (profiles || []).forEach((p) => {
-          byId[p.id] = p;
-        });
-
-        rows = rows.map((r) => {
-          const p = r.user_id ? byId[r.user_id] : null;
-          return {
-            ...r,
-            phone: p?.phone || '',
-            player_name:
-              r.player_name ||
-              p?.full_name ||
-              p?.name ||
-              r.player_email?.split('@')[0] ||
-              'Player',
-            player_email: r.player_email || p?.email || '',
-          };
-        });
-      }
-
-      // Dedupe: one contact per email (or name if no email)
-      const byKey = new Map<string, any>();
-      for (const r of rows) {
-        const email = (r.player_email || '').trim().toLowerCase();
-        const key =
-          email ||
-          `name:${String(r.player_name || '')
-            .trim()
-            .toLowerCase()}`;
-
-        const existing = byKey.get(key);
-        if (!existing) {
-          byKey.set(key, {
-            ...r,
-            team_names: r.team_name ? [r.team_name] : [],
-            discount_codes: r.discount_code ? [r.discount_code] : [],
-            reg_count: 1,
+          const byId: Record<string, any> = {};
+          (profiles || []).forEach((p) => {
+            byId[p.id] = p;
           });
-          continue;
+
+          rows = rows.map((r) => {
+            const p = r.user_id ? byId[r.user_id] : null;
+            return {
+              ...r,
+              phone: p?.phone || '',
+              player_name:
+                r.player_name ||
+                p?.full_name ||
+                p?.name ||
+                r.player_email?.split('@')[0] ||
+                'Player',
+              player_email: r.player_email || p?.email || '',
+            };
+          });
         }
 
-        existing.reg_count += 1;
-        existing.paid = existing.paid || r.paid;
-        existing.checked_in = existing.checked_in || r.checked_in;
-        if (!existing.phone && r.phone) existing.phone = r.phone;
-        if (!existing.player_name && r.player_name)
-          existing.player_name = r.player_name;
-        if (r.team_name && !existing.team_names.includes(r.team_name)) {
-          existing.team_names.push(r.team_name);
-        }
-        if (
-          r.discount_code &&
-          !existing.discount_codes.includes(r.discount_code)
-        ) {
-          existing.discount_codes.push(r.discount_code);
-        }
-        // Keep highest discount_amount shown if multiple
-        if (
-          Number(r.discount_amount || 0) > Number(existing.discount_amount || 0)
-        ) {
-          existing.discount_amount = r.discount_amount;
-          existing.discount_code = r.discount_code;
-        }
+        setRegistrations(rows);
       }
 
-      const deduped = Array.from(byKey.values()).map((r) => ({
-        ...r,
-        team_name: r.team_names?.length
-          ? r.team_names.join(', ')
-          : r.team_name || '',
-        discount_code: r.discount_codes?.length
-          ? r.discount_codes.join(', ')
-          : r.discount_code || null,
-      }));
+      const { data: wl, error: wlErr } = await supabase
+        .from('event_waitlist')
+        .select('id, name, email, phone, created_at')
+        .eq('event_id', id)
+        .order('created_at', { ascending: true });
 
-      deduped.sort((a, b) =>
-        String(a.player_name || '').localeCompare(String(b.player_name || ''))
-      );
+      if (wlErr) {
+        console.warn('Waitlist load error:', wlErr);
+        setWaitlist([]);
+      } else {
+        setWaitlist(wl || []);
+      }
 
-      setRegistrations(deduped);
       setLoading(false);
     };
 
@@ -163,6 +115,16 @@ export default function EventContactsPage() {
       return hay.includes(q);
     });
   }, [registrations, search]);
+
+  const filteredWaitlist = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return waitlist;
+    return waitlist.filter((r) => {
+      const hay =
+        `${r.name || ''} ${r.email || ''} ${r.phone || ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [waitlist, search]);
 
   const emails = useMemo(
     () =>
@@ -234,8 +196,11 @@ export default function EventContactsPage() {
         <div>
           <h1 className="text-4xl font-bold">Player contacts</h1>
           <p className="text-gray-400 mt-1">
-            {event?.name || 'Event'} · {filtered.length} unique contact
+            {event?.name || 'Event'} · {filtered.length} player
             {filtered.length === 1 ? '' : 's'}
+            {waitlist.length > 0
+              ? ` · ${waitlist.length} on waitlist`
+              : ''}
           </p>
           {error && (
             <p className="text-red-400 mt-2 text-sm">Error: {error}</p>
@@ -270,7 +235,11 @@ export default function EventContactsPage() {
           className="w-full bg-gray-800 border border-gray-700 rounded-2xl px-5 py-4"
         />
 
+        {/* Registered players */}
         <div className="bg-gray-800 rounded-3xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-700">
+            <h2 className="text-lg font-semibold">Registered players</h2>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="text-gray-400 border-b border-gray-700">
@@ -285,17 +254,9 @@ export default function EventContactsPage() {
               </thead>
               <tbody>
                 {filtered.map((r) => (
-                  <tr
-                    key={r.player_email || r.id}
-                    className="border-b border-gray-700/60"
-                  >
+                  <tr key={r.id} className="border-b border-gray-700/60">
                     <td className="py-4 px-5 font-medium">
                       {r.player_name || '—'}
-                      {r.reg_count > 1 && (
-                        <span className="ml-2 text-xs text-gray-500">
-                          ({r.reg_count} regs)
-                        </span>
-                      )}
                     </td>
                     <td className="py-4 px-5">
                       {r.player_email ? (
@@ -353,6 +314,74 @@ export default function EventContactsPage() {
           {filtered.length === 0 && (
             <p className="text-gray-500 p-8 text-center">
               No players found for this event.
+            </p>
+          )}
+        </div>
+
+        {/* Waitlist */}
+        <div className="bg-gray-800 border border-amber-500/30 rounded-3xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-700 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-amber-300">Waitlist</h2>
+              <p className="text-xs text-gray-500 mt-1">
+                People who signed up after the event hit max players
+              </p>
+            </div>
+            <span className="text-sm text-gray-400">
+              {filteredWaitlist.length}
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="text-gray-400 border-b border-gray-700">
+                <tr>
+                  <th className="py-4 px-5">Name</th>
+                  <th className="py-4 px-5">Email</th>
+                  <th className="py-4 px-5">Phone</th>
+                  <th className="py-4 px-5">Joined</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredWaitlist.map((r) => (
+                  <tr key={r.id} className="border-b border-gray-700/60">
+                    <td className="py-4 px-5 font-medium">{r.name || '—'}</td>
+                    <td className="py-4 px-5">
+                      {r.email ? (
+                        <a
+                          href={`mailto:${r.email}`}
+                          className="text-blue-400 hover:text-blue-300"
+                        >
+                          {r.email}
+                        </a>
+                      ) : (
+                        <span className="text-gray-500">—</span>
+                      )}
+                    </td>
+                    <td className="py-4 px-5">
+                      {r.phone ? (
+                        <a
+                          href={`sms:${r.phone}`}
+                          className="text-emerald-400 hover:text-emerald-300"
+                        >
+                          {r.phone}
+                        </a>
+                      ) : (
+                        <span className="text-gray-500">—</span>
+                      )}
+                    </td>
+                    <td className="py-4 px-5 text-gray-400">
+                      {r.created_at
+                        ? new Date(r.created_at).toLocaleDateString()
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {filteredWaitlist.length === 0 && (
+            <p className="text-gray-500 p-8 text-center">
+              No one on the waitlist yet.
             </p>
           )}
         </div>
