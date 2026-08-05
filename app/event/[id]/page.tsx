@@ -1378,105 +1378,98 @@ setWaitlistPhone('');
               </p>
             </div>
           )}
+          
+          <div className="p-10 space-y-4">
+            {maxPlayers != null && (
+              <p className="text-sm text-gray-400 text-center">
+                {isSoldOut
+                  ? 'Sold out'
+                  : `${spotsLeft} spot${spotsLeft === 1 ? '' : 's'} left · ${registeredCount}/${maxPlayers}`}
+              </p>
+            )}
 
-          <div className="p-10 flex flex-col sm:flex-row gap-4">
-            {registrationOpen ? (
-              <>
-                {maxPlayers != null && (
-  <p className="text-sm text-gray-400 mb-3 text-center">
-    {isSoldOut
-      ? 'Sold out'
-      : `${spotsLeft} spot${spotsLeft === 1 ? '' : 's'} left · ${registeredCount}/${maxPlayers}`}
-  </p>
-)}
+            {isSoldOut ? (
+              <div className="bg-gray-800 border border-amber-500/40 rounded-3xl p-6 space-y-4 max-w-md w-full">
+                <div>
+                  <h3 className="text-xl font-semibold text-amber-300">
+                    Sold Out
+                  </h3>
+                  <p className="text-sm text-gray-400 mt-1">
+                    Join the waitlist and we’ll reach out if a spot opens.
+                  </p>
+                </div>
 
-{isSoldOut ? (
-  <div className="bg-gray-800 border border-amber-500/40 rounded-3xl p-6 space-y-4 max-w-md mx-auto w-full">
-    <div>
-      <h3 className="text-xl font-semibold text-amber-300">Sold Out</h3>
-      <p className="text-sm text-gray-400 mt-1">
-        Join the waitlist and we’ll reach out if a spot opens.
-      </p>
-    </div>
-
-    {waitlistDone ? (
-      <p className="text-emerald-400 font-medium">
-        You’re on the waitlist. We’ll email you if a spot opens.
-      </p>
-    ) : (
-      <>
-        <input
-          type="text"
-          placeholder="Full name"
-          value={waitlistName}
-          onChange={(e) => setWaitlistName(e.target.value)}
-          className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
-        />
-        <input
-          type="email"
-          placeholder="Email"
-          value={waitlistEmail}
-          onChange={(e) => setWaitlistEmail(e.target.value)}
-          className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
-        />
-        <input
-          type="tel"
-          placeholder="Phone (optional)"
-          value={waitlistPhone}
-          onChange={(e) => setWaitlistPhone(e.target.value)}
-          className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
-        />
-        <button
-          type="button"
-          onClick={handleJoinWaitlist}
-          disabled={waitlistSubmitting}
-          className="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
-        >
-          {waitlistSubmitting ? 'Submitting…' : 'Join Waitlist'}
-        </button>
-      </>
-    )}
-  </div>
-) : registrationOpen ? (
-  <button
-    onClick={handleRegisterClick}
-    className="w-full bg-green-600 hover:bg-green-700 py-5 rounded-3xl text-xl font-semibold"
-  >
-    Register
-  </button>
-) : (
-  <p className="text-gray-400 text-center">Registration is not open yet.</p>
-)}
-
-                <button
-                  onClick={viewRegisteredPlayers}
-                  className="flex-1 bg-blue-600 hover:bg-blue-700 py-5 rounded-2xl text-xl font-semibold transition-colors"
-                >
-                  View Registered Players
-                </button>
-
-
-
-                <button
-                  onClick={handleShare}
-                  className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors"
-                >
-                  Share Event
-                </button>
-              </>
+                {waitlistDone ? (
+                  <p className="text-emerald-400 font-medium">
+                    You’re on the waitlist. We’ll email you if a spot opens.
+                  </p>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      placeholder="Full name"
+                      value={waitlistName}
+                      onChange={(e) => setWaitlistName(e.target.value)}
+                      className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+                    />
+                    <input
+                      type="email"
+                      placeholder="Email"
+                      value={waitlistEmail}
+                      onChange={(e) => setWaitlistEmail(e.target.value)}
+                      className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+                    />
+                    <input
+                      type="tel"
+                      placeholder="Phone (optional)"
+                      value={waitlistPhone}
+                      onChange={(e) => setWaitlistPhone(e.target.value)}
+                      className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleJoinWaitlist}
+                      disabled={waitlistSubmitting}
+                      className="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
+                    >
+                      {waitlistSubmitting ? 'Submitting…' : 'Join Waitlist'}
+                    </button>
+                  </>
+                )}
+              </div>
+            ) : registrationOpen ? (
+  <div className="flex flex-col sm:flex-row gap-3 w-full">
+    <button
+      onClick={handleRegisterClick}
+      className="flex-1 bg-green-600 hover:bg-green-700 py-4 px-6 rounded-2xl text-lg font-semibold"
+    >
+      Register
+    </button>
+    <button
+      onClick={viewRegisteredPlayers}
+      className="flex-1 bg-blue-600 hover:bg-blue-700 py-4 px-6 rounded-2xl text-lg font-semibold"
+    >
+      View Registered Players
+    </button>
+    <button
+      onClick={handleShare}
+      className="flex-1 bg-gray-700 hover:bg-gray-600 py-4 px-6 rounded-2xl text-lg font-semibold"
+    >
+      Share Event
+    </button>
+              </div>
             ) : (
-              <>
-                <button className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors">
+              <div className="flex flex-col sm:flex-row gap-3 w-full">
+                <button className="w-full sm:flex-1 bg-gray-700 hover:bg-gray-600 py-4 px-6 rounded-2xl text-lg font-semibold">
                   Notify Me When Registration Opens
                 </button>
-
                 <button
                   onClick={handleShare}
-                  className="flex-1 bg-gray-700 hover:bg-gray-600 py-5 rounded-2xl text-xl font-semibold transition-colors"
+                  className="w-full sm:w-auto bg-gray-700 hover:bg-gray-600 py-4 px-6 rounded-2xl text-base font-semibold whitespace-nowrap"
                 >
                   Share Event
                 </button>
-              </>
+              </div>
             )}
           </div>
         </div>
