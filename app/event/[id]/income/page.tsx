@@ -90,6 +90,27 @@ export default function EventIncomePage() {
     [registrations]
   );
 
+  // Helper: full price for a single registration (before discount)
+  const getFullPriceForReg = (reg: any) => {
+    const selectedIds: number[] = reg.selected_round_ids || [];
+    const selectedRounds = rounds.filter((r) => selectedIds.includes(r.id));
+    let total = 0;
+
+    if (isPerRound) {
+      const roundsToCharge =
+        selectedRounds.length > 0 ? selectedRounds : rounds;
+      for (const round of roundsToCharge) {
+        total += Number(round.price || 0) + fee;
+      }
+    } else {
+      total += Number(event?.price || 0) + fee;
+      for (const round of selectedRounds.filter((r) => r.pay_separately)) {
+        total += Number(round.price || 0) + fee;
+      }
+    }
+    return total;
+  };
+
   // Greens fees (expense)
   const { greensFeesTotal, greensLines } = useMemo(() => {
     const lines: { label: string; amount: number; detail: string }[] = [];
@@ -144,46 +165,36 @@ export default function EventIncomePage() {
   const registrationRevenue = useMemo(() => {
     const paid = registrations.filter((r) => r.paid);
     let total = 0;
-
     for (const reg of paid) {
-      const selectedIds: number[] = reg.selected_round_ids || [];
-      const selectedRounds = rounds.filter((r) => selectedIds.includes(r.id));
-
-      if (isPerRound) {
-        const roundsToCharge =
-          selectedRounds.length > 0 ? selectedRounds : rounds;
-        for (const round of roundsToCharge) {
-          total += Number(round.price || 0) + fee;
-        }
-      } else {
-        total += Number(event?.price || 0) + fee;
-        for (const round of selectedRounds.filter((r) => r.pay_separately)) {
-          total += Number(round.price || 0) + fee;
-        }
-      }
+      total += getFullPriceForReg(reg);
     }
     return total;
   }, [registrations, rounds, event, isPerRound, fee]);
 
-  // Discount summary (grouped by code)
+  // Discount summary — now tracks amount PAID (after discount)
   const discountSummary = useMemo(() => {
     const paid = registrations.filter((r) => r.paid && r.discount_code);
     const byCode: Record<
       string,
-      { code: string; players: number; totalSaved: number }
+      { code: string; players: number; totalPaid: number; totalSaved: number }
     > = {};
 
     for (const reg of paid) {
       const code = String(reg.discount_code).toUpperCase();
       if (!byCode[code]) {
-        byCode[code] = { code, players: 0, totalSaved: 0 };
+        byCode[code] = { code, players: 0, totalPaid: 0, totalSaved: 0 };
       }
+      const fullPrice = getFullPriceForReg(reg);
+      const saved = Number(reg.discount_amount || 0);
+      const paidAmount = Math.max(0, fullPrice - saved);
+
       byCode[code].players += 1;
-      byCode[code].totalSaved += Number(reg.discount_amount || 0);
+      byCode[code].totalPaid += paidAmount;
+      byCode[code].totalSaved += saved;
     }
 
     return Object.values(byCode).sort((a, b) => a.code.localeCompare(b.code));
-  }, [registrations]);
+  }, [registrations, rounds, event, isPerRound, fee]);
 
   const totalDiscounts = useMemo(
     () => discountSummary.reduce((s, d) => s + d.totalSaved, 0),
@@ -417,7 +428,7 @@ export default function EventIncomePage() {
               </span>
             </div>
 
-            {/* Discount code lines */}
+            {/* Discount code lines — now shows amount PAID */}
             {discountSummary.map((d) => (
               <div
                 key={d.code}
@@ -428,11 +439,12 @@ export default function EventIncomePage() {
                     {d.code}
                   </div>
                   <div className="text-sm text-gray-500">
-                    {d.players} player{d.players === 1 ? '' : 's'}
+                    {d.players} player{d.players === 1 ? '' : 's'} · $
+                    {d.totalSaved.toFixed(2)} off
                   </div>
                 </div>
-                <span className="text-amber-400 font-semibold text-lg">
-                  −${d.totalSaved.toFixed(2)}
+                <span className="text-emerald-400 font-semibold text-lg">
+                  ${d.totalPaid.toFixed(2)}
                 </span>
               </div>
             ))}

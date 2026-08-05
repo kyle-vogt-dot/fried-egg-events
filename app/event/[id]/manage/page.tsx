@@ -58,6 +58,14 @@ export default function EventManagePage() {
   price: 0,
   greens_fee: 0,
 });
+const [adminPerms, setAdminPerms] = useState({
+  manage: true,
+  checkin: true,
+  scoring: true,
+  leaderboard: true,
+  scorecards: true,
+  income: false,
+});
 
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -124,7 +132,7 @@ export default function EventManagePage() {
 
       const { data: roundsData } = await supabase
         .from('event_rounds')
-        .select('*')
+        .select('id, name, email, user_id, permissions')
         .eq('event_id', parseInt(eventId))
         .order('sort_order', { ascending: true });
       setRounds(roundsData || []);
@@ -148,7 +156,7 @@ export default function EventManagePage() {
   const fetchAdmins = async () => {
     const { data } = await supabase
       .from('event_admins')
-      .select('*')
+      .select('id, name, email, user_id, permissions')
       .eq('event_id', parseInt(eventId));
     setAdmins(data || []);
   };
@@ -352,46 +360,76 @@ export default function EventManagePage() {
   };
 
   const handleAddAdmin = async () => {
-    if (!newAdminEmail.trim()) return alert('Email is required');
+  if (!newAdminEmail.trim()) return alert('Email is required');
 
-    const email = newAdminEmail.trim().toLowerCase();
-    const name = newAdminName.trim();
+  const email = newAdminEmail.trim().toLowerCase();
+  const name = newAdminName.trim();
 
+  try {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    const { data: existingUser } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle();
+
+    const { error: insertError } = await supabase.from('event_admins').insert({
+      event_id: parseInt(eventId),
+      user_id: existingUser?.id || null,
+      name: name || null,
+      email: email,
+      added_by: user?.id || null,
+      permissions: adminPerms,
+    });
+
+    if (insertError) throw insertError;
+
+    // Send invite email
     try {
-      const { data: existingUser } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('email', email)
-        .single();
+      const res = await fetch('/api/send-admin-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to: email,
+          eventName: event?.name || 'your event',
+          eventId: eventId,
+          inviterName:
+            user?.user_metadata?.full_name || user?.email || 'An organizer',
+          role: 'admin',
+        }),
+      });
 
-      const { error: insertError } = await supabase
-        .from('event_admins')
-        .insert({
-          event_id: parseInt(eventId),
-          user_id: existingUser?.id || null,
-          name: name || null,
-          email: email,
-          added_by: (await supabase.auth.getUser()).data.user?.id,
-        })
-        .select()
-        .single();
-
-      if (insertError) throw insertError;
-
-      if (!existingUser) {
-        alert(`✅ Admin invitation added for ${email} (email sending coming soon)`);
+      const result = await res.json();
+      if (!res.ok) {
+        alert(
+          `✅ Admin added for ${email}, but the invite email failed.\n\n${result.error || ''}`
+        );
       } else {
-        alert(`✅ ${email} has been added as an admin.`);
+        alert(`✅ Admin invitation sent to ${email}`);
       }
-
-      fetchAdmins();
-      setNewAdminName('');
-      setNewAdminEmail('');
-    } catch (err: any) {
-      console.error(err);
-      alert('Failed to add admin: ' + err.message);
+    } catch {
+      alert(`✅ Admin added for ${email}, but the invite email could not be sent.`);
     }
-  };
+
+    fetchAdmins();
+    setNewAdminName('');
+    setNewAdminEmail('');
+    setAdminPerms({
+      manage: true,
+      checkin: true,
+      scoring: true,
+      leaderboard: true,
+      scorecards: true,
+      income: false,
+    });
+  } catch (err: any) {
+    console.error(err);
+    alert('Failed to add admin: ' + err.message);
+  }
+};
 
   const handleAddFlight = () => {
     if (!newFlight.name.trim()) return alert('Flight name is required');
@@ -1101,68 +1139,107 @@ export default function EventManagePage() {
         )}
 
         {/* Admins Panel */}
-        {showAdmins && (
-          <div className="bg-gray-900 border border-indigo-500/30 rounded-3xl p-8 mt-8">
-            <h3 className="text-xl font-medium mb-6">Event Admins</h3>
+{showAdmins && (
+  <div className="bg-gray-900 border border-indigo-500/30 rounded-3xl p-8 mt-8">
+    <h3 className="text-xl font-medium mb-6">Event Admins</h3>
 
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
-              <div className="md:col-span-5">
-                <input
-                  value={newAdminName}
-                  onChange={(e) => setNewAdminName(e.target.value)}
-                  placeholder="Admin Name (optional)"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-                />
-              </div>
-              <div className="md:col-span-5">
-                <input
-                  type="email"
-                  value={newAdminEmail}
-                  onChange={(e) => setNewAdminEmail(e.target.value)}
-                  placeholder="admin@example.com"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <button
-                  onClick={handleAddAdmin}
-                  className="w-full bg-indigo-600 hover:bg-indigo-700 py-5 rounded-3xl font-medium"
-                >
-                  Add Admin
-                </button>
-              </div>
-            </div>
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      <input
+        value={newAdminName}
+        onChange={(e) => setNewAdminName(e.target.value)}
+        placeholder="Admin Name (optional)"
+        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+      />
+      <input
+        type="email"
+        value={newAdminEmail}
+        onChange={(e) => setNewAdminEmail(e.target.value)}
+        placeholder="admin@example.com"
+        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+      />
+    </div>
 
-            <div className="space-y-4">
-              {admins.map((admin: any) => (
-                <div
-                  key={admin.id}
-                  className="bg-gray-800 p-6 rounded-3xl flex justify-between items-center"
-                >
-                  <div>
-                    <div className="font-medium">{admin.name || 'No Name'}</div>
-                    <div className="text-sm text-gray-400">{admin.email}</div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="text-xs px-3 py-1 bg-gray-700 rounded-full">
-                      {admin.user_id ? 'Registered' : 'Invited'}
-                    </div>
-                    <button
-                      onClick={() => handleDeleteAdmin(admin.id, admin.email)}
-                      className="text-red-500 hover:text-red-600 px-4 py-2 text-sm font-medium"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+    {/* Permission checkboxes */}
+    <div className="mb-6">
+      <p className="text-sm text-gray-400 mb-3">Page access</p>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {(
+          [
+            ['manage', 'Manage'],
+            ['checkin', 'Check-In'],
+            ['scoring', 'Scoring'],
+            ['leaderboard', 'Leaderboard'],
+            ['scorecards', 'Scorecards'],
+            ['income', 'Income'],
+          ] as const
+        ).map(([key, label]) => (
+          <label
+            key={key}
+            className="flex items-center gap-3 bg-gray-800 px-4 py-3 rounded-2xl cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              checked={adminPerms[key]}
+              onChange={(e) =>
+                setAdminPerms((prev) => ({
+                  ...prev,
+                  [key]: e.target.checked,
+                }))
+              }
+              className="w-5 h-5 accent-indigo-600"
+            />
+            <span className="text-sm">{label}</span>
+          </label>
+        ))}
+      </div>
+    </div>
 
-            {admins.length === 0 && (
-              <p className="text-gray-400 text-center py-8">No admins added yet.</p>
+    <button
+      onClick={handleAddAdmin}
+      className="w-full md:w-auto bg-indigo-600 hover:bg-indigo-700 px-8 py-4 rounded-3xl font-medium"
+    >
+      Add Admin
+    </button>
+
+    <div className="space-y-4 mt-8">
+      {admins.map((admin: any) => (
+        <div
+          key={admin.id}
+          className="bg-gray-800 p-6 rounded-3xl flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3"
+        >
+          <div>
+            <div className="font-medium">{admin.name || 'No Name'}</div>
+            <div className="text-sm text-gray-400">{admin.email}</div>
+            {admin.permissions && (
+              <div className="text-xs text-gray-500 mt-1">
+                Access:{' '}
+                {Object.entries(admin.permissions)
+                  .filter(([, v]) => v)
+                  .map(([k]) => k)
+                  .join(', ') || 'none'}
+              </div>
             )}
           </div>
-        )}
+          <div className="flex items-center gap-3">
+            <div className="text-xs px-3 py-1 bg-gray-700 rounded-full">
+              {admin.user_id ? 'Registered' : 'Invited'}
+            </div>
+            <button
+              onClick={() => handleDeleteAdmin(admin.id, admin.email)}
+              className="text-red-500 hover:text-red-600 px-4 py-2 text-sm font-medium"
+            >
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    {admins.length === 0 && (
+      <p className="text-gray-400 text-center py-8">No admins added yet.</p>
+    )}
+  </div>
+)}
 
         {/* ====================== MAIN FORM FIELDS ====================== */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-12">
