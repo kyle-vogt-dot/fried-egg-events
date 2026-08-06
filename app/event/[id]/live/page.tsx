@@ -276,51 +276,61 @@ export default function LiveEventPage() {
   };
 
   const saveHoleAndAdvance = async () => {
-    if (!registrationId) {
-      alert('Could not find your registration. Check the link (?team=...).');
-      return;
-    }
+  if (!registrationId) {
+    alert('Could not find your registration. Check the link (?team=...).');
+    return;
+  }
 
-    const num = scoreInput === '' ? 0 : parseInt(scoreInput, 10);
-    if (!Number.isFinite(num) || num < 1) {
-      alert('Enter a score for this hole');
-      return;
-    }
+  const num = scoreInput === '' ? 0 : parseInt(scoreInput, 10);
+  if (!Number.isFinite(num) || num < 1) {
+    alert('Enter a score for this hole');
+    return;
+  }
 
-    setSaving(true);
-    setSaveMsg(null);
+  setSaving(true);
+  setSaveMsg(null);
 
-    try {
-      const targets =
-        teamRegs.length > 0 ? teamRegs.map((r) => r.id) : [registrationId];
+  try {
+    const targets =
+      teamRegs.length > 0 ? teamRegs.map((r) => r.id) : [registrationId];
 
-      const allRows = targets.map((regId) => ({
+    for (const regId of targets) {
+      // Remove existing row for this hole (+ round if set)
+      let del = supabase
+        .from('scores')
+        .delete()
+        .eq('registration_id', Number(regId))
+        .eq('hole', currentHole);
+
+      if (selectedRoundId != null) {
+        del = del.eq('round_id', selectedRoundId);
+      }
+
+      const { error: delErr } = await del;
+      if (delErr) {
+        console.warn('Delete before insert:', delErr);
+      }
+
+      const { error: insErr } = await supabase.from('scores').insert({
         registration_id: Number(regId),
         hole: currentHole,
         score: num,
         ...(selectedRoundId != null ? { round_id: selectedRoundId } : {}),
-      }));
-
-      const { error } = await supabase.from('scores').upsert(allRows, {
-        onConflict:
-          selectedRoundId != null
-            ? 'registration_id,hole,round_id'
-            : 'registration_id,hole',
       });
 
-      if (error) throw error;
-
-      setScores((prev) => ({ ...prev, [currentHole]: num }));
-      setSaveMsg('Saved');
-      // advance to next hole (wrap)
-      setCurrentHole((h) => (h >= numHoles ? 1 : h + 1));
-    } catch (err: any) {
-      console.error(err);
-      alert('Failed to save: ' + (err.message || 'Unknown error'));
-    } finally {
-      setSaving(false);
+      if (insErr) throw insErr;
     }
-  };
+
+    setScores((prev) => ({ ...prev, [currentHole]: num }));
+    setSaveMsg('Saved');
+    setCurrentHole((h) => (h >= numHoles ? 1 : h + 1));
+  } catch (err: any) {
+    console.error(err);
+    alert('Failed to save: ' + (err.message || 'Unknown error'));
+  } finally {
+    setSaving(false);
+  }
+};
 
   if (loading) {
     return (
