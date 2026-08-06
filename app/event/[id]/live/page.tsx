@@ -63,7 +63,11 @@ function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
   }));
 }
 
-function getStartingHole(player: any, roundId: number | null, numHoles: number) {
+function getStartingHole(
+  player: any,
+  roundId: number | null,
+  numHoles: number
+) {
   if (!player) return 1;
   if (roundId != null) {
     const map = player.round_pairings || {};
@@ -78,6 +82,10 @@ function getStartingHole(player: any, roundId: number | null, numHoles: number) 
     if (h >= 1 && h <= numHoles) return h;
   }
   return 1;
+}
+
+function normName(s: string) {
+  return (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 export default function LiveEventPage() {
@@ -104,7 +112,6 @@ export default function LiveEventPage() {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
-  // Hole-by-hole UI
   const [currentHole, setCurrentHole] = useState(1);
   const [scoreInput, setScoreInput] = useState('');
   const [startHoleReady, setStartHoleReady] = useState(false);
@@ -119,37 +126,33 @@ export default function LiveEventPage() {
     [event?.course_data, numHoles]
   );
 
+  // UUID or numeric id, or team/player name
   const teamRegs = useMemo(() => {
-  if (!teamParam || !registrations.length) return [];
+    if (!teamParam || !registrations.length) return [];
 
-  const raw = decodeURIComponent(teamParam).trim();
-  const q = raw.toLowerCase();
+    const raw = decodeURIComponent(teamParam).trim();
+    const q = normName(raw);
 
-  // 1) registration id in the URL
-  if (/^\d+$/.test(raw)) {
-    const hit = registrations.filter((r) => String(r.id) === raw);
-    if (hit.length) return hit;
-  }
+    // Exact id match (uuid or number as string)
+    const byId = registrations.filter((r) => String(r.id) === raw);
+    if (byId.length) return byId;
 
-  // 2) team name (exact, case-insensitive)
-  const byTeam = registrations.filter(
-    (r) => (r.team_name || '').trim().toLowerCase() === q
-  );
-  if (byTeam.length) return byTeam;
+    const byTeam = registrations.filter(
+      (r) => normName(r.team_name || '') === q
+    );
+    if (byTeam.length) return byTeam;
 
-  // 3) player name
-  return registrations.filter(
-    (r) => (r.player_name || '').trim().toLowerCase() === q
-  );
-}, [registrations, teamParam]);
+    return registrations.filter((r) => normName(r.player_name || '') === q);
+  }, [registrations, teamParam]);
 
-const primaryReg = teamRegs.find((r) => r?.id != null) || teamRegs[0] || null;
-const registrationId =
-  primaryReg?.id != null && Number(primaryReg.id) > 0
-    ? Number(primaryReg.id)
-    : null;
+  const primaryReg =
+    teamRegs.find((r) => r?.id != null && String(r.id).length > 0) ||
+    teamRegs[0] ||
+    null;
 
- 
+  // Keep as string — supports UUID
+  const registrationId =
+    primaryReg?.id != null ? String(primaryReg.id) : null;
 
   const teamLabel =
     primaryReg?.team_name ||
@@ -210,7 +213,6 @@ const registrationId =
     fetchData();
   }, [eventId, teamParam, roundParam]);
 
-  // Set starting hole from pairings once we have reg + round
   useEffect(() => {
     if (!primaryReg || startHoleReady) return;
     const n = Number(event?.number_of_holes || 18) === 9 ? 9 : 18;
@@ -219,7 +221,6 @@ const registrationId =
     setStartHoleReady(true);
   }, [primaryReg, selectedRoundId, event, startHoleReady]);
 
-  // Load scores + realtime
   useEffect(() => {
     if (!registrationId) {
       setScores({});
@@ -273,7 +274,6 @@ const registrationId =
     };
   }, [registrationId, selectedRoundId]);
 
-  // Keep input in sync when hole or scores change
   useEffect(() => {
     const existing = scores[currentHole];
     setScoreInput(existing != null && existing > 0 ? String(existing) : '');
@@ -295,69 +295,75 @@ const registrationId =
   };
 
   const saveHoleAndAdvance = async () => {
-  const num = scoreInput === '' ? 0 : parseInt(scoreInput, 10);
-  if (!Number.isFinite(num) || num < 1) {
-    alert('Enter a score for this hole');
-    return;
-  }
-
-  const targets = Array.from(
-    new Set(
-      teamRegs
-        .map((r) => Number(r?.id))
-        .filter((id) => Number.isFinite(id) && id > 0)
-    )
-  );
-
-  // Fallback: primary only
-  if (targets.length === 0 && registrationId) {
-    targets.push(registrationId);
-  }
-
-  if (targets.length === 0) {
-    alert(
-      'No registration found for this team. Open the score link from the scorecard QR, or use ?team=<registration_id>.'
-    );
-    console.log({ teamParam, teamRegs, primaryReg, registrations: registrations.length });
-    return;
-  }
-
-  setSaving(true);
-  setSaveMsg(null);
-
-  try {
-    for (const regId of targets) {
-      let del = supabase
-        .from('scores')
-        .delete()
-        .eq('registration_id', regId)
-        .eq('hole', currentHole);
-
-      if (selectedRoundId != null) {
-        del = del.eq('round_id', selectedRoundId);
-      }
-      await del;
-
-      const { error: insErr } = await supabase.from('scores').insert({
-        registration_id: regId,
-        hole: currentHole,
-        score: num,
-        ...(selectedRoundId != null ? { round_id: selectedRoundId } : {}),
-      });
-
-      if (insErr) throw insErr;
+    const num = scoreInput === '' ? 0 : parseInt(scoreInput, 10);
+    if (!Number.isFinite(num) || num < 1) {
+      alert('Enter a score for this hole');
+      return;
     }
 
-    setScores((prev) => ({ ...prev, [currentHole]: num }));
-    setSaveMsg('Saved');
-    setCurrentHole((h) => (h >= numHoles ? 1 : h + 1));
-  } catch (err: any) {
-    console.error(err);
-    alert('Failed to save: ' + (err.message || 'Unknown error'));
-  } finally {
-    setSaving(false);
-  }
-};
+    // String UUIDs (or numeric ids as strings) — never Number()
+    const targets = Array.from(
+      new Set(
+        teamRegs
+          .map((r) => (r?.id != null ? String(r.id) : ''))
+          .filter((id) => id.length > 0)
+      )
+    );
+
+    if (targets.length === 0 && registrationId) {
+      targets.push(registrationId);
+    }
+
+    if (targets.length === 0) {
+      alert(
+        'No registration found for this team. Open the score link from the scorecard QR, or use ?team=<registration_id>.'
+      );
+      console.log({
+        teamParam,
+        teamRegs,
+        primaryReg,
+        registrationId,
+        registrations: registrations.length,
+      });
+      return;
+    }
+
+    setSaving(true);
+    setSaveMsg(null);
+
+    try {
+      for (const regId of targets) {
+        let del = supabase
+          .from('scores')
+          .delete()
+          .eq('registration_id', regId)
+          .eq('hole', currentHole);
+
+        if (selectedRoundId != null) {
+          del = del.eq('round_id', selectedRoundId);
+        }
+        await del;
+
+        const { error: insErr } = await supabase.from('scores').insert({
+          registration_id: regId,
+          hole: currentHole,
+          score: num,
+          ...(selectedRoundId != null ? { round_id: selectedRoundId } : {}),
+        });
+
+        if (insErr) throw insErr;
+      }
+
+      setScores((prev) => ({ ...prev, [currentHole]: num }));
+      setSaveMsg('Saved');
+      setCurrentHole((h) => (h >= numHoles ? 1 : h + 1));
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to save: ' + (err.message || 'Unknown error'));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -388,7 +394,6 @@ const registrationId =
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col">
       <div className="max-w-lg mx-auto w-full flex-1 flex flex-col p-4 md:p-6">
-        {/* Header */}
         <div className="flex items-start justify-between gap-3 mb-4">
           <div>
             <h1 className="text-xl font-bold">{teamLabel}</h1>
@@ -448,7 +453,6 @@ const registrationId =
 
         {activeTab === 'scorecard' && (
           <div className="flex-1 flex flex-col">
-            {/* Hole header — centered */}
             <div className="text-center mb-2">
               <p className="text-4xl font-bold tracking-tight">
                 Hole {holeInfo.hole}{' '}
@@ -465,10 +469,8 @@ const registrationId =
               </p>
             </div>
 
-            {/* Spacer pushes entry box toward bottom */}
             <div className="flex-1 min-h-[40px]" />
 
-            {/* Score entry box */}
             <div className="bg-gray-900 border border-gray-700 rounded-3xl p-5 mb-6">
               <div className="flex items-center gap-3">
                 <button
@@ -520,7 +522,6 @@ const registrationId =
               )}
             </div>
 
-            {/* Mini hole dots */}
             <div className="flex flex-wrap justify-center gap-1.5 pb-4">
               {Array.from({ length: numHoles }, (_, i) => {
                 const h = i + 1;
