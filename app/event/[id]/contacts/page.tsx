@@ -84,6 +84,40 @@ export default function EventContactsPage() {
           });
         }
 
+        // One contact per email (fallback: name)
+        const byKey = new Map<string, any>();
+        for (const r of rows) {
+          const email = (r.player_email || '').trim().toLowerCase();
+          const name = (r.player_name || '').trim().toLowerCase();
+          const key = email || (name ? `name:${name}` : `id:${r.id}`);
+
+          const existing = byKey.get(key);
+          if (!existing) {
+            byKey.set(key, { ...r });
+            continue;
+          }
+
+          byKey.set(key, {
+            ...existing,
+            player_name: existing.player_name || r.player_name,
+            player_email: existing.player_email || r.player_email,
+            phone: existing.phone || (r as any).phone || '',
+            team_name: existing.team_name || r.team_name,
+            paid: !!(existing.paid || r.paid),
+            checked_in: !!(existing.checked_in || r.checked_in),
+            discount_code: existing.discount_code || r.discount_code,
+            discount_amount:
+              Number(existing.discount_amount || 0) >=
+              Number(r.discount_amount || 0)
+                ? existing.discount_amount
+                : r.discount_amount,
+          });
+        }
+
+        rows = Array.from(byKey.values()).sort((a, b) =>
+          String(a.player_name || '').localeCompare(String(b.player_name || ''))
+        );
+
         setRegistrations(rows);
       }
 
@@ -165,7 +199,9 @@ export default function EventContactsPage() {
         ? `Hi everyone,\n\nQuick update about ${event.name}.\n\n`
         : 'Hi everyone,\n\n'
     );
-    window.location.href = `mailto:?bcc=${encodeURIComponent(bcc)}&subject=${subject}&body=${body}`;
+    window.location.href = `mailto:?bcc=${encodeURIComponent(
+      bcc
+    )}&subject=${subject}&body=${body}`;
   };
 
   const textEveryone = () => {
@@ -198,9 +234,7 @@ export default function EventContactsPage() {
           <p className="text-gray-400 mt-1">
             {event?.name || 'Event'} · {filtered.length} player
             {filtered.length === 1 ? '' : 's'}
-            {waitlist.length > 0
-              ? ` · ${waitlist.length} on waitlist`
-              : ''}
+            {waitlist.length > 0 ? ` · ${waitlist.length} on waitlist` : ''}
           </p>
           {error && (
             <p className="text-red-400 mt-2 text-sm">Error: {error}</p>
@@ -235,7 +269,6 @@ export default function EventContactsPage() {
           className="w-full bg-gray-800 border border-gray-700 rounded-2xl px-5 py-4"
         />
 
-        {/* Registered players */}
         <div className="bg-gray-800 rounded-3xl overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-700">
             <h2 className="text-lg font-semibold">Registered players</h2>
@@ -318,7 +351,6 @@ export default function EventContactsPage() {
           )}
         </div>
 
-        {/* Waitlist */}
         <div className="bg-gray-800 border border-amber-500/30 rounded-3xl overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-700 flex items-center justify-between gap-3">
             <div>

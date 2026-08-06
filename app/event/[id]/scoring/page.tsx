@@ -99,10 +99,10 @@ export default function EventScoringPage() {
   const [rounds, setRounds] = useState<any[]>([]);
   const [selectedRoundId, setSelectedRoundId] = useState<number | 'all'>('all');
   const [playerScores, setPlayerScores] = useState<
-    Record<number, Record<number, number>>
+    Record<string, Record<number, number>>
   >({});
   const [loading, setLoading] = useState(true);
-  const [savingId, setSavingId] = useState<number | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
@@ -119,9 +119,10 @@ export default function EventScoringPage() {
     return rounds.find((r) => r.id === selectedRoundId) || null;
   }, [rounds, selectedRoundId]);
 
+  // TEMP for testing: no check-in required. Restore isCheckedInForRound after testing.
   const scoredRegs = useMemo(() => {
     return registrations.filter((r) => {
-      if (!isCheckedInForRound(r, selectedRoundId)) return false;
+      // TODO after test: if (!isCheckedInForRound(r, selectedRoundId)) return false;
       if (selectedRoundId === 'all') return true;
       const ids: number[] = r.selected_round_ids || [];
       if (!ids.length) return rounds.length <= 1;
@@ -164,96 +165,84 @@ export default function EventScoringPage() {
     fetchData();
   }, [eventId]);
 
-  // Load scores for current round
   useEffect(() => {
-    const loadScores = async () => {
-      if (registrations.length === 0) return;
+    if (registrations.length === 0) return;
 
-      let query = supabase
+    const regIds = registrations.map((r) => String(r.id));
+
+    const loadScores = async () => {
+      // TEMP: no round_id filter so player scores always show while testing.
+      // After testing, filter again with:
+      // if (selectedRoundId !== 'all') query = query.eq('round_id', selectedRoundId);
+      const { data: scoreData, error } = await supabase
         .from('scores')
         .select('*')
-        .in(
-          'registration_id',
-          registrations.map((r) => r.id)
-        );
-
-      if (selectedRoundId !== 'all') {
-        query = query.eq('round_id', selectedRoundId);
-      }
-
-      const { data: scoreData, error } = await query;
+        .in('registration_id', regIds);
 
       if (error) {
         console.error('Failed to load scores:', error);
-        // Fallback without round filter (older schema)
-        const { data: fallback } = await supabase
-          .from('scores')
-          .select('*')
-          .in(
-            'registration_id',
-            registrations.map((r) => r.id)
-          );
-
-        const loaded: Record<number, Record<number, number>> = {};
-        (fallback || []).forEach((score: any) => {
-          if (!loaded[score.registration_id]) loaded[score.registration_id] = {};
-          loaded[score.registration_id][score.hole] = score.score;
-        });
-        setPlayerScores(loaded);
         return;
       }
 
-      const loaded: Record<number, Record<number, number>> = {};
+      const loaded: Record<string, Record<number, number>> = {};
       (scoreData || []).forEach((score: any) => {
-        if (!loaded[score.registration_id]) loaded[score.registration_id] = {};
-        loaded[score.registration_id][score.hole] = score.score;
+        const rid = String(score.registration_id);
+        if (!loaded[rid]) loaded[rid] = {};
+        loaded[rid][score.hole] = score.score;
       });
       setPlayerScores(loaded);
     };
 
     loadScores();
-  }, [registrations, selectedRoundId, supabase]);
 
-  const updateScore = (regId: number, hole: number, score: number) => {
+    const channel = supabase
+      .channel(`admin-scores-${eventId}-${String(selectedRoundId)}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'scores' },
+        () => {
+          loadScores();
+        }
+      )
+      .subscribe();
+
+    const poll = setInterval(() => {
+      loadScores();
+    }, 3000);
+
+    return () => {
+      clearInterval(poll);
+      supabase.removeChannel(channel);
+    };
+  }, [registrations, selectedRoundId, eventId]);
+
+  const updateScore = (regId: string, hole: number, score: number) => {
     setPlayerScores((prev) => ({
       ...prev,
       [regId]: { ...(prev[regId] || {}), [hole]: score },
     }));
   };
 
-  const savePlayerScores = async (registrationId: number) => {
+  const savePlayerScores = async (registrationId: string) => {
     const playerScoresForReg = playerScores[registrationId] || {};
 
-    if (Object.keys(playerScoresForReg).length === 0) {
+    const scoresToSave = Object.entries(playerScoresForReg)
+      .filter(([, score]) => Number(score) > 0)
+      .map(([hole, score]) => ({
+        registration_id: registrationId,
+        hole: parseInt(hole, 10),
+        score: Number(score),
+        ...(selectedRoundId !== 'all' ? { round_id: selectedRoundId } : {}),
+      }));
+
+    if (scoresToSave.length === 0) {
       alert('No scores entered for this player.');
       return;
     }
 
     setSavingId(registrationId);
 
-    const scoresToSave = Object.entries(playerScoresForReg).map(
-      ([hole, score]) => ({
-        registration_id: registrationId,
-        hole: parseInt(hole),
-        score: Number(score),
-        ...(selectedRoundId !== 'all' ? { round_id: selectedRoundId } : {}),
-      })
-    );
-
-    // Prefer upsert with round awareness
-    const { error } = await supabase.from('scores').upsert(scoresToSave, {
-      onConflict:
-        selectedRoundId !== 'all'
-          ? 'registration_id,hole,round_id'
-          : 'registration_id,hole',
-    });
-
-    setSavingId(null);
-
-    if (error) {
-      // Fallback: delete + insert for this player/round
-      console.warn('Upsert failed, trying delete+insert', error);
-
+    try {
       let del = supabase
         .from('scores')
         .delete()
@@ -262,20 +251,28 @@ export default function EventScoringPage() {
       if (selectedRoundId !== 'all') {
         del = del.eq('round_id', selectedRoundId);
       }
-
       await del;
-      const { error: insErr } = await supabase.from('scores').insert(scoresToSave);
 
-      if (insErr) {
-        alert('Failed to save scores: ' + (insErr.message || error.message));
-        return;
-      }
+      const { error: insErr } = await supabase
+        .from('scores')
+        .insert(scoresToSave);
+
+      if (insErr) throw insErr;
+
+      const name =
+        registrations.find((r) => String(r.id) === registrationId)
+          ?.player_name || 'player';
+      alert(
+        `Score saved for ${name}${
+          selectedRound ? ` · ${selectedRound.name}` : ''
+        }`
+      );
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to save scores: ' + (err.message || 'Unknown error'));
+    } finally {
+      setSavingId(null);
     }
-
-    const name =
-      registrations.find((r) => r.id === registrationId)?.player_name ||
-      'player';
-    alert(`Score saved for ${name}${selectedRound ? ` · ${selectedRound.name}` : ''}`);
   };
 
   if (loading) {
@@ -318,6 +315,9 @@ export default function EventScoringPage() {
                 {headerTeeTime ? ` (${headerTeeTime})` : ''}
               </p>
             )}
+            <p className="text-xs text-gray-500 mt-1">
+              Polls every 3s · check-in filter off for testing
+            </p>
           </div>
 
           {rounds.length > 0 && (
@@ -352,10 +352,8 @@ export default function EventScoringPage() {
 
         {scoredRegs.length === 0 ? (
           <div className="bg-gray-800 rounded-3xl p-16 text-center text-gray-400">
-            No checked-in players
+            No players
             {selectedRoundId !== 'all' ? ' for this round' : ''}.
-            <br />
-            Check players in on the Check-In page first.
           </div>
         ) : (
           <div className="bg-gray-800 rounded-3xl p-4 md:p-6 overflow-x-auto">
@@ -416,7 +414,6 @@ export default function EventScoringPage() {
                   <th className="w-28"></th>
                 </tr>
 
-                {/* Par / HDCP / Yardage */}
                 <tr className="border-b border-gray-800 bg-gray-900 text-xs">
                   <th className="text-left py-4 px-6 font-medium">
                     <div className="mt-6">Par</div>
@@ -483,18 +480,35 @@ export default function EventScoringPage() {
                     return acc;
                   }, {});
 
-                  // Sort by pairing for this round
                   const entries = Object.entries(grouped).sort(
                     ([, aMembers]: any, [, bMembers]: any) => {
-                      const aLabel = getPairingLabel(aMembers[0], selectedRoundId);
-                      const bLabel = getPairingLabel(bMembers[0], selectedRoundId);
+                      const aLabel = getPairingLabel(
+                        aMembers[0],
+                        selectedRoundId
+                      );
+                      const bLabel = getPairingLabel(
+                        bMembers[0],
+                        selectedRoundId
+                      );
                       return aLabel.localeCompare(bLabel);
                     }
                   );
 
                   return entries.map(([teamKey, teamMembers]: any) => {
-                    const representativeId = teamMembers[0].id;
-                    const scores = playerScores[representativeId] || {};
+                    const memberIds = teamMembers.map((m: any) =>
+                      String(m.id)
+                    );
+                    const representativeId = memberIds[0];
+
+                    // Merge scores from ALL teammates (player may save on any id)
+                    const scores: Record<number, number> = {};
+                    memberIds.forEach((id: string) => {
+                      const s = playerScores[id] || {};
+                      Object.entries(s).forEach(([hole, val]) => {
+                        const h = parseInt(hole, 10);
+                        if (Number(val) > 0) scores[h] = Number(val);
+                      });
+                    });
 
                     const front9 = Array.from(
                       { length: frontCount },
@@ -547,7 +561,9 @@ export default function EventScoringPage() {
                           const score = scores[hole];
                           const par = holes[i]?.par || 4;
                           const under =
-                            score != null ? Number(score) - par : 0;
+                            score != null && Number(score) > 0
+                              ? Number(score) - par
+                              : 0;
                           const isBirdie = under === -1;
                           const isEagle = under <= -2;
                           const isBogey = under === 1;
@@ -591,7 +607,9 @@ export default function EventScoringPage() {
                           const score = scores[hole];
                           const par = holes[i + 9]?.par || 4;
                           const under =
-                            score != null ? Number(score) - par : 0;
+                            score != null && Number(score) > 0
+                              ? Number(score) - par
+                              : 0;
                           const isBirdie = under === -1;
                           const isEagle = under <= -2;
                           const isBogey = under === 1;

@@ -116,6 +116,10 @@ export default function LiveEventPage() {
   const [scoreInput, setScoreInput] = useState('');
   const [startHoleReady, setStartHoleReady] = useState(false);
 
+  const [leaderboard, setLeaderboard] = useState<
+    { name: string; total: number; holesPlayed: number }[]
+  >([]);
+
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
     return n === 9 ? 9 : 18;
@@ -126,14 +130,12 @@ export default function LiveEventPage() {
     [event?.course_data, numHoles]
   );
 
-  // UUID or numeric id, or team/player name
   const teamRegs = useMemo(() => {
     if (!teamParam || !registrations.length) return [];
 
     const raw = decodeURIComponent(teamParam).trim();
     const q = normName(raw);
 
-    // Exact id match (uuid or number as string)
     const byId = registrations.filter((r) => String(r.id) === raw);
     if (byId.length) return byId;
 
@@ -150,7 +152,6 @@ export default function LiveEventPage() {
     teamRegs[0] ||
     null;
 
-  // Keep as string — supports UUID
   const registrationId =
     primaryReg?.id != null ? String(primaryReg.id) : null;
 
@@ -228,10 +229,13 @@ export default function LiveEventPage() {
     }
 
     const loadScores = async () => {
-      let query = supabase
-        .from('scores')
-        .select('*')
-        .eq('registration_id', registrationId);
+      // Prefer this reg; also merge any teammate scores for same holes
+      const ids =
+        teamRegs.length > 0
+          ? teamRegs.map((r) => String(r.id))
+          : [registrationId];
+
+      let query = supabase.from('scores').select('*').in('registration_id', ids);
 
       if (selectedRoundId != null) {
         query = query.eq('round_id', selectedRoundId);
@@ -241,12 +245,22 @@ export default function LiveEventPage() {
 
       if (error) {
         console.error('Load scores error:', error);
+        // Fallback without round filter
+        const { data: fallback } = await supabase
+          .from('scores')
+          .select('*')
+          .in('registration_id', ids);
+        const map: Record<number, number> = {};
+        (fallback || []).forEach((s: any) => {
+          if (Number(s.score) > 0) map[s.hole] = s.score;
+        });
+        setScores(map);
         return;
       }
 
       const map: Record<number, number> = {};
       (data || []).forEach((s: any) => {
-        map[s.hole] = s.score;
+        if (Number(s.score) > 0) map[s.hole] = s.score;
       });
       setScores(map);
     };
@@ -261,7 +275,6 @@ export default function LiveEventPage() {
           event: '*',
           schema: 'public',
           table: 'scores',
-          filter: `registration_id=eq.${registrationId}`,
         },
         () => {
           loadScores();
@@ -272,7 +285,88 @@ export default function LiveEventPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [registrationId, selectedRoundId]);
+  }, [registrationId, selectedRoundId, teamRegs]);
+
+  // Live leaderboard
+  useEffect(() => {
+    if (activeTab !== 'leaderboard' || registrations.length === 0) return;
+
+    const regIds = registrations.map((r) => String(r.id));
+
+    const loadLb = async () => {
+      // No round filter while testing (matches admin)
+      const { data, error } = await supabase
+        .from('scores')
+        .select('*')
+        .in('registration_id', regIds);
+
+      if (error) {
+        console.error('Leaderboard load error:', error);
+        return;
+      }
+
+      const byReg: Record<string, number[]> = {};
+      (data || []).forEach((s: any) => {
+        const id = String(s.registration_id);
+        if (!byReg[id]) byReg[id] = [];
+        if (Number(s.score) > 0) byReg[id].push(Number(s.score));
+      });
+
+      const isTeam = (event?.max_teammates || 1) > 1;
+      const groups: Record<
+        string,
+        { total: number; holes: number; taken: boolean }
+      > = {};
+
+      registrations.forEach((r) => {
+        const key =
+          isTeam && r.team_name
+            ? r.team_name
+            : r.player_name || 'Player';
+        const id = String(r.id);
+        const holeScores = byReg[id] || [];
+
+        if (!groups[key]) {
+          groups[key] = { total: 0, holes: 0, taken: false };
+        }
+
+        if (!groups[key].taken && holeScores.length > 0) {
+          groups[key].total = holeScores.reduce((a, b) => a + b, 0);
+          groups[key].holes = holeScores.length;
+          groups[key].taken = true;
+        }
+      });
+
+      const rows = Object.entries(groups)
+        .map(([name, g]) => ({
+          name,
+          total: g.total,
+          holesPlayed: g.holes,
+        }))
+        .filter((r) => r.holesPlayed > 0)
+        .sort((a, b) => a.total - b.total);
+
+      setLeaderboard(rows);
+    };
+
+    loadLb();
+
+    const channel = supabase
+      .channel(`player-lb-${eventId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'scores' },
+        () => loadLb()
+      )
+      .subscribe();
+
+    const poll = setInterval(loadLb, 3000);
+
+    return () => {
+      clearInterval(poll);
+      supabase.removeChannel(channel);
+    };
+  }, [activeTab, registrations, event, eventId]);
 
   useEffect(() => {
     const existing = scores[currentHole];
@@ -301,7 +395,6 @@ export default function LiveEventPage() {
       return;
     }
 
-    // String UUIDs (or numeric ids as strings) — never Number()
     const targets = Array.from(
       new Set(
         teamRegs
@@ -318,13 +411,6 @@ export default function LiveEventPage() {
       alert(
         'No registration found for this team. Open the score link from the scorecard QR, or use ?team=<registration_id>.'
       );
-      console.log({
-        teamParam,
-        teamRegs,
-        primaryReg,
-        registrationId,
-        registrations: registrations.length,
-      });
       return;
     }
 
@@ -548,14 +634,52 @@ export default function LiveEventPage() {
         )}
 
         {activeTab === 'leaderboard' && (
-          <div className="bg-gray-900 rounded-3xl p-8 text-center text-gray-400">
-            <p className="mb-4">Full leaderboard is on the event page.</p>
-            <a
-              href={`/event/${eventId}/leaderboard`}
-              className="text-blue-400 hover:text-blue-300 underline"
-            >
-              Open Leaderboard →
-            </a>
+          <div className="bg-gray-900 rounded-3xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-700">
+              <h2 className="font-semibold">Live Leaderboard</h2>
+              <p className="text-xs text-gray-500 mt-1">
+                Updates as scores are entered · lowest total leads
+              </p>
+            </div>
+
+            {leaderboard.length === 0 ? (
+              <p className="text-gray-500 p-8 text-center">No scores yet.</p>
+            ) : (
+              <ul className="divide-y divide-gray-800">
+                {leaderboard.map((row, i) => (
+                  <li
+                    key={row.name}
+                    className="flex items-center justify-between px-5 py-4"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span
+                        className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-sm font-bold ${
+                          i === 0
+                            ? 'bg-amber-500 text-black'
+                            : i === 1
+                              ? 'bg-gray-400 text-black'
+                              : i === 2
+                                ? 'bg-amber-800 text-white'
+                                : 'bg-gray-800 text-gray-400'
+                        }`}
+                      >
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="font-medium truncate">{row.name}</p>
+                        <p className="text-xs text-gray-500">
+                          {row.holesPlayed} hole
+                          {row.holesPlayed === 1 ? '' : 's'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-2xl font-bold tabular-nums ml-3">
+                      {row.total}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </div>
