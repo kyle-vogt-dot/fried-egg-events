@@ -715,53 +715,58 @@ setRounds(roundsData || []);
 
         {/* Pricing Mode */}
 <div className="bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 mt-8 mb-2">
-  <div className="flex items-center justify-center gap-3 text-sm">
-    <span
-      className={
-        (event.pricing_mode || 'event') === 'event'
-          ? 'text-white'
-          : 'text-gray-500'
-      }
-    >
-      Event
-    </span>
-    <button
-      type="button"
-      onClick={() =>
-        handleEventChange(
-          'pricing_mode',
-          (event.pricing_mode || 'event') === 'event' ? 'per_round' : 'event'
-        )
-      }
-      className={`relative w-14 h-8 rounded-full transition-colors ${
-        (event.pricing_mode || 'event') === 'per_round'
-          ? 'bg-blue-600'
-          : 'bg-gray-600'
-      }`}
-    >
+  <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
+    {/* Toggle */}
+    <div className="flex items-center justify-center sm:justify-start gap-3 text-sm shrink-0">
       <span
-        className={`absolute top-1 left-1 w-6 h-6 rounded-full bg-white transition-transform ${
+        className={
+          (event.pricing_mode || 'event') === 'event'
+            ? 'text-white'
+            : 'text-gray-500'
+        }
+      >
+        Event
+      </span>
+      <button
+        type="button"
+        onClick={() =>
+          handleEventChange(
+            'pricing_mode',
+            (event.pricing_mode || 'event') === 'event' ? 'per_round' : 'event'
+          )
+        }
+        className={`relative w-14 h-8 rounded-full transition-colors ${
           (event.pricing_mode || 'event') === 'per_round'
-            ? 'translate-x-6'
-            : 'translate-x-0'
+            ? 'bg-blue-600'
+            : 'bg-gray-600'
         }`}
-      />
-    </button>
-    <span
-      className={
-        (event.pricing_mode || 'event') === 'per_round'
-          ? 'text-white'
-          : 'text-gray-500'
-      }
-    >
-      Per-round
-    </span>
+      >
+        <span
+          className={`absolute top-1 left-1 w-6 h-6 rounded-full bg-white transition-transform ${
+            (event.pricing_mode || 'event') === 'per_round'
+              ? 'translate-x-6'
+              : 'translate-x-0'
+          }`}
+        />
+      </button>
+      <span
+        className={
+          (event.pricing_mode || 'event') === 'per_round'
+            ? 'text-white'
+            : 'text-gray-500'
+        }
+      >
+        Per-round
+      </span>
+    </div>
+
+    {/* Description */}
+    <p className="text-xs text-gray-400 text-center sm:text-left leading-relaxed sm:border-l sm:border-gray-700 sm:pl-6">
+      {(event.pricing_mode || 'event') === 'per_round'
+        ? 'Event price ignored. Players only pay for rounds they select.'
+        : 'Players pay the event price (plus any rounds marked pay separately).'}
+    </p>
   </div>
-  <p className="text-xs text-gray-400 text-center mt-3 leading-relaxed">
-    {(event.pricing_mode || 'event') === 'per_round'
-      ? 'Event price ignored. Players only pay for rounds they select.'
-      : 'Players pay the event price (plus any rounds marked pay separately).'}
-  </p>
 </div>
 
         {/* Four Buttons */}
