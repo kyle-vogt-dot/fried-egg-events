@@ -120,17 +120,36 @@ export default function LiveEventPage() {
   );
 
   const teamRegs = useMemo(() => {
-    if (!teamParam || !registrations.length) return [];
-    return registrations.filter(
-      (r) =>
-        String(r.id) === teamParam ||
-        r.team_name === teamParam ||
-        r.player_name === teamParam
-    );
-  }, [registrations, teamParam]);
+  if (!teamParam || !registrations.length) return [];
 
-  const primaryReg = teamRegs[0] || null;
-  const registrationId = primaryReg?.id ?? null;
+  const raw = decodeURIComponent(teamParam).trim();
+  const q = raw.toLowerCase();
+
+  // 1) registration id in the URL
+  if (/^\d+$/.test(raw)) {
+    const hit = registrations.filter((r) => String(r.id) === raw);
+    if (hit.length) return hit;
+  }
+
+  // 2) team name (exact, case-insensitive)
+  const byTeam = registrations.filter(
+    (r) => (r.team_name || '').trim().toLowerCase() === q
+  );
+  if (byTeam.length) return byTeam;
+
+  // 3) player name
+  return registrations.filter(
+    (r) => (r.player_name || '').trim().toLowerCase() === q
+  );
+}, [registrations, teamParam]);
+
+const primaryReg = teamRegs.find((r) => r?.id != null) || teamRegs[0] || null;
+const registrationId =
+  primaryReg?.id != null && Number(primaryReg.id) > 0
+    ? Number(primaryReg.id)
+    : null;
+
+ 
 
   const teamLabel =
     primaryReg?.team_name ||
@@ -276,14 +295,30 @@ export default function LiveEventPage() {
   };
 
   const saveHoleAndAdvance = async () => {
-  if (!registrationId) {
-    alert('Could not find your registration. Check the link (?team=...).');
-    return;
-  }
-
   const num = scoreInput === '' ? 0 : parseInt(scoreInput, 10);
   if (!Number.isFinite(num) || num < 1) {
     alert('Enter a score for this hole');
+    return;
+  }
+
+  const targets = Array.from(
+    new Set(
+      teamRegs
+        .map((r) => Number(r?.id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    )
+  );
+
+  // Fallback: primary only
+  if (targets.length === 0 && registrationId) {
+    targets.push(registrationId);
+  }
+
+  if (targets.length === 0) {
+    alert(
+      'No registration found for this team. Open the score link from the scorecard QR, or use ?team=<registration_id>.'
+    );
+    console.log({ teamParam, teamRegs, primaryReg, registrations: registrations.length });
     return;
   }
 
@@ -291,28 +326,20 @@ export default function LiveEventPage() {
   setSaveMsg(null);
 
   try {
-    const targets =
-      teamRegs.length > 0 ? teamRegs.map((r) => r.id) : [registrationId];
-
     for (const regId of targets) {
-      // Remove existing row for this hole (+ round if set)
       let del = supabase
         .from('scores')
         .delete()
-        .eq('registration_id', Number(regId))
+        .eq('registration_id', regId)
         .eq('hole', currentHole);
 
       if (selectedRoundId != null) {
         del = del.eq('round_id', selectedRoundId);
       }
-
-      const { error: delErr } = await del;
-      if (delErr) {
-        console.warn('Delete before insert:', delErr);
-      }
+      await del;
 
       const { error: insErr } = await supabase.from('scores').insert({
-        registration_id: Number(regId),
+        registration_id: regId,
         hole: currentHole,
         score: num,
         ...(selectedRoundId != null ? { round_id: selectedRoundId } : {}),
