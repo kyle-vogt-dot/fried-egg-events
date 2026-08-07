@@ -213,22 +213,7 @@ export default function CreateTournament() {
             </div>
           </div>
 
-          {/* Location — controlled so we can auto-fill */}
-          <div>
-            <label className="block text-sm font-medium mb-2">Location</label>
-            <input
-              name="location"
-              type="text"
-              required
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl"
-              placeholder="Atlanta, GA"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Auto-filled when you select a course (you can still edit it)
-            </p>
-          </div>
+          
 
           {/* Course Search */}
           <div>
