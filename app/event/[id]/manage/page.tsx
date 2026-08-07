@@ -50,14 +50,14 @@ export default function EventManagePage() {
   const [newAdminEmail, setNewAdminEmail] = useState('');
 
   const [rounds, setRounds] = useState<any[]>([]);
-  const [newRound, setNewRound] = useState({
-  name: '',
-  start_time: '',
-  max_players: 40,
-  pay_separately: false,
-  price: 0,
-  greens_fee: 0,
-});
+    const [newRound, setNewRound] = useState({
+    name: '',
+    start_time: '',
+    max_teams: 18,
+    pay_separately: false,
+    price: 0,
+    greens_fee: 0,
+  });
 const [adminPerms, setAdminPerms] = useState({
   manage: true,
   checkin: true,
@@ -503,59 +503,65 @@ setRounds(roundsData || []);
     setAddons(data || []);
   };
 
-  const handleAddRound = async () => {
-  if (!newRound.name.trim()) {
-    alert('Round name is required');
-    return;
-  }
+    const handleAddRound = async () => {
+    if (!newRound.name.trim()) {
+      alert('Round name is required');
+      return;
+    }
 
-  const isPerRound = (event.pricing_mode || 'event') === 'per_round';
-  const paySeparately = isPerRound ? true : newRound.pay_separately;
-  const price = paySeparately ? Number(newRound.price) : 0;
-  const greensFee =
-    Number(newRound.greens_fee ?? event?.greens_fee) || 0;
+    const isPerRound = (event.pricing_mode || 'event') === 'per_round';
+    const paySeparately = isPerRound ? true : newRound.pay_separately;
+    const price = paySeparately ? Number(newRound.price) : 0;
+    const greensFee =
+      Number(newRound.greens_fee ?? event?.greens_fee) || 0;
 
-  if (paySeparately && (!price || price <= 0)) {
-    alert('Enter a price for this round');
-    return;
-  }
+    if (paySeparately && (!price || price <= 0)) {
+      alert('Enter a price for this round');
+      return;
+    }
 
-  const { error } = await supabase.from('event_rounds').insert({
-    event_id: parseInt(eventId),
-    name: newRound.name.trim(),
-    start_time: newRound.start_time || null,
-    max_players: newRound.max_players,
-    pay_separately: paySeparately,
-    price,
-    greens_fee: greensFee,
-    sort_order: rounds.length,
-  });
+    const playersPerTeam = teamSizeFromEventType(event.event_type || '') || 1;
+    const maxTeams = Math.max(1, Number(newRound.max_teams) || 18);
+    // Keep max_players in sync for older code / sold-out logic
+    const maxPlayers = maxTeams * playersPerTeam;
 
-  if (error) {
-    alert('Failed to add round: ' + error.message);
-    return;
-  }
+    const { error } = await supabase.from('event_rounds').insert({
+      event_id: parseInt(eventId),
+      name: newRound.name.trim(),
+      start_time: newRound.start_time || null,
+      max_teams: maxTeams,
+      max_players: maxPlayers,
+      pay_separately: paySeparately,
+      price,
+      greens_fee: greensFee,
+      sort_order: rounds.length,
+    });
 
-  const { data: roundsData, error: roundsError } = await supabase
-  .from('event_rounds')
-  .select('*')
-  .eq('event_id', parseInt(eventId))
-  .order('sort_order', { ascending: true });
+    if (error) {
+      alert('Failed to add round: ' + error.message);
+      return;
+    }
 
-if (roundsError) {
-  console.error('Rounds load error:', roundsError);
-}
-setRounds(roundsData || []);
+    const { data: roundsData, error: roundsError } = await supabase
+      .from('event_rounds')
+      .select('*')
+      .eq('event_id', parseInt(eventId))
+      .order('sort_order', { ascending: true });
 
-  setNewRound({
-    name: '',
-    start_time: '',
-    max_players: 40,
-    pay_separately: false,
-    price: 0,
-    greens_fee: Number(event?.greens_fee) || 0,
-  });
-};
+    if (roundsError) {
+      console.error('Rounds load error:', roundsError);
+    }
+    setRounds(roundsData || []);
+
+    setNewRound({
+      name: '',
+      start_time: '',
+      max_teams: 18,
+      pay_separately: false,
+      price: 0,
+      greens_fee: Number(event?.greens_fee) || 0,
+    });
+  };
 
   const handleDeleteRound = async (id: number) => {
     if (!confirm('Remove this round?')) return;
@@ -831,20 +837,29 @@ setRounds(roundsData || []);
                   className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
                 />
               </div>
-              <div className="md:col-span-2">
-                <label className="block text-sm text-gray-400 mb-2">Max Players</label>
+                            <div className="md:col-span-2">
+                <label className="block text-sm text-gray-400 mb-2">
+                  Max teams
+                </label>
                 <input
                   type="number"
-                  value={newRound.max_players}
+                  min={1}
+                  value={newRound.max_teams}
                   onChange={(e) =>
                     setNewRound({
                       ...newRound,
-                      max_players: parseInt(e.target.value) || 0,
-                      
+                      max_teams: parseInt(e.target.value) || 0,
                     })
                   }
                   className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  {(() => {
+                    const ppt = teamSizeFromEventType(event.event_type || '') || 1;
+                    const teams = Number(newRound.max_teams) || 0;
+                    return `${teams} teams · ${ppt}/team · ${teams * ppt} seats`;
+                  })()}
+                </p>
               </div>
               <div className="md:col-span-2">
   <label className="block text-sm text-gray-400 mb-2">
@@ -949,7 +964,9 @@ setRounds(roundsData || []);
                         ? String(round.start_time).slice(0, 5)
                         : 'No time set'}
                       {' · '}
-                      Max {round.max_players} players
+                                            {round.max_teams != null
+                        ? `Max ${round.max_teams} teams (${round.max_players || round.max_teams * (teamSizeFromEventType(event.event_type || '') || 1)} seats)`
+                        : `Max ${round.max_players} players`}
                       {(event.pricing_mode || 'event') === 'per_round' || round.pay_separately
     ? ` · $${Number(round.price).toFixed(2)} per player`
     : ' · Included in event price'}

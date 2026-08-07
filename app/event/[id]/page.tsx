@@ -802,12 +802,21 @@ useEffect(() => {
     : false;
 
   const isPerRound = (event?.pricing_mode || 'event') === 'per_round';
-  const maxPlayers =
+const maxPlayers =
   event?.max_players != null && Number(event.max_players) > 0
     ? Number(event.max_players)
     : null;
 
-const registeredCount = registrations.length;
+// Per-round: each selected round is a seat (1 person × 3 rounds = 3)
+// Event pricing: 1 seat per registration row
+const registeredCount = registrations.reduce((sum, r) => {
+  if (!isPerRound) return sum + 1;
+  const ids: number[] = Array.isArray(r.selected_round_ids)
+    ? r.selected_round_ids
+    : [];
+  // If somehow empty, still count 1 so the player isn't invisible
+  return sum + Math.max(ids.length, 1);
+}, 0);
 
 const isSoldOut =
   maxPlayers != null && registeredCount >= maxPlayers;
@@ -871,11 +880,56 @@ const spotsLeft =
     return [...autoIds, ...selectedPaidRoundIds];
   };
 
+    // Rounds the player is about to join (for capacity checks)
+  const capacityRoundIds: number[] = isPerRound
+    ? selectedPaidRoundIds
+    : rounds.map((r) => r.id);
+
+  const regsForCapacity = (roundId?: number) => {
+    if (roundId == null) return registrations;
+    return registrations.filter((r) => {
+      const ids: number[] = r.selected_round_ids || [];
+      // No round list stored → treat as on all rounds
+      if (!ids.length) return true;
+      return ids.includes(roundId);
+    });
+  };
+
+  const maxTeamsForRound = (roundId: number) => {
+    const round = rounds.find((r) => r.id === roundId);
+    if (round?.max_teams != null && Number(round.max_teams) > 0) {
+      return Number(round.max_teams);
+    }
+    // Fallback: derive from max_players ÷ team size
+    if (round?.max_players != null && Number(round.max_players) > 0) {
+      return Math.max(1, Math.floor(Number(round.max_players) / maxTeamSize));
+    }
+    return null; // unlimited
+  };
+
+  const teamCountForRound = (roundId: number) => {
+    const names = new Set(
+      regsForCapacity(roundId)
+        .map((r) => r.team_name)
+        .filter(Boolean)
+    );
+    return names.size;
+  };
+
+  // True if ANY selected round is at max teams (can't create a new team)
+  const teamsFull = capacityRoundIds.some((rid) => {
+    const maxT = maxTeamsForRound(rid);
+    if (maxT == null) return false;
+    return teamCountForRound(rid) >= maxT;
+  });
+
   const existingTeams = Array.from(
     new Set(registrations.map((r) => r.team_name).filter(Boolean))
   );
 
   const getSpotsLeft = (team: string) => {
+    // Spots left on this team (by player count), using event-wide regs
+    // so a team full on one round isn't joinable as a loophole
     const count = registrations.filter((r) => r.team_name === team).length;
     return Math.max(0, maxTeamSize - count);
   };
@@ -1032,12 +1086,19 @@ setWaitlistPhone('');
     setDiscountError('');
   };
 
-  const handleRegister = async () => {
+    const handleRegister = async () => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) {
       alert('Please log in to register');
+      return;
+    }
+
+    if (mode === 'create' && teamsFull) {
+      alert(
+        'No new teams available for the selected round(s). Join an existing team instead.'
+      );
       return;
     }
 
@@ -1687,17 +1748,35 @@ setWaitlistPhone('');
                       >
                         Join Existing Team
                       </button>
-                      <button
-                        onClick={() => setMode('create')}
+                                            <button
+                        type="button"
+                        onClick={() => {
+                          if (teamsFull) {
+                            alert(
+                              'No new teams available — join an existing team with open spots.'
+                            );
+                            return;
+                          }
+                          setMode('create');
+                        }}
+                        disabled={teamsFull}
                         className={`p-6 rounded-2xl border text-center font-medium transition-colors ${
                           mode === 'create'
                             ? 'border-blue-500 bg-blue-950'
                             : 'border-gray-700 hover:border-gray-600'
-                        }`}
+                        } disabled:opacity-40 disabled:cursor-not-allowed`}
                       >
-                        Create New Team
+                                               Create New Team
+                        {teamsFull ? ' (full)' : ''}
                       </button>
                     </div>
+
+                    {teamsFull && (
+                      <p className="text-amber-400 text-sm mt-3">
+                        Max teams reached for the selected round(s). Join a team
+                        that still has open spots.
+                      </p>
+                    )}
                   </div>
 
 {mode === 'join' && (
@@ -1792,81 +1871,70 @@ setWaitlistPhone('');
                     )}
 
                     {additionalPlayers.map((player, index) => {
-                      const nameValue = player.name || '';
-                      const emailValue = player.email || '';
-                      const nameOk = nameValue.trim().length > 0;
-                      const emailOk = isValidEmail(emailValue);
+  const nameValue = player.name || '';
+  const emailValue = player.email || '';
+  const nameOk = nameValue.trim().length > 0;
+  const emailOk = isValidEmail(emailValue);
 
-                      return (
-                        <div
-                          key={index}
-                          className="bg-gray-900 p-5 rounded-2xl mb-4"
-                        >
-                          <div className="flex gap-4 items-start">
-                            <div className="flex-1">
-                              <label className="block text-xs text-gray-400 mb-1">
-                                Player Name *
-                              </label>
-                              <input
-                                type="text"
-                                value={nameValue}
-                                onChange={(e) =>
-                                  updateExtraPlayer(
-                                    index,
-                                    'name',
-                                    e.target.value
-                                  )
-                                }
-                                placeholder="John Smith"
-                                className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
-                                  nameOk ? 'border-gray-600' : 'border-red-500'
-                                }`}
-                              />
-                              {!nameOk && (
-                                <p className="text-red-400 text-xs mt-1">
-                                  Name is required
-                                </p>
-                              )}
-                            </div>
+  return (
+    <div key={index} className="bg-gray-900 p-5 rounded-2xl mb-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-gray-400">
+          Player {index + 1}
+        </span>
+        <button
+          type="button"
+          onClick={() => removeExtraPlayer(index)}
+          className="w-9 h-9 flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-xl text-lg font-bold"
+        >
+          −
+        </button>
+      </div>
 
-                            <div className="flex-1">
-                              <label className="block text-xs text-gray-400 mb-1">
-                                Email *
-                              </label>
-                              <input
-                                type="email"
-                                value={emailValue}
-                                onChange={(e) =>
-                                  updateExtraPlayer(
-                                    index,
-                                    'email',
-                                    e.target.value
-                                  )
-                                }
-                                placeholder="name@email.com"
-                                className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
-                                  emailOk
-                                    ? 'border-gray-600'
-                                    : 'border-red-500'
-                                }`}
-                              />
-                              {!emailOk && (
-                                <p className="text-red-400 text-xs mt-1">
-                                  Enter a valid email (name@email.com)
-                                </p>
-                              )}
-                            </div>
+      <div>
+        <label className="block text-xs text-gray-400 mb-1">
+          Player Name *
+        </label>
+        <input
+          type="text"
+          value={nameValue}
+          onChange={(e) =>
+            updateExtraPlayer(index, 'name', e.target.value)
+          }
+          placeholder="John Smith"
+          className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
+            nameOk ? 'border-gray-600' : 'border-red-500'
+          }`}
+        />
+        {!nameOk && (
+          <p className="text-red-400 text-xs mt-1">Name is required</p>
+        )}
+      </div>
 
-                            <button
-                              onClick={() => removeExtraPlayer(index)}
-                              className="mt-6 w-10 h-10 flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-xl text-xl font-bold"
-                            >
-                              −
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
+      <div>
+        <label className="block text-xs text-gray-400 mb-1">
+          Email *
+        </label>
+        <input
+          type="email"
+          value={emailValue}
+          onChange={(e) =>
+            updateExtraPlayer(index, 'email', e.target.value)
+          }
+          placeholder="name@email.com"
+          className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
+            emailOk ? 'border-gray-600' : 'border-red-500'
+          }`}
+        />
+        {!emailOk && (
+          <p className="text-red-400 text-xs mt-1">
+            Enter a valid email (name@email.com)
+          </p>
+        )}
+      </div>
+    </div>
+  );
+})}
 
                     <button
                       onClick={() => {

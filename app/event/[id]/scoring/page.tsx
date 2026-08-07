@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
@@ -64,14 +64,6 @@ function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
   }));
 }
 
-function isCheckedInForRound(reg: any, roundId: number | 'all') {
-  if (roundId === 'all') return !!reg.checked_in;
-  const map = reg.round_checkins || {};
-  if (map[String(roundId)] != null) return !!map[String(roundId)];
-  if (map[roundId as number] != null) return !!map[roundId as number];
-  return !!reg.checked_in;
-}
-
 function getPairingLabel(reg: any, roundId: number | 'all') {
   if (roundId !== 'all') {
     const map = reg.round_pairings || {};
@@ -83,6 +75,8 @@ function getPairingLabel(reg: any, roundId: number | 'all') {
   }
   return '';
 }
+
+type RowMode = 'open' | 'locked' | 'editing';
 
 export default function EventScoringPage() {
   const params = useParams();
@@ -102,7 +96,12 @@ export default function EventScoringPage() {
     Record<string, Record<number, number>>
   >({});
   const [loading, setLoading] = useState(true);
-  const [savingId, setSavingId] = useState<string | null>(null);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [rowMode, setRowMode] = useState<Record<string, RowMode>>({});
+
+  const teamMembersRef = useRef<Record<string, string[]>>({});
+  const rowModeRef = useRef(rowMode);
+  rowModeRef.current = rowMode;
 
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
@@ -119,10 +118,8 @@ export default function EventScoringPage() {
     return rounds.find((r) => r.id === selectedRoundId) || null;
   }, [rounds, selectedRoundId]);
 
-  // TEMP for testing: no check-in required. Restore isCheckedInForRound after testing.
   const scoredRegs = useMemo(() => {
     return registrations.filter((r) => {
-      // TODO after test: if (!isCheckedInForRound(r, selectedRoundId)) return false;
       if (selectedRoundId === 'all') return true;
       const ids: number[] = r.selected_round_ids || [];
       if (!ids.length) return rounds.length <= 1;
@@ -171,9 +168,6 @@ export default function EventScoringPage() {
     const regIds = registrations.map((r) => String(r.id));
 
     const loadScores = async () => {
-      // TEMP: no round_id filter so player scores always show while testing.
-      // After testing, filter again with:
-      // if (selectedRoundId !== 'all') query = query.eq('round_id', selectedRoundId);
       const { data: scoreData, error } = await supabase
         .from('scores')
         .select('*')
@@ -184,13 +178,32 @@ export default function EventScoringPage() {
         return;
       }
 
-      const loaded: Record<string, Record<number, number>> = {};
-      (scoreData || []).forEach((score: any) => {
-        const rid = String(score.registration_id);
-        if (!loaded[rid]) loaded[rid] = {};
-        loaded[rid][score.hole] = score.score;
+      // Only skip teams currently being edited by admin
+      const skipRegIds = new Set<string>();
+      Object.entries(rowModeRef.current).forEach(([teamKey, mode]) => {
+        if (mode === 'editing') {
+          (teamMembersRef.current[teamKey] || []).forEach((id) =>
+            skipRegIds.add(id)
+          );
+        }
       });
-      setPlayerScores(loaded);
+
+      setPlayerScores((prev) => {
+        const loaded: Record<string, Record<number, number>> = { ...prev };
+
+        regIds.forEach((id) => {
+          if (!skipRegIds.has(id)) loaded[id] = {};
+        });
+
+        (scoreData || []).forEach((score: any) => {
+          const rid = String(score.registration_id);
+          if (skipRegIds.has(rid)) return;
+          if (!loaded[rid]) loaded[rid] = {};
+          loaded[rid][score.hole] = score.score;
+        });
+
+        return loaded;
+      });
     };
 
     loadScores();
@@ -200,15 +213,11 @@ export default function EventScoringPage() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'scores' },
-        () => {
-          loadScores();
-        }
+        () => loadScores()
       )
       .subscribe();
 
-    const poll = setInterval(() => {
-      loadScores();
-    }, 3000);
+    const poll = setInterval(loadScores, 3000);
 
     return () => {
       clearInterval(poll);
@@ -216,54 +225,70 @@ export default function EventScoringPage() {
     };
   }, [registrations, selectedRoundId, eventId]);
 
-  const updateScore = (regId: string, hole: number, score: number) => {
-    setPlayerScores((prev) => ({
-      ...prev,
-      [regId]: { ...(prev[regId] || {}), [hole]: score },
-    }));
+  const updateTeamScore = (
+    teamKey: string,
+    memberIds: string[],
+    hole: number,
+    score: number
+  ) => {
+    teamMembersRef.current[teamKey] = memberIds;
+
+    setPlayerScores((prev) => {
+      const next = { ...prev };
+      for (const id of memberIds) {
+        next[id] = { ...(next[id] || {}), [hole]: score };
+      }
+      return next;
+    });
   };
 
-  const savePlayerScores = async (registrationId: string) => {
-    const playerScoresForReg = playerScores[registrationId] || {};
+  const saveTeamScores = async (memberIds: string[], teamKey: string) => {
+    let sourceId = memberIds[0];
+    for (const id of memberIds) {
+      const s = playerScores[id];
+      if (s && Object.values(s).some((v) => Number(v) > 0)) {
+        sourceId = id;
+        break;
+      }
+    }
 
-    const scoresToSave = Object.entries(playerScoresForReg)
-      .filter(([, score]) => Number(score) > 0)
-      .map(([hole, score]) => ({
-        registration_id: registrationId,
-        hole: parseInt(hole, 10),
-        score: Number(score),
-        ...(selectedRoundId !== 'all' ? { round_id: selectedRoundId } : {}),
-      }));
+    const sourceScores = playerScores[sourceId] || {};
+    const holeEntries = Object.entries(sourceScores).filter(
+      ([, score]) => Number(score) > 0
+    );
 
-    if (scoresToSave.length === 0) {
-      alert('No scores entered for this player.');
+    if (holeEntries.length === 0) {
+      alert('No scores entered for this team.');
       return;
     }
 
-    setSavingId(registrationId);
+    setSavingKey(teamKey);
 
     try {
-      let del = supabase
-        .from('scores')
-        .delete()
-        .eq('registration_id', registrationId);
+      for (const regId of memberIds) {
+        // Delete by registration only for these holes (avoid round_id mismatch duplicates)
+        for (const [hole] of holeEntries) {
+          await supabase
+            .from('scores')
+            .delete()
+            .eq('registration_id', regId)
+            .eq('hole', parseInt(hole, 10));
+        }
 
-      if (selectedRoundId !== 'all') {
-        del = del.eq('round_id', selectedRoundId);
+        const rows = holeEntries.map(([hole, score]) => ({
+          registration_id: regId,
+          hole: parseInt(hole, 10),
+          score: Number(score),
+          ...(selectedRoundId !== 'all' ? { round_id: selectedRoundId } : {}),
+        }));
+
+        const { error: insErr } = await supabase.from('scores').insert(rows);
+        if (insErr) throw insErr;
       }
-      await del;
 
-      const { error: insErr } = await supabase
-        .from('scores')
-        .insert(scoresToSave);
-
-      if (insErr) throw insErr;
-
-      const name =
-        registrations.find((r) => String(r.id) === registrationId)
-          ?.player_name || 'player';
+      setRowMode((prev) => ({ ...prev, [teamKey]: 'locked' }));
       alert(
-        `Score saved for ${name}${
+        `Score saved for ${teamKey}${
           selectedRound ? ` · ${selectedRound.name}` : ''
         }`
       );
@@ -271,7 +296,7 @@ export default function EventScoringPage() {
       console.error(err);
       alert('Failed to save scores: ' + (err.message || 'Unknown error'));
     } finally {
-      setSavingId(null);
+      setSavingKey(null);
     }
   };
 
@@ -290,6 +315,62 @@ export default function EventScoringPage() {
   const isTeamEvent = (event?.max_teammates || 1) > 1;
   const frontCount = Math.min(9, numHoles);
   const backCount = Math.max(0, numHoles - 9);
+
+  const renderHoleInput = (
+    hole: number,
+    par: number,
+    scores: Record<number, number>,
+    teamKey: string,
+    memberIds: string[],
+    canEdit: boolean
+  ) => {
+    const score = scores[hole];
+    const has = score != null && Number(score) > 0;
+    const under = has ? Number(score) - par : 0;
+    const isBirdie = under === -1;
+    const isEagle = under <= -2;
+    const isBogey = under === 1;
+    const isDouble = under >= 2;
+
+        let wrap = 'rounded-2xl border border-gray-600';
+    if (isEagle) {
+      // double circle feel
+      wrap =
+        'rounded-full border-4 border-green-400 shadow-[0_0_0_3px_rgba(34,197,94,0.35)]';
+    } else if (isBirdie) {
+      wrap = 'rounded-full border-[3px] border-green-400';
+    } else if (isDouble) {
+      wrap = 'rounded-md border-[3px] border-orange-400';
+    } else if (isBogey) {
+      wrap = 'rounded-md border-2 border-orange-400';
+    }
+
+    return (
+      <td key={hole} className="text-center py-2 px-2">
+        <div className={`inline-flex items-center justify-center ${wrap}`}>
+          <input
+            type="number"
+            min={0}
+            max={20}
+            value={score ?? ''}
+            readOnly={!canEdit}
+            onChange={(e) => {
+              if (!canEdit) return;
+              updateTeamScore(
+                teamKey,
+                memberIds,
+                hole,
+                parseInt(e.target.value) || 0
+              );
+            }}
+            className={`w-11 bg-gray-700 text-center py-2 rounded-xl focus:outline-none no-spinner border-0 ${
+              !canEdit ? 'text-gray-400' : ''
+            }`}
+          />
+        </div>
+      </td>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
@@ -316,7 +397,8 @@ export default function EventScoringPage() {
               </p>
             )}
             <p className="text-xs text-gray-500 mt-1">
-              Polls every 3s · check-in filter off for testing
+              ○ under par · ▢ over par · player scores update live unless
+              Editing
             </p>
           </div>
 
@@ -332,6 +414,7 @@ export default function EventScoringPage() {
                 onChange={(e) => {
                   const v = e.target.value;
                   setSelectedRoundId(v === 'all' ? 'all' : parseInt(v, 10));
+                  setRowMode({});
                 }}
                 className="w-full bg-gray-800 border border-gray-600 rounded-2xl px-5 py-4"
               >
@@ -363,7 +446,6 @@ export default function EventScoringPage() {
                   <th className="text-left py-4 px-6 font-medium w-52">
                     Team / Player
                   </th>
-
                   {Array.from({ length: frontCount }, (_, i) => (
                     <th
                       key={i}
@@ -372,25 +454,9 @@ export default function EventScoringPage() {
                       {i + 1}
                     </th>
                   ))}
-
                   <th className="text-center py-4 px-6 font-medium text-emerald-400 border-l-2 border-r-2 border-emerald-500">
                     {numHoles > 9 ? 'Out' : 'Total'}
-                    <div className="text-xs text-gray-400 mt-1">
-                      {(() => {
-                        const frontHoles = holes.slice(0, frontCount);
-                        const par = frontHoles.reduce(
-                          (s, h) => s + (Number(h?.par) || 4),
-                          0
-                        );
-                        const yds = frontHoles.reduce(
-                          (s, h) => s + (Number(h?.yardage) || 0),
-                          0
-                        );
-                        return `P: ${par} • Y: ${yds}`;
-                      })()}
-                    </div>
                   </th>
-
                   {Array.from({ length: backCount }, (_, i) => (
                     <th
                       key={i + 9}
@@ -399,7 +465,6 @@ export default function EventScoringPage() {
                       {i + 10}
                     </th>
                   ))}
-
                   {numHoles > 9 && (
                     <th className="text-center py-4 px-6 font-medium text-emerald-400">
                       In
@@ -411,60 +476,7 @@ export default function EventScoringPage() {
                       Net
                     </th>
                   )}
-                  <th className="w-28"></th>
-                </tr>
-
-                <tr className="border-b border-gray-800 bg-gray-900 text-xs">
-                  <th className="text-left py-4 px-6 font-medium">
-                    <div className="mt-6">Par</div>
-                    <div className="mt-6">Handicap</div>
-                    <div className="mt-6">Yardage</div>
-                  </th>
-
-                  {Array.from({ length: frontCount }, (_, i) => {
-                    const holeData = holes[i];
-                    return (
-                      <th
-                        key={i}
-                        className="text-center py-2 px-2 text-[15px] leading-tight"
-                      >
-                        <div className="h-6"></div>
-                        <div>{holeData?.par || 4}</div>
-                        <div className="mt-6 text-blue-300">
-                          {holeData?.handicap || '—'}
-                        </div>
-                        <div className="mt-6 text-amber-300">
-                          {holeData?.yardage || 0}
-                        </div>
-                      </th>
-                    );
-                  })}
-
-                  <th className="border-l-2 border-r-2 border-emerald-500"></th>
-
-                  {Array.from({ length: backCount }, (_, i) => {
-                    const holeData = holes[i + 9];
-                    return (
-                      <th
-                        key={i + 9}
-                        className="text-center py-2 px-2 text-[15px] leading-tight"
-                      >
-                        <div className="h-6"></div>
-                        <div>{holeData?.par || 4}</div>
-                        <div className="mt-6 text-blue-300">
-                          {holeData?.handicap || '—'}
-                        </div>
-                        <div className="mt-6 text-amber-300">
-                          {holeData?.yardage || 0}
-                        </div>
-                      </th>
-                    );
-                  })}
-
-                  {numHoles > 9 && <th></th>}
-                  <th></th>
-                  {event?.use_handicaps && <th></th>}
-                  <th></th>
+                  <th className="w-40"></th>
                 </tr>
               </thead>
 
@@ -495,14 +507,16 @@ export default function EventScoringPage() {
                   );
 
                   return entries.map(([teamKey, teamMembers]: any) => {
-                    const memberIds = teamMembers.map((m: any) =>
+                    const memberIds: string[] = teamMembers.map((m: any) =>
                       String(m.id)
                     );
-                    const representativeId = memberIds[0];
+                    teamMembersRef.current[teamKey] = memberIds;
 
-                    // Merge scores from ALL teammates (player may save on any id)
+                    const mode: RowMode = rowMode[teamKey] || 'open';
+                    const canEdit = mode === 'open' || mode === 'editing';
+
                     const scores: Record<number, number> = {};
-                    memberIds.forEach((id: string) => {
+                    memberIds.forEach((id) => {
                       const s = playerScores[id] || {};
                       Object.entries(s).forEach(([hole, val]) => {
                         const h = parseInt(hole, 10);
@@ -521,7 +535,6 @@ export default function EventScoringPage() {
                     ).reduce((a, b) => a + b, 0);
 
                     const gross = front9 + back9;
-
                     let net = gross;
                     if (event?.use_handicaps) {
                       const avgHandicap =
@@ -554,95 +567,43 @@ export default function EventScoringPage() {
                               {teamMembers.length} players
                             </div>
                           )}
+                          {mode === 'locked' && (
+                            <div className="text-xs text-emerald-400 mt-0.5">
+                              Submitted
+                            </div>
+                          )}
+                          {mode === 'editing' && (
+                            <div className="text-xs text-amber-400 mt-0.5">
+                              Editing
+                            </div>
+                          )}
                         </td>
 
-                        {Array.from({ length: frontCount }, (_, i) => {
-                          const hole = i + 1;
-                          const score = scores[hole];
-                          const par = holes[i]?.par || 4;
-                          const under =
-                            score != null && Number(score) > 0
-                              ? Number(score) - par
-                              : 0;
-                          const isBirdie = under === -1;
-                          const isEagle = under <= -2;
-                          const isBogey = under === 1;
-                          const isDouble = under >= 2;
-
-                          return (
-                            <td key={hole} className="text-center py-2 px-2">
-                              <div
-                                className={`inline-flex items-center justify-center rounded-2xl transition-all
-                                ${isBirdie ? 'ring-2 ring-green-400' : ''}
-                                ${isEagle ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-gray-800' : ''}
-                                ${isBogey ? 'border-2 border-orange-400' : ''}
-                                ${isDouble ? 'border-4 border-orange-400' : ''}
-                              `}
-                              >
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="20"
-                                  value={score ?? ''}
-                                  onChange={(e) =>
-                                    updateScore(
-                                      representativeId,
-                                      hole,
-                                      parseInt(e.target.value) || 0
-                                    )
-                                  }
-                                  className="w-12 bg-gray-700 border border-gray-600 rounded-2xl text-center py-2 focus:outline-none focus:border-blue-500 no-spinner"
-                                />
-                              </div>
-                            </td>
-                          );
-                        })}
+                        {Array.from({ length: frontCount }, (_, i) =>
+                          renderHoleInput(
+                            i + 1,
+                            holes[i]?.par || 4,
+                            scores,
+                            teamKey,
+                            memberIds,
+                            canEdit
+                          )
+                        )}
 
                         <td className="text-center py-3 px-6 font-semibold text-emerald-400 text-lg border-l-2 border-r-2 border-emerald-500">
                           {front9 || '—'}
                         </td>
 
-                        {Array.from({ length: backCount }, (_, i) => {
-                          const hole = i + 10;
-                          const score = scores[hole];
-                          const par = holes[i + 9]?.par || 4;
-                          const under =
-                            score != null && Number(score) > 0
-                              ? Number(score) - par
-                              : 0;
-                          const isBirdie = under === -1;
-                          const isEagle = under <= -2;
-                          const isBogey = under === 1;
-                          const isDouble = under >= 2;
-
-                          return (
-                            <td key={hole} className="text-center py-2 px-2">
-                              <div
-                                className={`inline-flex items-center justify-center rounded-2xl transition-all
-                                ${isBirdie ? 'ring-2 ring-green-400' : ''}
-                                ${isEagle ? 'ring-4 ring-green-400 ring-offset-2 ring-offset-gray-800' : ''}
-                                ${isBogey ? 'border-2 border-orange-400' : ''}
-                                ${isDouble ? 'border-4 border-orange-400' : ''}
-                              `}
-                              >
-                                <input
-                                  type="number"
-                                  min="0"
-                                  max="20"
-                                  value={score ?? ''}
-                                  onChange={(e) =>
-                                    updateScore(
-                                      representativeId,
-                                      hole,
-                                      parseInt(e.target.value) || 0
-                                    )
-                                  }
-                                  className="w-12 bg-gray-700 border border-gray-600 rounded-2xl text-center py-2 focus:outline-none focus:border-blue-500 no-spinner"
-                                />
-                              </div>
-                            </td>
-                          );
-                        })}
+                        {Array.from({ length: backCount }, (_, i) =>
+                          renderHoleInput(
+                            i + 10,
+                            holes[i + 9]?.par || 4,
+                            scores,
+                            teamKey,
+                            memberIds,
+                            canEdit
+                          )
+                        )}
 
                         {numHoles > 9 && (
                           <td className="text-center py-3 px-6 font-semibold text-emerald-400 text-lg">
@@ -660,20 +621,70 @@ export default function EventScoringPage() {
                           </td>
                         )}
 
-                        <td className="text-center py-3 px-6">
-                          <button
-                            onClick={() => {
-                              if (confirm(`Submit score for ${teamKey}?`)) {
-                                savePlayerScores(representativeId);
+                        <td className="text-center py-3 px-4">
+                          {savingKey === teamKey ? (
+                            <span className="text-sm text-gray-400">
+                              Saving...
+                            </span>
+                          ) : mode === 'locked' ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setRowMode((prev) => ({
+                                  ...prev,
+                                  [teamKey]: 'editing',
+                                }))
                               }
-                            }}
-                            disabled={savingId === representativeId}
-                            className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 px-6 py-2.5 rounded-2xl text-sm font-medium"
-                          >
-                            {savingId === representativeId
-                              ? 'Saving...'
-                              : 'Submit'}
-                          </button>
+                              className="bg-blue-600 hover:bg-blue-700 px-5 py-2.5 rounded-2xl text-sm font-medium"
+                            >
+                              Edit
+                            </button>
+                          ) : (
+                            <div className="flex flex-col sm:flex-row gap-2 justify-center items-center">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const label =
+                                    mode === 'editing'
+                                      ? `Resubmit score for ${teamKey}?`
+                                      : `Submit score for ${teamKey}?`;
+                                  if (!confirm(label)) return;
+                                  saveTeamScores(memberIds, teamKey);
+                                }}
+                                className="bg-green-600 hover:bg-green-700 px-4 py-2.5 rounded-2xl text-sm font-medium"
+                              >
+                                {mode === 'editing' ? 'Submit' : 'Submit'}
+                              </button>
+                              {mode === 'open' && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setRowMode((prev) => ({
+                                      ...prev,
+                                      [teamKey]: 'editing',
+                                    }))
+                                  }
+                                  className="bg-blue-600 hover:bg-blue-700 px-4 py-2.5 rounded-2xl text-sm font-medium"
+                                >
+                                  Edit
+                                </button>
+                              )}
+                              {mode === 'editing' && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setRowMode((prev) => ({
+                                      ...prev,
+                                      [teamKey]: 'locked',
+                                    }))
+                                  }
+                                  className="text-xs text-gray-400 hover:text-white"
+                                >
+                                  Cancel
+                                </button>
+                              )}
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );

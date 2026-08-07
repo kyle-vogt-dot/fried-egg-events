@@ -84,7 +84,7 @@ export default function EventContactsPage() {
           });
         }
 
-        // One contact per email (fallback: name)
+                // One contact per email (fallback: name) + registration count
         const byKey = new Map<string, any>();
         for (const r of rows) {
           const email = (r.player_email || '').trim().toLowerCase();
@@ -93,12 +93,13 @@ export default function EventContactsPage() {
 
           const existing = byKey.get(key);
           if (!existing) {
-            byKey.set(key, { ...r });
+            byKey.set(key, { ...r, reg_count: 1 });
             continue;
           }
 
           byKey.set(key, {
             ...existing,
+            reg_count: (existing.reg_count || 1) + 1,
             player_name: existing.player_name || r.player_name,
             player_email: existing.player_email || r.player_email,
             phone: existing.phone || (r as any).phone || '',
@@ -288,8 +289,14 @@ export default function EventContactsPage() {
               <tbody>
                 {filtered.map((r) => (
                   <tr key={r.id} className="border-b border-gray-700/60">
-                    <td className="py-4 px-5 font-medium">
+                                        <td className="py-4 px-5 font-medium">
                       {r.player_name || '—'}
+                      {r.reg_count > 1 && (
+                        <span className="text-gray-400 font-normal">
+                          {' '}
+                          ({r.reg_count})
+                        </span>
+                      )}
                     </td>
                     <td className="py-4 px-5">
                       {r.player_email ? (

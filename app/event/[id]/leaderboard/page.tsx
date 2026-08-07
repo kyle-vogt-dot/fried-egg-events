@@ -71,11 +71,14 @@ export default function EventLeaderboardPage() {
   const [rounds, setRounds] = useState<any[]>([]);
   const [selectedRoundId, setSelectedRoundId] = useState<number | 'all'>('all');
   const [playerScores, setPlayerScores] = useState<
-    Record<number, Record<number, number>>
+    Record<string, Record<number, number>>
   >({});
   const [selectedFlight, setSelectedFlight] = useState<string | 'all'>('all');
   const [showNet, setShowNet] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [blurHoleInput, setBlurHoleInput] = useState('');
+  const [savingBlur, setSavingBlur] = useState(false);
 
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
@@ -107,7 +110,29 @@ export default function EventLeaderboardPage() {
         .select('*')
         .eq('id', id)
         .single();
+
       setEvent(eventData);
+      if (eventData?.leaderboard_blur_hole != null) {
+        setBlurHoleInput(String(eventData.leaderboard_blur_hole));
+      } else {
+        setBlurHoleInput('');
+      }
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user && eventData) {
+        const isCreator = eventData.created_by === user.id;
+        const { data: adminRow } = await supabase
+          .from('event_admins')
+          .select('id')
+          .eq('event_id', id)
+          .or(`user_id.eq.${user.id},email.eq.${user.email}`)
+          .maybeSingle();
+        setIsAdmin(isCreator || !!adminRow);
+      } else {
+        setIsAdmin(false);
+      }
 
       const { data: roundsData } = await supabase
         .from('event_rounds')
@@ -132,7 +157,52 @@ export default function EventLeaderboardPage() {
     fetchData();
   }, [eventId]);
 
-  // Real-time score refresh
+  const loadScores = async () => {
+    if (registrations.length === 0) {
+      setPlayerScores({});
+      return;
+    }
+
+    const regIds = registrations.map((r) => String(r.id));
+
+    let query = supabase.from('scores').select('*').in('registration_id', regIds);
+
+    if (selectedRoundId !== 'all') {
+      query = query.eq('round_id', selectedRoundId);
+    }
+
+    const { data: scoreData, error } = await query;
+
+    if (error) {
+      console.error('Failed to load scores:', error);
+      const { data: fallback } = await supabase
+        .from('scores')
+        .select('*')
+        .in('registration_id', regIds);
+
+      const loaded: Record<string, Record<number, number>> = {};
+      (fallback || []).forEach((score: any) => {
+        const rid = String(score.registration_id);
+        if (!loaded[rid]) loaded[rid] = {};
+        loaded[rid][score.hole] = score.score;
+      });
+      setPlayerScores(loaded);
+      return;
+    }
+
+    const loaded: Record<string, Record<number, number>> = {};
+    (scoreData || []).forEach((score: any) => {
+      const rid = String(score.registration_id);
+      if (!loaded[rid]) loaded[rid] = {};
+      loaded[rid][score.hole] = score.score;
+    });
+    setPlayerScores(loaded);
+  };
+
+  useEffect(() => {
+    loadScores();
+  }, [registrations, selectedRoundId]);
+
   useEffect(() => {
     if (!eventId) return;
 
@@ -140,11 +210,7 @@ export default function EventLeaderboardPage() {
       .channel(`leaderboard-scores-${eventId}`)
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'scores',
-        },
+        { event: '*', schema: 'public', table: 'scores' },
         () => {
           loadScores();
         }
@@ -172,61 +238,9 @@ export default function EventLeaderboardPage() {
     };
   }, [eventId]);
 
-  const loadScores = async () => {
-    if (registrations.length === 0) {
-      setPlayerScores({});
-      return;
-    }
-
-    let query = supabase
-      .from('scores')
-      .select('*')
-      .in(
-        'registration_id',
-        registrations.map((r) => r.id)
-      );
-
-    if (selectedRoundId !== 'all') {
-      query = query.eq('round_id', selectedRoundId);
-    }
-
-    const { data: scoreData, error } = await query;
-
-    if (error) {
-      console.error('Failed to load scores:', error);
-      const { data: fallback } = await supabase
-        .from('scores')
-        .select('*')
-        .in(
-          'registration_id',
-          registrations.map((r) => r.id)
-        );
-
-      const loaded: Record<number, Record<number, number>> = {};
-      (fallback || []).forEach((score: any) => {
-        if (!loaded[score.registration_id]) loaded[score.registration_id] = {};
-        loaded[score.registration_id][score.hole] = score.score;
-      });
-      setPlayerScores(loaded);
-      return;
-    }
-
-    const loaded: Record<number, Record<number, number>> = {};
-    (scoreData || []).forEach((score: any) => {
-      if (!loaded[score.registration_id]) loaded[score.registration_id] = {};
-      loaded[score.registration_id][score.hole] = score.score;
-    });
-    setPlayerScores(loaded);
-  };
-
-  useEffect(() => {
-    loadScores();
-  }, [registrations, selectedRoundId]);
-
   const leaderboardRows = useMemo(() => {
     let filtered = checkedInRegs;
 
-    // Flight filter
     if (selectedFlight !== 'all' && event?.flights?.length) {
       filtered = filtered.filter((r) => {
         const flight =
@@ -252,10 +266,8 @@ export default function EventLeaderboardPage() {
       const teamMembers = grouped[teamName];
       const scores: Record<number, number> = {};
 
-      // Team score = min score per hole across members (scramble-friendly)
-      // For individual events there's only one member
       teamMembers.forEach((reg: any) => {
-        const regScores = playerScores[reg.id] || {};
+        const regScores = playerScores[String(reg.id)] || {};
         Object.keys(regScores).forEach((holeKey) => {
           const hole = Number(holeKey);
           const score = regScores[hole];
@@ -291,9 +303,39 @@ export default function EventLeaderboardPage() {
         total = Math.round(total - avgHandicap);
       }
 
-      const holesPlayed = Object.keys(scores).filter(
+            const holesPlayed = Object.keys(scores).filter(
         (h) => scores[Number(h)] != null && scores[Number(h)] > 0
       ).length;
+
+      // Sum par only for holes that have a score
+      let parPlayed = 0;
+      for (let h = 1; h <= numHoles; h++) {
+        if (scores[h] != null && Number(scores[h]) > 0) {
+          // Default par 4 if course data not on this page
+          parPlayed += 4;
+        }
+      }
+      // Better: use event course_data if available
+      const courseHoles = (() => {
+        const cd = event?.course_data;
+        if (!cd) return null;
+        if (Array.isArray(cd.scorecard)) return cd.scorecard;
+        if (cd.course?.scorecard) return cd.course.scorecard;
+        return null;
+      })();
+      if (courseHoles && Array.isArray(courseHoles)) {
+        parPlayed = 0;
+        for (let h = 1; h <= numHoles; h++) {
+          if (scores[h] != null && Number(scores[h]) > 0) {
+            const holeData = courseHoles[h - 1] || courseHoles.find(
+              (x: any) => Number(x.Hole || x.hole) === h
+            );
+            parPlayed += Number(holeData?.Par || holeData?.par) || 4;
+          }
+        }
+      }
+
+      const toPar = holesPlayed > 0 ? total - parPlayed : null;
 
       return {
         teamName,
@@ -303,11 +345,11 @@ export default function EventLeaderboardPage() {
         back9,
         total,
         holesPlayed,
+        toPar,
         pairing: getPairingLabel(teamMembers[0], selectedRoundId),
       };
     });
 
-    // Sort: teams with scores first, then by total ascending
     rows.sort((a, b) => {
       if (a.holesPlayed === 0 && b.holesPlayed > 0) return 1;
       if (b.holesPlayed === 0 && a.holesPlayed > 0) return -1;
@@ -325,6 +367,49 @@ export default function EventLeaderboardPage() {
     showNet,
     selectedRoundId,
   ]);
+
+  // --- Blur logic (must be OUTSIDE leaderboardRows useMemo) ---
+  const blurHole =
+    event?.leaderboard_blur_hole != null &&
+    Number(event.leaderboard_blur_hole) > 0
+      ? Number(event.leaderboard_blur_hole)
+      : null;
+
+  const blurActive = useMemo(() => {
+    if (!blurHole) return false;
+    return leaderboardRows.some((row) => {
+      for (let h = blurHole; h <= numHoles; h++) {
+        if (row.scores[h] != null && Number(row.scores[h]) > 0) return true;
+      }
+      return false;
+    });
+  }, [blurHole, leaderboardRows, numHoles]);
+
+  const showBlurred = blurActive && !isAdmin;
+
+  const saveBlurHole = async () => {
+    setSavingBlur(true);
+    const parsed = parseInt(blurHoleInput, 10);
+    const val =
+      blurHoleInput.trim() === '' || Number.isNaN(parsed)
+        ? null
+        : Math.min(numHoles, Math.max(1, parsed));
+
+    const { error } = await supabase
+      .from('tournaments')
+      .update({ leaderboard_blur_hole: val })
+      .eq('id', parseInt(eventId));
+
+    setSavingBlur(false);
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    setEvent((prev: any) =>
+      prev ? { ...prev, leaderboard_blur_hole: val } : prev
+    );
+    setBlurHoleInput(val != null ? String(val) : '');
+  };
 
   if (loading) {
     return (
@@ -393,7 +478,6 @@ export default function EventLeaderboardPage() {
           )}
         </div>
 
-        {/* Flight filters + Gross/Net */}
         <div className="flex flex-wrap items-center gap-3 mb-8">
           <button
             onClick={() => setSelectedFlight('all')}
@@ -443,6 +527,43 @@ export default function EventLeaderboardPage() {
           )}
         </div>
 
+        {isAdmin && (
+          <div className="bg-gray-800 border border-indigo-500/30 rounded-2xl p-5 mb-6 flex flex-col sm:flex-row sm:items-end gap-4">
+            <div className="flex-1">
+              <label className="block text-sm text-gray-400 mb-2">
+                Blur leaderboard starting at hole
+              </label>
+              <p className="text-xs text-gray-500 mb-2">
+                Everyone sees live standings until any team posts a score on
+                this hole. Then the board blurs for players (you still see it
+                as admin). Leave blank to disable.
+              </p>
+              <input
+                type="number"
+                min={1}
+                max={numHoles}
+                value={blurHoleInput}
+                onChange={(e) => setBlurHoleInput(e.target.value)}
+                placeholder={`e.g. 13 (1–${numHoles})`}
+                className="w-full sm:w-48 bg-gray-900 border border-gray-600 rounded-xl px-4 py-3"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={saveBlurHole}
+              disabled={savingBlur}
+              className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600 px-6 py-3 rounded-2xl font-medium"
+            >
+              {savingBlur ? 'Saving…' : 'Save blur hole'}
+            </button>
+            {blurActive && (
+              <p className="text-sm text-amber-400 sm:ml-2">
+                Blur is active (a team has reached hole {blurHole})
+              </p>
+            )}
+          </div>
+        )}
+
         {checkedInRegs.length === 0 ? (
           <div className="bg-gray-800 rounded-3xl p-16 text-center text-gray-400">
             No players checked in
@@ -451,8 +572,25 @@ export default function EventLeaderboardPage() {
             Check players in, then enter scores on the Scoring page.
           </div>
         ) : (
-          <div className="bg-gray-800 rounded-3xl p-4 md:p-6 overflow-x-auto">
-            <table className="w-full border-collapse min-w-[1100px]">
+          <div className="relative bg-gray-800 rounded-3xl p-4 md:p-6 overflow-x-auto">
+            {showBlurred && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-3xl bg-gray-900/70 backdrop-blur-md">
+                <div className="text-center px-6">
+                  <p className="text-xl font-semibold text-white mb-2">
+                    Leaderboard hidden
+                  </p>
+                  <p className="text-gray-300 text-sm max-w-sm">
+                    Standings are blurred once the field reaches hole{' '}
+                    {blurHole}. Check back after your round.
+                  </p>
+                </div>
+              </div>
+            )}
+            <table
+              className={`w-full border-collapse min-w-[1100px] ${
+                showBlurred ? 'select-none pointer-events-none opacity-40' : ''
+              }`}
+            >
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-900">
                   <th className="text-left py-4 px-6 font-medium w-16">Pos</th>
@@ -473,8 +611,11 @@ export default function EventLeaderboardPage() {
                       In
                     </th>
                   )}
-                  <th className="text-center py-4 px-6 font-medium">
+                                    <th className="text-center py-4 px-6 font-medium">
                     {showNet ? 'Net' : 'Total'}
+                  </th>
+                  <th className="text-center py-4 px-6 font-medium text-gray-400">
+                    +/-
                   </th>
                 </tr>
               </thead>
@@ -540,8 +681,27 @@ export default function EventLeaderboardPage() {
                             {row.back9 || '—'}
                           </td>
                         )}
-                        <td className="text-center py-5 px-6 font-bold text-2xl text-white">
+                                                <td className="text-center py-5 px-6 font-bold text-2xl text-white">
                           {row.holesPlayed > 0 ? row.total : '—'}
+                        </td>
+                        <td
+                          className={`text-center py-5 px-6 font-bold text-xl ${
+                            row.toPar == null
+                              ? 'text-gray-500'
+                              : row.toPar < 0
+                                ? 'text-emerald-400'
+                                : row.toPar > 0
+                                  ? 'text-orange-400'
+                                  : 'text-white'
+                          }`}
+                        >
+                          {row.toPar == null
+                            ? '—'
+                            : row.toPar === 0
+                              ? 'E'
+                              : row.toPar > 0
+                                ? `+${row.toPar}`
+                                : String(row.toPar)}
                         </td>
                       </tr>
                     );

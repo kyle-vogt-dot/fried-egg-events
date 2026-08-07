@@ -3,6 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import {
+  Document,
+  Page,
+  Text,
+  View,
+  StyleSheet,
+  PDFDownloadLink,
+} from '@react-pdf/renderer';
 
 type Slot = 'A' | 'B';
 
@@ -70,6 +78,117 @@ function getRoundPairing(reg: any, roundId: number | null) {
   return { hole: null, slot: null };
 }
 
+const pairPdfStyles = StyleSheet.create({
+  page: {
+    paddingTop: 36,
+    paddingBottom: 40,
+    paddingHorizontal: 40,
+    fontFamily: 'Helvetica',
+    fontSize: 10,
+    color: '#111',
+  },
+  brand: { fontSize: 10, color: '#666', marginBottom: 4 },
+  title: { fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+  subtitle: { fontSize: 10, color: '#444', marginBottom: 2 },
+  headerRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#111',
+    paddingBottom: 6,
+    marginTop: 16,
+    marginBottom: 4,
+  },
+  thHole: { width: 70, fontWeight: 'bold' },
+  thTeam: { flex: 1, fontWeight: 'bold' },
+  thPlayers: { flex: 1.4, fontWeight: 'bold' },
+  row: {
+    flexDirection: 'row',
+    paddingVertical: 5,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#ddd',
+  },
+  tdHole: { width: 70 },
+  tdTeam: { flex: 1, fontWeight: 'bold' },
+  tdPlayers: { flex: 1.4, color: '#333' },
+  footer: {
+    position: 'absolute',
+    bottom: 24,
+    left: 40,
+    right: 40,
+    fontSize: 8,
+    color: '#888',
+    textAlign: 'center',
+  },
+  empty: { marginTop: 24, color: '#666' },
+});
+
+function PairingsPDF({
+  eventName,
+  course,
+  eventDate,
+  roundName,
+  roundTime,
+  rows,
+}: {
+  eventName: string;
+  course?: string;
+  eventDate?: string;
+  roundName?: string;
+  roundTime?: string;
+  rows: { holeSlot: string; team: string; players: string }[];
+}) {
+  const dateStr = eventDate
+    ? new Date(String(eventDate) + 'T12:00:00').toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : '';
+
+  return (
+    <Document>
+      <Page size="LETTER" style={pairPdfStyles.page}>
+        <Text style={pairPdfStyles.brand}>Fried Egg Events</Text>
+        <Text style={pairPdfStyles.title}>{eventName || 'Event'} — Pairings</Text>
+        {dateStr ? (
+          <Text style={pairPdfStyles.subtitle}>{dateStr}</Text>
+        ) : null}
+        {course ? (
+          <Text style={pairPdfStyles.subtitle}>{course}</Text>
+        ) : null}
+        {(roundName || roundTime) && (
+          <Text style={pairPdfStyles.subtitle}>
+            {[roundName, roundTime].filter(Boolean).join(' · ')}
+          </Text>
+        )}
+
+        <View style={pairPdfStyles.headerRow}>
+          <Text style={pairPdfStyles.thHole}>Hole</Text>
+          <Text style={pairPdfStyles.thTeam}>Team</Text>
+          <Text style={pairPdfStyles.thPlayers}>Players</Text>
+        </View>
+
+        {rows.length === 0 ? (
+          <Text style={pairPdfStyles.empty}>No pairings set for this round.</Text>
+        ) : (
+          rows.map((r, i) => (
+            <View key={`${r.holeSlot}-${i}`} style={pairPdfStyles.row} wrap={false}>
+              <Text style={pairPdfStyles.tdHole}>{r.holeSlot || '—'}</Text>
+              <Text style={pairPdfStyles.tdTeam}>{r.team}</Text>
+              <Text style={pairPdfStyles.tdPlayers}>{r.players}</Text>
+            </View>
+          ))
+        )}
+
+        <Text style={pairPdfStyles.footer}>
+          friedeggevents.app · Pairings sheet
+        </Text>
+      </Page>
+    </Document>
+  );
+}
+
 export default function EventPairingsPage() {
   const params = useParams();
   const router = useRouter();
@@ -108,6 +227,37 @@ export default function EventPairingsPage() {
     () => rounds.find((r) => r.id === selectedRoundId) || null,
     [rounds, selectedRoundId]
   );
+
+    // Sorted list for PDF (by hole, then A before B)
+  const pdfRows = useMemo(() => {
+    const rows = teams.map((t) => {
+      const label = (draft[t.team_name] || '').trim();
+      const parsed = label ? parsePairing(label) : null;
+      return {
+        holeSlot: label || '—',
+        team: t.team_name,
+        players: t.player_names.join(', '),
+        sortHole: parsed?.hole ?? 999,
+        sortSlot: parsed?.slot === 'B' ? 1 : 0,
+      };
+    });
+    rows.sort((a, b) => a.sortHole - b.sortHole || a.sortSlot - b.sortSlot);
+    return rows.map(({ holeSlot, team, players }) => ({
+      holeSlot,
+      team,
+      players,
+    }));
+  }, [teams, draft]);
+
+  const pdfFileName = `${String(event?.name || 'event')
+    .replace(/[^a-z0-9]+/gi, '-')
+    .replace(/^-|-$/g, '')}-pairings${
+    selectedRound
+      ? `-${String(selectedRound.name)
+          .replace(/[^a-z0-9]+/gi, '-')
+          .replace(/^-|-$/g, '')}`
+      : ''
+  }.pdf`;
 
   const buildTeamsForRound = (regs: any[], roundId: number | null) => {
     let filtered = regs;
@@ -459,13 +609,36 @@ export default function EventPairingsPage() {
             >
               Clear
             </button>
-            <button
+                        <button
               onClick={savePairings}
               disabled={saving}
               className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 px-5 py-3 rounded-2xl font-medium"
             >
               {saving ? 'Saving...' : 'Save Pairings'}
             </button>
+
+            <PDFDownloadLink
+              document={
+                <PairingsPDF
+                  eventName={event?.name || 'Event'}
+                  course={event?.course}
+                  eventDate={event?.date}
+                  roundName={selectedRound?.name}
+                  roundTime={
+                    selectedRound?.start_time
+                      ? formatRoundTime(selectedRound.start_time)
+                      : undefined
+                  }
+                  rows={pdfRows}
+                />
+              }
+              fileName={pdfFileName}
+              className="bg-emerald-700 hover:bg-emerald-800 px-5 py-3 rounded-2xl font-medium text-center"
+            >
+              {({ loading: pdfLoading }) =>
+                pdfLoading ? 'Preparing PDF…' : '📄 Download PDF'
+              }
+            </PDFDownloadLink>
           </div>
         </div>
 

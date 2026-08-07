@@ -151,6 +151,8 @@ function IncomeStatementPDF({
   grossIncome,
   net,
   paidPlayerCount,
+  paidSeatCount,
+  isPerRound,
   generatedAt,
 }: {
   event: any;
@@ -172,11 +174,19 @@ function IncomeStatementPDF({
   grossIncome: number;
   net: number;
   paidPlayerCount: number;
+  paidSeatCount: number;
+  isPerRound: boolean;
   generatedAt: string;
 }) {
   const eventDate = event?.date
     ? new Date(String(event.date) + 'T12:00:00').toLocaleDateString()
     : '';
+
+  const regCountLabel = isPerRound
+    ? `${paidSeatCount} seat${paidSeatCount === 1 ? '' : 's'} · ${paidPlayerCount} player${
+        paidPlayerCount === 1 ? '' : 's'
+      }`
+    : `${paidPlayerCount} player${paidPlayerCount === 1 ? '' : 's'}`;
 
   return (
     <Document>
@@ -186,18 +196,18 @@ function IncomeStatementPDF({
           <Text style={pdfStyles.title}>Income Statement</Text>
           <Text style={pdfStyles.subtitle}>{event?.name || 'Event'}</Text>
           <Text style={pdfStyles.subtitle}>
-            {[eventDate, event?.course, event?.location].filter(Boolean).join(' · ')}
+            {[eventDate, event?.course, event?.location]
+              .filter(Boolean)
+              .join(' · ')}
           </Text>
           <Text style={pdfStyles.subtitle}>Generated {generatedAt}</Text>
         </View>
 
-        {/* Revenue */}
         <Text style={pdfStyles.sectionTitle}>Revenue</Text>
 
         <View style={pdfStyles.row}>
           <Text style={pdfStyles.label}>
-            Registration fees ({paidPlayerCount} player
-            {paidPlayerCount === 1 ? '' : 's'}, full price)
+            Registration fees ({regCountLabel}, full price)
           </Text>
           <Text style={pdfStyles.amount}>{money(registrationRevenue)}</Text>
         </View>
@@ -208,9 +218,7 @@ function IncomeStatementPDF({
               Less: discount {d.code} ({d.players} player
               {d.players === 1 ? '' : 's'})
             </Text>
-            <Text style={pdfStyles.amountMuted}>
-              {money(-d.totalSaved)}
-            </Text>
+            <Text style={pdfStyles.amountMuted}>{money(-d.totalSaved)}</Text>
           </View>
         ))}
 
@@ -246,7 +254,6 @@ function IncomeStatementPDF({
           <Text style={pdfStyles.totalAmount}>{money(grossIncome)}</Text>
         </View>
 
-        {/* Expenses */}
         <Text style={pdfStyles.sectionTitle}>Expenses</Text>
 
         <View style={pdfStyles.row}>
@@ -287,14 +294,14 @@ function IncomeStatementPDF({
           <Text style={pdfStyles.totalAmount}>{money(totalExpenses)}</Text>
         </View>
 
-        {/* Net */}
         <View style={pdfStyles.netRow}>
           <Text style={pdfStyles.totalLabel}>Net income (loss)</Text>
           <Text style={pdfStyles.totalAmount}>{money(net)}</Text>
         </View>
 
         <Text style={pdfStyles.footer}>
-          Prepared for record-keeping · Not a formal tax return · Fried Egg Events
+          Prepared for record-keeping · Not a formal tax return · Fried Egg
+          Events
         </Text>
       </Page>
     </Document>
@@ -361,7 +368,11 @@ export default function EventIncomePage() {
         .select('*')
         .eq('event_id', id)
         .order('created_at', { ascending: false }),
-      supabase.from('platform_settings').select('platform_fee').eq('id', 1).single(),
+      supabase
+        .from('platform_settings')
+        .select('platform_fee')
+        .eq('id', 1)
+        .single(),
     ]);
 
     setEvent(ev);
@@ -385,6 +396,17 @@ export default function EventIncomePage() {
     () => registrations.filter((r) => r.paid),
     [registrations]
   );
+
+  // Per-round: each selected round = 1 seat · Event: 1 seat per player
+  const paidSeatCount = useMemo(() => {
+    return paidPlayers.reduce((sum, r) => {
+      if (!isPerRound) return sum + 1;
+      const ids: number[] = Array.isArray(r.selected_round_ids)
+        ? r.selected_round_ids
+        : [];
+      return sum + Math.max(ids.length, 1);
+    }, 0);
+  }, [paidPlayers, isPerRound]);
 
   const { greensFeesTotal, greensLines } = useMemo(() => {
     const lines: { label: string; amount: number; detail: string }[] = [];
@@ -678,6 +700,8 @@ export default function EventIncomePage() {
                 grossIncome={grossIncome}
                 net={net}
                 paidPlayerCount={paidPlayers.length}
+                paidSeatCount={paidSeatCount}
+                isPerRound={isPerRound}
                 generatedAt={generatedAt}
               />
             }
@@ -690,7 +714,6 @@ export default function EventIncomePage() {
           </PDFDownloadLink>
         </div>
 
-        {/* Summary cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-gray-800 rounded-3xl p-6">
             <p className="text-gray-400 text-sm">Registrations (est.)</p>
@@ -698,7 +721,13 @@ export default function EventIncomePage() {
               ${(registrationRevenue - totalDiscounts).toFixed(2)}
             </p>
             <p className="text-xs text-gray-500 mt-1">
-              {paidPlayers.length} paid players
+              {isPerRound
+                ? `${paidSeatCount} paid seats · ${paidPlayers.length} player${
+                    paidPlayers.length === 1 ? '' : 's'
+                  }`
+                : `${paidPlayers.length} paid player${
+                    paidPlayers.length === 1 ? '' : 's'
+                  }`}
               {totalDiscounts > 0 && (
                 <span className="text-amber-400">
                   {' '}
@@ -738,7 +767,6 @@ export default function EventIncomePage() {
           </div>
         </div>
 
-        {/* Income summary lines */}
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
           <h2 className="text-2xl font-semibold mb-6">Income summary</h2>
           <div className="space-y-4">
@@ -746,8 +774,15 @@ export default function EventIncomePage() {
               <div>
                 <div className="font-medium">Registered players</div>
                 <div className="text-sm text-gray-500">
-                  {paidPlayers.length} player
-                  {paidPlayers.length === 1 ? '' : 's'} (full price)
+                  {isPerRound
+                    ? `${paidSeatCount} seat${
+                        paidSeatCount === 1 ? '' : 's'
+                      } · ${paidPlayers.length} player${
+                        paidPlayers.length === 1 ? '' : 's'
+                      } (full price)`
+                    : `${paidPlayers.length} player${
+                        paidPlayers.length === 1 ? '' : 's'
+                      } (full price)`}
                 </div>
               </div>
               <span className="text-emerald-400 font-semibold text-lg">
@@ -807,7 +842,6 @@ export default function EventIncomePage() {
           </div>
         </div>
 
-        {/* Manual income */}
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8 space-y-6">
           <h2 className="text-2xl font-semibold">Add cash / other income</h2>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -871,7 +905,6 @@ export default function EventIncomePage() {
           </div>
         </div>
 
-        {/* Expenses */}
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8 space-y-6">
           <h2 className="text-2xl font-semibold">Expenses</h2>
 
