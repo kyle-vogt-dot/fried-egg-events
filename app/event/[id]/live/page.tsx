@@ -88,6 +88,21 @@ function normName(s: string) {
   return (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
+function formatToPar(toPar: number | null | undefined) {
+  if (toPar == null) return '—';
+  if (toPar === 0) return 'E';
+  if (toPar > 0) return `+${toPar}`;
+  return String(toPar);
+}
+
+type LbRow = {
+  name: string;
+  total: number;
+  holesPlayed: number;
+  toPar: number | null;
+  scores: Record<number, number>;
+};
+
 export default function LiveEventPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -116,9 +131,9 @@ export default function LiveEventPage() {
   const [scoreInput, setScoreInput] = useState('');
   const [startHoleReady, setStartHoleReady] = useState(false);
 
-  const [leaderboard, setLeaderboard] = useState<
-    { name: string; total: number; holesPlayed: number }[]
-  >([]);
+  const [leaderboard, setLeaderboard] = useState<LbRow[]>([]);
+  const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
@@ -173,6 +188,41 @@ export default function LiveEventPage() {
     handicap: currentHole,
   };
 
+  // Your score vs par (holes with scores only)
+  const myToPar = useMemo(() => {
+    let strokes = 0;
+    let parSum = 0;
+    let played = 0;
+    for (let h = 1; h <= numHoles; h++) {
+      const s = scores[h];
+      if (s != null && s > 0) {
+        strokes += s;
+        const info = holes.find((x) => x.hole === h);
+        parSum += Number(info?.par) || 4;
+        played += 1;
+      }
+    }
+    return played > 0 ? strokes - parSum : null;
+  }, [scores, holes, numHoles]);
+
+  const scorecardRow = useMemo(
+    () => leaderboard.find((r) => r.name === scorecardTeam) || null,
+    [leaderboard, scorecardTeam]
+  );
+
+  const blurHole =
+    event?.leaderboard_blur_hole != null &&
+    Number(event.leaderboard_blur_hole) > 0
+      ? Number(event.leaderboard_blur_hole)
+      : null;
+
+  const blurActive = useMemo(() => {
+    if (!blurHole) return false;
+    return leaderboard.some((row) => row.holesPlayed >= blurHole);
+  }, [blurHole, leaderboard]);
+
+  const showBlurred = blurActive && !isAdmin;
+
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -184,6 +234,22 @@ export default function LiveEventPage() {
         .eq('id', id)
         .single();
       setEvent(eventData);
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user && eventData) {
+        const isCreator = eventData.created_by === user.id;
+        const { data: adminRow } = await supabase
+          .from('event_admins')
+          .select('id')
+          .eq('event_id', id)
+          .or(`user_id.eq.${user.id},email.eq.${user.email}`)
+          .maybeSingle();
+        setIsAdmin(isCreator || !!adminRow);
+      } else {
+        setIsAdmin(false);
+      }
 
       const { data: roundsData } = await supabase
         .from('event_rounds')
@@ -229,7 +295,6 @@ export default function LiveEventPage() {
     }
 
     const loadScores = async () => {
-      // Prefer this reg; also merge any teammate scores for same holes
       const ids =
         teamRegs.length > 0
           ? teamRegs.map((r) => String(r.id))
@@ -245,7 +310,6 @@ export default function LiveEventPage() {
 
       if (error) {
         console.error('Load scores error:', error);
-        // Fallback without round filter
         const { data: fallback } = await supabase
           .from('scores')
           .select('*')
@@ -287,35 +351,37 @@ export default function LiveEventPage() {
     };
   }, [registrationId, selectedRoundId, teamRegs]);
 
-  // Live leaderboard
+  // Live leaderboard with per-hole scores + to-par
   useEffect(() => {
     if (activeTab !== 'leaderboard' || registrations.length === 0) return;
 
     const regIds = registrations.map((r) => String(r.id));
+    const courseHoles = holes;
 
     const loadLb = async () => {
-      // No round filter while testing (matches admin)
-      const { data, error } = await supabase
-        .from('scores')
-        .select('*')
-        .in('registration_id', regIds);
+      let query = supabase.from('scores').select('*').in('registration_id', regIds);
+      if (selectedRoundId != null) {
+        query = query.eq('round_id', selectedRoundId);
+      }
 
+      const { data, error } = await query;
       if (error) {
         console.error('Leaderboard load error:', error);
         return;
       }
 
-      const byReg: Record<string, number[]> = {};
+      // regId -> hole -> score
+      const byReg: Record<string, Record<number, number>> = {};
       (data || []).forEach((s: any) => {
         const id = String(s.registration_id);
-        if (!byReg[id]) byReg[id] = [];
-        if (Number(s.score) > 0) byReg[id].push(Number(s.score));
+        if (!byReg[id]) byReg[id] = {};
+        if (Number(s.score) > 0) byReg[id][s.hole] = Number(s.score);
       });
 
       const isTeam = (event?.max_teammates || 1) > 1;
       const groups: Record<
         string,
-        { total: number; holes: number; taken: boolean }
+        { scores: Record<number, number>; taken: boolean }
       > = {};
 
       registrations.forEach((r) => {
@@ -324,27 +390,52 @@ export default function LiveEventPage() {
             ? r.team_name
             : r.player_name || 'Player';
         const id = String(r.id);
-        const holeScores = byReg[id] || [];
+        const holeMap = byReg[id] || {};
 
         if (!groups[key]) {
-          groups[key] = { total: 0, holes: 0, taken: false };
+          groups[key] = { scores: {}, taken: false };
         }
 
-        if (!groups[key].taken && holeScores.length > 0) {
-          groups[key].total = holeScores.reduce((a, b) => a + b, 0);
-          groups[key].holes = holeScores.length;
-          groups[key].taken = true;
-        }
+        // Team: take first member with scores (or min per hole)
+        Object.entries(holeMap).forEach(([hStr, sc]) => {
+          const h = Number(hStr);
+          const prev = groups[key].scores[h];
+          groups[key].scores[h] =
+            prev !== undefined ? Math.min(prev, sc) : sc;
+        });
+        if (Object.keys(holeMap).length > 0) groups[key].taken = true;
       });
 
-      const rows = Object.entries(groups)
-        .map(([name, g]) => ({
-          name,
-          total: g.total,
-          holesPlayed: g.holes,
-        }))
+      const rows: LbRow[] = Object.entries(groups)
+        .map(([name, g]) => {
+          let total = 0;
+          let parSum = 0;
+          let holesPlayed = 0;
+          const scoresMap = g.scores;
+          Object.entries(scoresMap).forEach(([hStr, sc]) => {
+            const h = Number(hStr);
+            if (sc > 0) {
+              total += sc;
+              holesPlayed += 1;
+              const info = courseHoles.find((x) => x.hole === h);
+              parSum += Number(info?.par) || 4;
+            }
+          });
+          return {
+            name,
+            total,
+            holesPlayed,
+            toPar: holesPlayed > 0 ? total - parSum : null,
+            scores: scoresMap,
+          };
+        })
         .filter((r) => r.holesPlayed > 0)
-        .sort((a, b) => a.total - b.total);
+        .sort((a, b) => {
+          if (a.toPar != null && b.toPar != null && a.toPar !== b.toPar) {
+            return a.toPar - b.toPar;
+          }
+          return a.total - b.total;
+        });
 
       setLeaderboard(rows);
     };
@@ -366,7 +457,7 @@ export default function LiveEventPage() {
       clearInterval(poll);
       supabase.removeChannel(channel);
     };
-  }, [activeTab, registrations, event, eventId]);
+  }, [activeTab, registrations, event, eventId, selectedRoundId, holes]);
 
   useEffect(() => {
     const existing = scores[currentHole];
@@ -419,16 +510,12 @@ export default function LiveEventPage() {
 
     try {
       for (const regId of targets) {
-        let del = supabase
+        // Delete all rows for this hole/reg (avoids duplicates if round_id was null before)
+        await supabase
           .from('scores')
           .delete()
           .eq('registration_id', regId)
           .eq('hole', currentHole);
-
-        if (selectedRoundId != null) {
-          del = del.eq('round_id', selectedRoundId);
-        }
-        await del;
 
         const { error: insErr } = await supabase.from('scores').insert({
           registration_id: regId,
@@ -449,6 +536,23 @@ export default function LiveEventPage() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Circle / square styling relative to par for hole dots
+  const holeDotClass = (h: number) => {
+    if (h === currentHole) return 'bg-blue-600 text-white';
+    const s = scores[h];
+    if (s == null || s <= 0) return 'bg-gray-800 text-gray-500';
+    const par = Number(holes.find((x) => x.hole === h)?.par) || 4;
+    const diff = s - par;
+    if (diff <= -2)
+      return 'bg-emerald-600 text-white ring-2 ring-emerald-300 rounded-full';
+    if (diff === -1)
+      return 'bg-emerald-800 text-emerald-200 ring-2 ring-emerald-400 rounded-full';
+    if (diff === 0) return 'bg-gray-700 text-white rounded-full';
+    if (diff === 1)
+      return 'bg-orange-900 text-orange-200 border-2 border-orange-400 rounded-md';
+    return 'bg-red-900 text-red-200 border-2 border-red-400 rounded-md';
   };
 
   if (loading) {
@@ -551,7 +655,20 @@ export default function LiveEventPage() {
                 {holeInfo.handicap || '—'}
               </p>
               <p className="text-sm text-gray-500 mt-2">
-                Total: {totalScore || '—'}
+                Total {totalScore || '—'} ·{' '}
+                <span
+                  className={
+                    myToPar == null
+                      ? ''
+                      : myToPar < 0
+                        ? 'text-emerald-400 font-semibold'
+                        : myToPar > 0
+                          ? 'text-orange-400 font-semibold'
+                          : 'text-white font-semibold'
+                  }
+                >
+                  {formatToPar(myToPar)}
+                </span>
               </p>
             </div>
 
@@ -611,19 +728,12 @@ export default function LiveEventPage() {
             <div className="flex flex-wrap justify-center gap-1.5 pb-4">
               {Array.from({ length: numHoles }, (_, i) => {
                 const h = i + 1;
-                const has = scores[h] != null && scores[h] > 0;
                 return (
                   <button
                     key={h}
                     type="button"
                     onClick={() => setCurrentHole(h)}
-                    className={`w-8 h-8 rounded-full text-xs font-medium ${
-                      h === currentHole
-                        ? 'bg-blue-600 text-white'
-                        : has
-                          ? 'bg-emerald-900 text-emerald-300'
-                          : 'bg-gray-800 text-gray-500'
-                    }`}
+                    className={`w-8 h-8 text-xs font-medium ${holeDotClass(h)}`}
                   >
                     {h}
                   </button>
@@ -634,48 +744,81 @@ export default function LiveEventPage() {
         )}
 
         {activeTab === 'leaderboard' && (
-          <div className="bg-gray-900 rounded-3xl overflow-hidden">
+          <div className="relative bg-gray-900 rounded-3xl overflow-hidden">
+            {showBlurred && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-950/80 backdrop-blur-md rounded-3xl">
+                <div className="text-center px-6">
+                  <p className="text-xl font-semibold mb-2">
+                    Leaderboard hidden
+                  </p>
+                  <p className="text-gray-400 text-sm max-w-xs">
+                    Standings blur once any team has completed {blurHole}{' '}
+                    holes.
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="px-5 py-4 border-b border-gray-700">
               <h2 className="font-semibold">Live Leaderboard</h2>
               <p className="text-xs text-gray-500 mt-1">
-                Updates as scores are entered · lowest total leads
+                vs par · tap a score for scorecard
               </p>
             </div>
 
             {leaderboard.length === 0 ? (
               <p className="text-gray-500 p-8 text-center">No scores yet.</p>
             ) : (
-              <ul className="divide-y divide-gray-800">
-                {leaderboard.map((row, i) => (
-                  <li
-                    key={row.name}
-                    className="flex items-center justify-between px-5 py-4"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
+              <ul
+                className={`divide-y divide-gray-800 ${
+                  showBlurred ? 'opacity-40 pointer-events-none' : ''
+                }`}
+              >
+                                {leaderboard.map((row, i) => (
+                  <li key={row.name}>
+                    <button
+                      type="button"
+                      onClick={() => setScorecardTeam(row.name)}
+                      className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-800/80 transition-colors"
+                      title="View scorecard"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span
+                          className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-sm font-bold ${
+                            i === 0
+                              ? 'bg-amber-500 text-black'
+                              : i === 1
+                                ? 'bg-gray-400 text-black'
+                                : i === 2
+                                  ? 'bg-amber-800 text-white'
+                                  : 'bg-gray-800 text-gray-400'
+                          }`}
+                        >
+                          {i + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="font-medium truncate">{row.name}</p>
+                          <p className="text-xs text-gray-500">
+                            {row.holesPlayed} hole
+                            {row.holesPlayed === 1 ? '' : 's'} · tap for
+                            scorecard
+                          </p>
+                        </div>
+                      </div>
                       <span
-                        className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center text-sm font-bold ${
-                          i === 0
-                            ? 'bg-amber-500 text-black'
-                            : i === 1
-                              ? 'bg-gray-400 text-black'
-                              : i === 2
-                                ? 'bg-amber-800 text-white'
-                                : 'bg-gray-800 text-gray-400'
+                        className={`text-2xl font-bold tabular-nums ml-3 ${
+                          row.toPar == null
+                            ? 'text-gray-500'
+                            : row.toPar < 0
+                              ? 'text-emerald-400'
+                              : row.toPar > 0
+                                ? 'text-orange-400'
+                                : 'text-white'
                         }`}
                       >
-                        {i + 1}
+                        {formatToPar(row.toPar)}
                       </span>
-                      <div className="min-w-0">
-                        <p className="font-medium truncate">{row.name}</p>
-                        <p className="text-xs text-gray-500">
-                          {row.holesPlayed} hole
-                          {row.holesPlayed === 1 ? '' : 's'}
-                        </p>
-                      </div>
-                    </div>
-                    <span className="text-2xl font-bold tabular-nums ml-3">
-                      {row.total}
-                    </span>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -683,6 +826,77 @@ export default function LiveEventPage() {
           </div>
         )}
       </div>
+
+      {scorecardRow && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-start justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-2xl font-bold">{scorecardRow.name}</h2>
+                <p className="text-sm text-gray-400 mt-1">
+                  Thru {scorecardRow.holesPlayed}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScorecardTeam(null)}
+                className="text-gray-400 hover:text-white text-sm"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-6">
+              {Array.from({ length: numHoles }, (_, i) => {
+                const hole = i + 1;
+                const s = scorecardRow.scores[hole];
+                const par = Number(holes.find((x) => x.hole === hole)?.par) || 4;
+                const diff = s != null && s > 0 ? s - par : null;
+                return (
+                  <div
+                    key={hole}
+                    className="bg-gray-900 rounded-xl p-3 text-center"
+                  >
+                    <div className="text-xs text-gray-500">
+                      H{hole} · p{par}
+                    </div>
+                    <div
+                      className={`text-lg font-semibold mt-1 ${
+                        diff == null
+                          ? ''
+                          : diff < 0
+                            ? 'text-emerald-400'
+                            : diff > 0
+                              ? 'text-orange-400'
+                              : ''
+                      }`}
+                    >
+                      {s != null && s > 0 ? s : '—'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex justify-between text-sm border-t border-gray-700 pt-4">
+              <span className="text-gray-400">vs par</span>
+              <span
+                className={
+                  scorecardRow.toPar == null
+                    ? 'text-gray-400'
+                    : scorecardRow.toPar < 0
+                      ? 'text-emerald-400 font-semibold'
+                      : scorecardRow.toPar > 0
+                        ? 'text-orange-400 font-semibold'
+                        : 'text-white font-semibold'
+                }
+              >
+                {formatToPar(scorecardRow.toPar)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

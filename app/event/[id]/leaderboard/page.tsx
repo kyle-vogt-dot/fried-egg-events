@@ -56,6 +56,13 @@ function getFlightFromHandicap(handicap: number, flights: any[]) {
   return sortedFlights[sortedFlights.length - 1]?.name || '';
 }
 
+function formatToPar(toPar: number | null | undefined) {
+  if (toPar == null) return '—';
+  if (toPar === 0) return 'E';
+  if (toPar > 0) return `+${toPar}`;
+  return String(toPar);
+}
+
 export default function EventLeaderboardPage() {
   const params = useParams();
   const router = useRouter();
@@ -79,6 +86,7 @@ export default function EventLeaderboardPage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [blurHoleInput, setBlurHoleInput] = useState('');
   const [savingBlur, setSavingBlur] = useState(false);
+  const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
 
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
@@ -262,6 +270,14 @@ export default function EventLeaderboardPage() {
       return acc;
     }, {});
 
+    const courseHoles = (() => {
+      const cd = event?.course_data;
+      if (!cd) return null;
+      if (Array.isArray(cd.scorecard)) return cd.scorecard;
+      if (cd.course?.scorecard) return cd.course.scorecard;
+      return null;
+    })();
+
     const rows = Object.keys(grouped).map((teamName) => {
       const teamMembers = grouped[teamName];
       const scores: Record<number, number> = {};
@@ -303,34 +319,22 @@ export default function EventLeaderboardPage() {
         total = Math.round(total - avgHandicap);
       }
 
-            const holesPlayed = Object.keys(scores).filter(
+      const holesPlayed = Object.keys(scores).filter(
         (h) => scores[Number(h)] != null && scores[Number(h)] > 0
       ).length;
 
-      // Sum par only for holes that have a score
       let parPlayed = 0;
       for (let h = 1; h <= numHoles; h++) {
         if (scores[h] != null && Number(scores[h]) > 0) {
-          // Default par 4 if course data not on this page
-          parPlayed += 4;
-        }
-      }
-      // Better: use event course_data if available
-      const courseHoles = (() => {
-        const cd = event?.course_data;
-        if (!cd) return null;
-        if (Array.isArray(cd.scorecard)) return cd.scorecard;
-        if (cd.course?.scorecard) return cd.course.scorecard;
-        return null;
-      })();
-      if (courseHoles && Array.isArray(courseHoles)) {
-        parPlayed = 0;
-        for (let h = 1; h <= numHoles; h++) {
-          if (scores[h] != null && Number(scores[h]) > 0) {
-            const holeData = courseHoles[h - 1] || courseHoles.find(
-              (x: any) => Number(x.Hole || x.hole) === h
-            );
+          if (courseHoles && Array.isArray(courseHoles)) {
+            const holeData =
+              courseHoles[h - 1] ||
+              courseHoles.find(
+                (x: any) => Number(x.Hole || x.hole) === h
+              );
             parPlayed += Number(holeData?.Par || holeData?.par) || 4;
+          } else {
+            parPlayed += 4;
           }
         }
       }
@@ -350,9 +354,13 @@ export default function EventLeaderboardPage() {
       };
     });
 
+    // Sort by to-par when available, else by total
     rows.sort((a, b) => {
       if (a.holesPlayed === 0 && b.holesPlayed > 0) return 1;
       if (b.holesPlayed === 0 && a.holesPlayed > 0) return -1;
+      if (a.toPar != null && b.toPar != null && a.toPar !== b.toPar) {
+        return a.toPar - b.toPar;
+      }
       if (a.total !== b.total) return a.total - b.total;
       return a.teamName.localeCompare(b.teamName);
     });
@@ -368,7 +376,11 @@ export default function EventLeaderboardPage() {
     selectedRoundId,
   ]);
 
-  // --- Blur logic (must be OUTSIDE leaderboardRows useMemo) ---
+  const scorecardRow = useMemo(
+    () => leaderboardRows.find((r) => r.teamName === scorecardTeam) || null,
+    [leaderboardRows, scorecardTeam]
+  );
+
   const blurHole =
     event?.leaderboard_blur_hole != null &&
     Number(event.leaderboard_blur_hole) > 0
@@ -377,13 +389,8 @@ export default function EventLeaderboardPage() {
 
   const blurActive = useMemo(() => {
     if (!blurHole) return false;
-    return leaderboardRows.some((row) => {
-      for (let h = blurHole; h <= numHoles; h++) {
-        if (row.scores[h] != null && Number(row.scores[h]) > 0) return true;
-      }
-      return false;
-    });
-  }, [blurHole, leaderboardRows, numHoles]);
+    return leaderboardRows.some((row) => row.holesPlayed >= blurHole);
+  }, [blurHole, leaderboardRows]);
 
   const showBlurred = blurActive && !isAdmin;
 
@@ -531,12 +538,12 @@ export default function EventLeaderboardPage() {
           <div className="bg-gray-800 border border-indigo-500/30 rounded-2xl p-5 mb-6 flex flex-col sm:flex-row sm:items-end gap-4">
             <div className="flex-1">
               <label className="block text-sm text-gray-400 mb-2">
-                Blur leaderboard starting at hole
+                Blur after this many holes
               </label>
               <p className="text-xs text-gray-500 mb-2">
-                Everyone sees live standings until any team posts a score on
-                this hole. Then the board blurs for players (you still see it
-                as admin). Leave blank to disable.
+                Everyone sees live standings until any team has scores on this
+                many holes (e.g. 13 = first team through 13 holes). Then the
+                board blurs for players. Leave blank to disable.
               </p>
               <input
                 type="number"
@@ -558,7 +565,7 @@ export default function EventLeaderboardPage() {
             </button>
             {blurActive && (
               <p className="text-sm text-amber-400 sm:ml-2">
-                Blur is active (a team has reached hole {blurHole})
+                Blur is active (a team has completed {blurHole} holes)
               </p>
             )}
           </div>
@@ -580,8 +587,8 @@ export default function EventLeaderboardPage() {
                     Leaderboard hidden
                   </p>
                   <p className="text-gray-300 text-sm max-w-sm">
-                    Standings are blurred once the field reaches hole{' '}
-                    {blurHole}. Check back after your round.
+                    Standings are blurred once any team has completed{' '}
+                    {blurHole} holes. Check back after your round.
                   </p>
                 </div>
               </div>
@@ -611,11 +618,8 @@ export default function EventLeaderboardPage() {
                       In
                     </th>
                   )}
-                                    <th className="text-center py-4 px-6 font-medium">
-                    {showNet ? 'Net' : 'Total'}
-                  </th>
-                  <th className="text-center py-4 px-6 font-medium text-gray-400">
-                    +/-
+                  <th className="text-center py-4 px-6 font-medium">
+                    {showNet ? 'Net vs par' : 'vs par'}
                   </th>
                 </tr>
               </thead>
@@ -624,16 +628,16 @@ export default function EventLeaderboardPage() {
                 {(() => {
                   let rank = 1;
                   return leaderboardRows.map((row, index) => {
-                    const prevTotal =
-                      index > 0 ? leaderboardRows[index - 1].total : null;
-                    if (row.total !== prevTotal) rank = index + 1;
+                    const prevToPar =
+                      index > 0 ? leaderboardRows[index - 1].toPar : null;
+                    if (row.toPar !== prevToPar) rank = index + 1;
 
                     const position =
                       row.holesPlayed === 0
                         ? '—'
                         : rank === 1
                           ? '1'
-                          : leaderboardRows[index - 1]?.total === row.total
+                          : leaderboardRows[index - 1]?.toPar === row.toPar
                             ? `T${rank}`
                             : String(rank);
 
@@ -681,27 +685,23 @@ export default function EventLeaderboardPage() {
                             {row.back9 || '—'}
                           </td>
                         )}
-                                                <td className="text-center py-5 px-6 font-bold text-2xl text-white">
-                          {row.holesPlayed > 0 ? row.total : '—'}
-                        </td>
-                        <td
-                          className={`text-center py-5 px-6 font-bold text-xl ${
-                            row.toPar == null
-                              ? 'text-gray-500'
-                              : row.toPar < 0
-                                ? 'text-emerald-400'
-                                : row.toPar > 0
-                                  ? 'text-orange-400'
-                                  : 'text-white'
-                          }`}
-                        >
-                          {row.toPar == null
-                            ? '—'
-                            : row.toPar === 0
-                              ? 'E'
-                              : row.toPar > 0
-                                ? `+${row.toPar}`
-                                : String(row.toPar)}
+                        <td className="text-center py-5 px-6">
+                          <button
+                            type="button"
+                            onClick={() => setScorecardTeam(row.teamName)}
+                            className={`font-bold text-2xl underline-offset-4 hover:underline ${
+                              row.toPar == null
+                                ? 'text-gray-500'
+                                : row.toPar < 0
+                                  ? 'text-emerald-400'
+                                  : row.toPar > 0
+                                    ? 'text-orange-400'
+                                    : 'text-white'
+                            }`}
+                            title="View scorecard"
+                          >
+                            {formatToPar(row.toPar)}
+                          </button>
                         </td>
                       </tr>
                     );
@@ -714,9 +714,80 @@ export default function EventLeaderboardPage() {
 
         <p className="text-sm text-gray-500 mt-6">
           Scores update live when saved on the Scoring page
-          {selectedRound ? ` for ${selectedRound.name}` : ''}.
+          {selectedRound ? ` for ${selectedRound.name}` : ''}. Tap a score to
+          view the scorecard.
         </p>
       </div>
+
+      {scorecardRow && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+          <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 md:p-8">
+            <div className="flex items-start justify-between gap-4 mb-6">
+              <div>
+                <h2 className="text-2xl font-bold">{scorecardRow.teamName}</h2>
+                {scorecardRow.pairing && (
+                  <p className="text-sm text-teal-400 mt-1">
+                    {scorecardRow.pairing}
+                  </p>
+                )}
+                <p className="text-sm text-gray-400 mt-1">
+                  {scorecardRow.teamMembers
+                    .map((m: any) => m.player_name)
+                    .join(', ')}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setScorecardTeam(null)}
+                className="text-gray-400 hover:text-white text-sm"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-6">
+              {Array.from({ length: numHoles }, (_, i) => {
+                const hole = i + 1;
+                const s = scorecardRow.scores[hole];
+                return (
+                  <div
+                    key={hole}
+                    className="bg-gray-900 rounded-xl p-3 text-center"
+                  >
+                    <div className="text-xs text-gray-500">H{hole}</div>
+                    <div className="text-lg font-semibold mt-1">
+                      {s != null && s > 0 ? s : '—'}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex justify-between text-sm text-gray-400 border-t border-gray-700 pt-4">
+              <span>
+                Thru {scorecardRow.holesPlayed} · Out{' '}
+                {scorecardRow.front9 || '—'}
+                {numHoles > 9
+                  ? ` · In ${scorecardRow.back9 || '—'}`
+                  : ''}
+              </span>
+              <span
+                className={
+                  scorecardRow.toPar == null
+                    ? ''
+                    : scorecardRow.toPar < 0
+                      ? 'text-emerald-400 font-semibold'
+                      : scorecardRow.toPar > 0
+                        ? 'text-orange-400 font-semibold'
+                        : 'text-white font-semibold'
+                }
+              >
+                {formatToPar(scorecardRow.toPar)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
