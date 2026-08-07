@@ -211,17 +211,20 @@ export default function LiveEventPage() {
   );
 
   const blurHole =
-    event?.leaderboard_blur_hole != null &&
-    Number(event.leaderboard_blur_hole) > 0
-      ? Number(event.leaderboard_blur_hole)
-      : null;
+  event?.leaderboard_blur_hole != null &&
+  Number(event.leaderboard_blur_hole) > 0
+    ? Number(event.leaderboard_blur_hole)
+    : null;
 
-  const blurActive = useMemo(() => {
-    if (!blurHole) return false;
-    return leaderboard.some((row) => row.holesPlayed >= blurHole);
-  }, [blurHole, leaderboard]);
+const blurActive = useMemo(() => {
+  if (!blurHole) return false;
+  return leaderboard.some((row) => Number(row.holesPlayed) >= blurHole);
+}, [blurHole, leaderboard]);
 
-  const showBlurred = blurActive && !isAdmin;
+// Players only — never treat creator as “always clear” if you want to test as yourself:
+const showBlurred = blurActive; // temporary test
+// production:
+// const showBlurred = blurActive && !isAdmin;
 
   useEffect(() => {
     const fetchData = async () => {

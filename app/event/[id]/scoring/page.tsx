@@ -16,6 +16,14 @@ function formatRoundTime(startTime: string | null | undefined) {
   return `${h}:${m} ${ampm}`;
 }
 
+function isCheckedInForRound(reg: any, roundId: number | 'all') {
+  if (roundId === 'all') return !!reg.checked_in;
+  const map = reg.round_checkins || {};
+  if (map[String(roundId)] != null) return !!map[String(roundId)];
+  if (map[roundId as number] != null) return !!map[roundId as number];
+  return !!reg.checked_in;
+}
+
 function defaultHoles(numHoles: number) {
   return Array.from({ length: numHoles }, (_, i) => ({
     hole: i + 1,
@@ -118,8 +126,12 @@ export default function EventScoringPage() {
     return rounds.find((r) => r.id === selectedRoundId) || null;
   }, [rounds, selectedRoundId]);
 
-  const scoredRegs = useMemo(() => {
+    const scoredRegs = useMemo(() => {
     return registrations.filter((r) => {
+      // Require check-in
+      if (!isCheckedInForRound(r, selectedRoundId)) return false;
+
+      // Must be signed up for this round (when a specific round is selected)
       if (selectedRoundId === 'all') return true;
       const ids: number[] = r.selected_round_ids || [];
       if (!ids.length) return rounds.length <= 1;
@@ -435,8 +447,10 @@ export default function EventScoringPage() {
 
         {scoredRegs.length === 0 ? (
           <div className="bg-gray-800 rounded-3xl p-16 text-center text-gray-400">
-            No players
+                        No players checked in
             {selectedRoundId !== 'all' ? ' for this round' : ''}.
+            <br />
+            Check players in first, then enter scores.
           </div>
         ) : (
           <div className="bg-gray-800 rounded-3xl p-4 md:p-6 overflow-x-auto">

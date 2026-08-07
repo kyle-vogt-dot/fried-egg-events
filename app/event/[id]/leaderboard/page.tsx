@@ -392,7 +392,8 @@ export default function EventLeaderboardPage() {
     return leaderboardRows.some((row) => row.holesPlayed >= blurHole);
   }, [blurHole, leaderboardRows]);
 
-  const showBlurred = blurActive && !isAdmin;
+  // Admin / TV board is never blurred — players see blur on Live only
+const showBlurred = false;
 
   const saveBlurHole = async () => {
     setSavingBlur(true);

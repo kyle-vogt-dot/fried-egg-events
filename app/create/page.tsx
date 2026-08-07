@@ -26,12 +26,10 @@ export default function CreateTournament() {
   const getCourseLocation = (course: any): string => {
     if (!course) return '';
 
-    // Prefer explicit location fields
     if (course.location && typeof course.location === 'string') {
       return course.location;
     }
 
-    // Common GolfCourseAPI / RapidAPI shapes
     const city = course.city || course.City || '';
     const state = course.state || course.State || course.state_code || '';
     const country = course.country || course.Country || '';
@@ -40,14 +38,12 @@ export default function CreateTournament() {
     if (city) return city;
     if (state) return state;
 
-    // Fallbacks
     if (course.club_name) return course.club_name;
     if (course.address) return course.address;
 
     return country || '';
   };
 
-  // Debounced search
   const debouncedSearch = (query: string) => {
     if (searchTimeoutRef.current) {
       clearTimeout(searchTimeoutRef.current);
@@ -58,7 +54,6 @@ export default function CreateTournament() {
     }, 500);
   };
 
-  // Search for courses using RapidAPI
   const searchCourses = async (query: string) => {
     if (query.length < 3) {
       setCourseResults([]);
@@ -90,7 +85,6 @@ export default function CreateTournament() {
     }
   };
 
-  // Select course + auto-fill location
   const selectCourse = (course: any) => {
     setSelectedCourse(course);
     setCourseSearch(course.name || course.course_name || '');
@@ -163,7 +157,32 @@ export default function CreateTournament() {
       return;
     }
 
-    alert('Tournament created successfully!');
+    // Organizer-level Connect check — only nudge if not ready for payouts
+    let needsPayoutSetup = true;
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select(
+          'stripe_account_id, stripe_payouts_enabled, stripe_charges_enabled'
+        )
+        .eq('id', user.id)
+        .maybeSingle();
+
+      needsPayoutSetup =
+        !profile?.stripe_account_id || !profile?.stripe_payouts_enabled;
+    } catch (err) {
+      console.error('Profile / Stripe status check failed:', err);
+      // Fail open: still send them to manage with setup hint
+      needsPayoutSetup = true;
+    }
+
+    setLoading(false);
+
+    if (needsPayoutSetup) {
+      router.push(`/event/${newEvent.id}/manage?setup_payouts=1`);
+      return;
+    }
+
     router.push(`/event/${newEvent.id}/manage`);
   };
 
@@ -213,8 +232,6 @@ export default function CreateTournament() {
             </div>
           </div>
 
-          
-
           {/* Course Search */}
           <div>
             <label className="block text-sm font-medium mb-2">
@@ -261,22 +278,23 @@ export default function CreateTournament() {
                 </div>
               )}
             </div>
+
             {/* Location — controlled so we can auto-fill */}
-          <div>
-            <label className="block text-sm font-medium mb-2">Location</label>
-            <input
-              name="location"
-              type="text"
-              required
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-              className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl"
-              placeholder="Atlanta, GA"
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Auto-filled when you select a course (you can still edit it)
-            </p>
-          </div>
+            <div className="mt-6">
+              <label className="block text-sm font-medium mb-2">Location</label>
+              <input
+                name="location"
+                type="text"
+                required
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl"
+                placeholder="Atlanta, GA"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Auto-filled when you select a course (you can still edit it)
+              </p>
+            </div>
 
             {selectedCourse && (
               <div className="mt-3 px-5 py-3 bg-green-900/30 border border-green-700 rounded-2xl text-emerald-400 text-sm">
