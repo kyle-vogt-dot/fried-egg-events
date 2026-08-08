@@ -14,6 +14,7 @@ export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -29,13 +30,12 @@ export default function SignupPage() {
     setError(null);
 
     if (!name.trim() || !phone.trim()) {
-      setError("Name and phone number are required");
+      setError('Name and phone number are required');
       setLoading(false);
       return;
     }
 
     try {
-      // 1. Create auth user
       const { data, error: authError } = await supabase.auth.signUp({
         email,
         password,
@@ -44,13 +44,11 @@ export default function SignupPage() {
           data: {
             full_name: name,
             phone: phone,
-          }
+          },
         },
       });
 
       if (authError) throw authError;
-
-      // Profile is now created automatically by the database trigger
 
       setSuccess(true);
     } catch (err: any) {
@@ -67,7 +65,8 @@ export default function SignupPage() {
           <div className="text-6xl mb-6">📧</div>
           <h2 className="text-3xl font-semibold mb-3">Check your email</h2>
           <p className="text-gray-400 mb-8">
-            We sent a confirmation link to <span className="font-medium text-white">{email}</span>
+            We sent a confirmation link to{' '}
+            <span className="font-medium text-white">{email}</span>
           </p>
           <button
             onClick={() => router.push('/login')}
@@ -87,7 +86,9 @@ export default function SignupPage() {
 
         <form onSubmit={handleSignup} className="space-y-6">
           <div>
-            <label className="block text-sm mb-2">Full Name <span className="text-red-400">*</span></label>
+            <label className="block text-sm mb-2">
+              Full Name <span className="text-red-400">*</span>
+            </label>
             <input
               type="text"
               value={name}
@@ -99,7 +100,9 @@ export default function SignupPage() {
           </div>
 
           <div>
-            <label className="block text-sm mb-2">Email <span className="text-red-400">*</span></label>
+            <label className="block text-sm mb-2">
+              Email <span className="text-red-400">*</span>
+            </label>
             <input
               type="email"
               value={email}
@@ -110,7 +113,9 @@ export default function SignupPage() {
           </div>
 
           <div>
-            <label className="block text-sm mb-2">Phone Number <span className="text-red-400">*</span></label>
+            <label className="block text-sm mb-2">
+              Phone Number <span className="text-red-400">*</span>
+            </label>
             <input
               type="tel"
               value={phone}
@@ -122,14 +127,27 @@ export default function SignupPage() {
           </div>
 
           <div>
-            <label className="block text-sm mb-2">Password <span className="text-red-400">*</span></label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
-            />
+            <label className="block text-sm mb-2">
+              Password <span className="text-red-400">*</span>
+            </label>
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+                className="w-full px-5 py-4 pr-16 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 hover:text-white px-2 py-1"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
           </div>
 
           {error && <p className="text-red-500 text-center">{error}</p>}
@@ -146,7 +164,9 @@ export default function SignupPage() {
         <p className="text-center mt-6 text-gray-400">
           Already have an account?{' '}
           <button
-            onClick={() => router.push(`/login?redirect=${encodeURIComponent(redirect)}`)}
+            onClick={() =>
+              router.push(`/login?redirect=${encodeURIComponent(redirect)}`)
+            }
             className="text-blue-400 hover:text-blue-500"
           >
             Sign in

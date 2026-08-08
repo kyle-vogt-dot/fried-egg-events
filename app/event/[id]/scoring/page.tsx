@@ -84,6 +84,67 @@ function getPairingLabel(reg: any, roundId: number | 'all') {
   return '';
 }
 
+function ScoreMark({
+  score,
+  par,
+}: {
+  score: number | null | undefined;
+  par: number;
+}) {
+  if (score == null || score <= 0) {
+    return <span className="text-gray-500">—</span>;
+  }
+
+  const diff = score - par;
+
+  // Eagle or better: double circle
+  if (diff <= -2) {
+    return (
+      <span className="inline-flex items-center justify-center w-10 h-10 rounded-full border-2 border-emerald-400">
+        <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border-2 border-emerald-300 text-emerald-300 font-semibold text-sm">
+          {score}
+        </span>
+      </span>
+    );
+  }
+
+  // Birdie: single circle
+  if (diff === -1) {
+    return (
+      <span className="inline-flex items-center justify-center w-10 h-10 rounded-full border-2 border-emerald-400 text-emerald-300 font-semibold text-sm">
+        {score}
+      </span>
+    );
+  }
+
+  // Par
+  if (diff === 0) {
+    return (
+      <span className="inline-flex items-center justify-center w-10 h-10 text-white font-semibold text-sm">
+        {score}
+      </span>
+    );
+  }
+
+  // Bogey: single square
+  if (diff === 1) {
+    return (
+      <span className="inline-flex items-center justify-center w-10 h-10 border-2 border-orange-400 text-orange-300 font-semibold text-sm">
+        {score}
+      </span>
+    );
+  }
+
+  // Double+: double square
+  return (
+    <span className="inline-flex items-center justify-center w-10 h-10 border-2 border-red-400">
+      <span className="inline-flex items-center justify-center w-7 h-7 border-2 border-red-300 text-red-300 font-semibold text-sm">
+        {score}
+      </span>
+    </span>
+  );
+}
+
 type RowMode = 'open' | 'locked' | 'editing';
 
 export default function EventScoringPage() {
@@ -126,12 +187,10 @@ export default function EventScoringPage() {
     return rounds.find((r) => r.id === selectedRoundId) || null;
   }, [rounds, selectedRoundId]);
 
-    const scoredRegs = useMemo(() => {
+  const scoredRegs = useMemo(() => {
     return registrations.filter((r) => {
-      // Require check-in
       if (!isCheckedInForRound(r, selectedRoundId)) return false;
 
-      // Must be signed up for this round (when a specific round is selected)
       if (selectedRoundId === 'all') return true;
       const ids: number[] = r.selected_round_ids || [];
       if (!ids.length) return rounds.length <= 1;
@@ -190,7 +249,6 @@ export default function EventScoringPage() {
         return;
       }
 
-      // Only skip teams currently being edited by admin
       const skipRegIds = new Set<string>();
       Object.entries(rowModeRef.current).forEach(([teamKey, mode]) => {
         if (mode === 'editing') {
@@ -278,7 +336,6 @@ export default function EventScoringPage() {
 
     try {
       for (const regId of memberIds) {
-        // Delete by registration only for these holes (avoid round_id mismatch duplicates)
         for (const [hole] of holeEntries) {
           await supabase
             .from('scores')
@@ -338,48 +395,30 @@ export default function EventScoringPage() {
   ) => {
     const score = scores[hole];
     const has = score != null && Number(score) > 0;
-    const under = has ? Number(score) - par : 0;
-    const isBirdie = under === -1;
-    const isEagle = under <= -2;
-    const isBogey = under === 1;
-    const isDouble = under >= 2;
-
-        let wrap = 'rounded-2xl border border-gray-600';
-    if (isEagle) {
-      // double circle feel
-      wrap =
-        'rounded-full border-4 border-green-400 shadow-[0_0_0_3px_rgba(34,197,94,0.35)]';
-    } else if (isBirdie) {
-      wrap = 'rounded-full border-[3px] border-green-400';
-    } else if (isDouble) {
-      wrap = 'rounded-md border-[3px] border-orange-400';
-    } else if (isBogey) {
-      wrap = 'rounded-md border-2 border-orange-400';
-    }
 
     return (
-      <td key={hole} className="text-center py-2 px-2">
-        <div className={`inline-flex items-center justify-center ${wrap}`}>
+      <td key={hole} className="text-center py-2 px-1">
+        {canEdit ? (
           <input
             type="number"
             min={0}
             max={20}
-            value={score ?? ''}
-            readOnly={!canEdit}
+            value={has ? score : ''}
             onChange={(e) => {
-              if (!canEdit) return;
               updateTeamScore(
                 teamKey,
                 memberIds,
                 hole,
-                parseInt(e.target.value) || 0
+                parseInt(e.target.value, 10) || 0
               );
             }}
-            className={`w-11 bg-gray-700 text-center py-2 rounded-xl focus:outline-none no-spinner border-0 ${
-              !canEdit ? 'text-gray-400' : ''
-            }`}
+            className="w-11 bg-gray-700 border border-gray-600 text-center py-2 rounded-xl focus:outline-none focus:border-emerald-500 no-spinner"
           />
-        </div>
+        ) : (
+          <div className="flex justify-center">
+            <ScoreMark score={has ? Number(score) : null} par={par} />
+          </div>
+        )}
       </td>
     );
   };
@@ -447,7 +486,7 @@ export default function EventScoringPage() {
 
         {scoredRegs.length === 0 ? (
           <div className="bg-gray-800 rounded-3xl p-16 text-center text-gray-400">
-                        No players checked in
+            No players checked in
             {selectedRoundId !== 'all' ? ' for this round' : ''}.
             <br />
             Check players in first, then enter scores.
@@ -667,7 +706,7 @@ export default function EventScoringPage() {
                                 }}
                                 className="bg-green-600 hover:bg-green-700 px-4 py-2.5 rounded-2xl text-sm font-medium"
                               >
-                                {mode === 'editing' ? 'Submit' : 'Submit'}
+                                Submit
                               </button>
                               {mode === 'open' && (
                                 <button

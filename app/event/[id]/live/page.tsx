@@ -94,6 +94,62 @@ function formatToPar(toPar: number | null | undefined) {
   if (toPar > 0) return `+${toPar}`;
   return String(toPar);
 }
+function ScoreMark({
+  score,
+  par,
+}: {
+  score: number | null | undefined;
+  par: number;
+}) {
+  if (score == null || score <= 0) {
+    return <span className="text-gray-500">—</span>;
+  }
+
+  const diff = score - par;
+
+  // Eagle or better: double circle
+  if (diff <= -2) {
+    return (
+      <span className="inline-flex items-center justify-center w-9 h-9 rounded-full border-2 border-emerald-400">
+        <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border-2 border-emerald-300 text-emerald-300 font-semibold text-sm">
+          {score}
+        </span>
+      </span>
+    );
+  }
+
+  // Birdie: single circle
+  if (diff === -1) {
+    return (
+      <span className="inline-flex items-center justify-center w-9 h-9 rounded-full border-2 border-emerald-400 text-emerald-300 font-semibold text-sm">
+        {score}
+      </span>
+    );
+  }
+
+  // Par: plain
+  if (diff === 0) {
+    return <span className="font-semibold text-white text-sm">{score}</span>;
+  }
+
+  // Bogey: single square
+  if (diff === 1) {
+    return (
+      <span className="inline-flex items-center justify-center w-9 h-9 border-2 border-orange-400 text-orange-300 font-semibold text-sm">
+        {score}
+      </span>
+    );
+  }
+
+  // Double bogey+: double square
+  return (
+    <span className="inline-flex items-center justify-center w-9 h-9 border-2 border-red-400">
+      <span className="inline-flex items-center justify-center w-7 h-7 border-2 border-red-300 text-red-300 font-semibold text-sm">
+        {score}
+      </span>
+    </span>
+  );
+}
 
 type LbRow = {
   name: string;
@@ -863,18 +919,8 @@ const showBlurred = blurActive; // temporary test
                     <div className="text-xs text-gray-500">
                       H{hole} · p{par}
                     </div>
-                    <div
-                      className={`text-lg font-semibold mt-1 ${
-                        diff == null
-                          ? ''
-                          : diff < 0
-                            ? 'text-emerald-400'
-                            : diff > 0
-                              ? 'text-orange-400'
-                              : ''
-                      }`}
-                    >
-                      {s != null && s > 0 ? s : '—'}
+                                        <div className="mt-1 flex justify-center min-h-[2.25rem] items-center">
+                      <ScoreMark score={s} par={par} />
                     </div>
                   </div>
                 );

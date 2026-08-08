@@ -63,6 +63,88 @@ function formatToPar(toPar: number | null | undefined) {
   return String(toPar);
 }
 
+function getParForHole(courseData: any, hole: number): number {
+  const cd = courseData;
+  if (!cd) return 4;
+
+  let holes: any[] = [];
+  if (Array.isArray(cd.scorecard)) holes = cd.scorecard;
+  else if (cd.course?.scorecard) holes = cd.course.scorecard;
+  else if (cd.holes) holes = cd.holes;
+
+  if (!holes.length) return 4;
+
+  const holeData =
+    holes.find((x: any) => Number(x.Hole || x.hole) === hole) ||
+    holes[hole - 1];
+
+  return Number(holeData?.Par || holeData?.par) || 4;
+}
+
+function ScoreMark({
+  score,
+  par,
+}: {
+  score: number | null | undefined;
+  par: number;
+}) {
+  if (score == null || score <= 0) {
+    return <span className="text-gray-500">—</span>;
+  }
+
+  const diff = score - par;
+  const n = (
+    <span className="text-sm font-bold tabular-nums leading-none">{score}</span>
+  );
+
+  // Eagle or better — DOUBLE CIRCLE
+  if (diff <= -2) {
+    return (
+      <span className="relative inline-flex items-center justify-center w-10 h-10">
+        <span className="absolute inset-0 rounded-full border-2 border-emerald-400" />
+        <span className="absolute inset-[4px] rounded-full border-2 border-emerald-400" />
+        <span className="relative text-emerald-300">{n}</span>
+      </span>
+    );
+  }
+
+  // Birdie — single circle
+  if (diff === -1) {
+    return (
+      <span className="inline-flex items-center justify-center w-10 h-10 rounded-full border-2 border-emerald-400 text-emerald-300">
+        {n}
+      </span>
+    );
+  }
+
+  // Par — plain
+  if (diff === 0) {
+    return (
+      <span className="inline-flex items-center justify-center w-10 h-10 text-white">
+        {n}
+      </span>
+    );
+  }
+
+  // Bogey — single square
+  if (diff === 1) {
+    return (
+      <span className="inline-flex items-center justify-center w-10 h-10 border-2 border-orange-400 text-orange-300">
+        {n}
+      </span>
+    );
+  }
+
+  // Double bogey or higher — DOUBLE SQUARE
+  return (
+    <span className="relative inline-flex items-center justify-center w-10 h-10">
+      <span className="absolute inset-0 border-2 border-red-400" />
+      <span className="absolute inset-[4px] border-2 border-red-400" />
+      <span className="relative text-red-300">{n}</span>
+    </span>
+  );
+}
+
 export default function EventLeaderboardPage() {
   const params = useParams();
   const router = useRouter();
@@ -354,7 +436,6 @@ export default function EventLeaderboardPage() {
       };
     });
 
-    // Sort by to-par when available, else by total
     rows.sort((a, b) => {
       if (a.holesPlayed === 0 && b.holesPlayed > 0) return 1;
       if (b.holesPlayed === 0 && a.holesPlayed > 0) return -1;
@@ -393,7 +474,7 @@ export default function EventLeaderboardPage() {
   }, [blurHole, leaderboardRows]);
 
   // Admin / TV board is never blurred — players see blur on Live only
-const showBlurred = false;
+  const showBlurred = false;
 
   const saveBlurHole = async () => {
     setSavingBlur(true);
@@ -566,7 +647,8 @@ const showBlurred = false;
             </button>
             {blurActive && (
               <p className="text-sm text-amber-400 sm:ml-2">
-                Blur is active (a team has completed {blurHole} holes)
+                Player leaderboard is blurred (a team has completed {blurHole}{' '}
+                holes)
               </p>
             )}
           </div>
@@ -588,8 +670,8 @@ const showBlurred = false;
                     Leaderboard hidden
                   </p>
                   <p className="text-gray-300 text-sm max-w-sm">
-                    Standings are blurred once any team has completed{' '}
-                    {blurHole} holes. Check back after your round.
+                    Standings are blurred once any team has completed {blurHole}{' '}
+                    holes. Check back after your round.
                   </p>
                 </div>
               </div>
@@ -668,12 +750,18 @@ const showBlurred = false;
 
                         {Array.from({ length: numHoles }, (_, i) => {
                           const hole = i + 1;
+                          const par = getParForHole(event?.course_data, hole);
                           return (
                             <td
                               key={hole}
-                              className="text-center py-5 px-2 font-medium text-gray-300"
+                              className="text-center py-3 px-1"
                             >
-                              {row.scores[hole] || '—'}
+                              <div className="flex justify-center">
+                                <ScoreMark
+                                  score={row.scores[hole]}
+                                  par={par}
+                                />
+                              </div>
                             </td>
                           );
                         })}
@@ -750,14 +838,17 @@ const showBlurred = false;
               {Array.from({ length: numHoles }, (_, i) => {
                 const hole = i + 1;
                 const s = scorecardRow.scores[hole];
+                const par = getParForHole(event?.course_data, hole);
                 return (
                   <div
                     key={hole}
                     className="bg-gray-900 rounded-xl p-3 text-center"
                   >
-                    <div className="text-xs text-gray-500">H{hole}</div>
-                    <div className="text-lg font-semibold mt-1">
-                      {s != null && s > 0 ? s : '—'}
+                    <div className="text-xs text-gray-500">
+                      H{hole} · p{par}
+                    </div>
+                    <div className="mt-1 flex justify-center min-h-[2.25rem] items-center">
+                      <ScoreMark score={s} par={par} />
                     </div>
                   </div>
                 );
@@ -768,9 +859,7 @@ const showBlurred = false;
               <span>
                 Thru {scorecardRow.holesPlayed} · Out{' '}
                 {scorecardRow.front9 || '—'}
-                {numHoles > 9
-                  ? ` · In ${scorecardRow.back9 || '—'}`
-                  : ''}
+                {numHoles > 9 ? ` · In ${scorecardRow.back9 || '—'}` : ''}
               </span>
               <span
                 className={

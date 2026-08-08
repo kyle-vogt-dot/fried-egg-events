@@ -11,6 +11,7 @@ function LoginContent() {
   const [showForgotDialog, setShowForgotDialog] = useState(false);
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotSent, setForgotSent] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -44,7 +45,7 @@ function LoginContent() {
   };
 
   const sendResetLink = async () => {
-    if (!forgotEmail) return alert("Please enter your email");
+    if (!forgotEmail) return alert('Please enter your email');
 
     const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
       redirectTo: `${window.location.origin}/reset-password`,
@@ -76,17 +77,28 @@ function LoginContent() {
 
           <div>
             <label className="block text-sm font-medium mb-2">Password</label>
-            <input
-              name="password"
-              type="password"
-              required
-              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
-              placeholder="••••••••"
-            />
+            <div className="relative">
+              <input
+                name="password"
+                type={showPassword ? 'text' : 'password'}
+                required
+                autoComplete="current-password"
+                className="w-full px-4 py-3 pr-16 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
+                placeholder="••••••••"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 hover:text-white px-2 py-1"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
           </div>
 
           <div className="text-right">
-            <button 
+            <button
               type="button"
               onClick={() => setShowForgotDialog(true)}
               className="text-sm text-blue-400 hover:text-blue-300"
@@ -107,8 +119,10 @@ function LoginContent() {
         </form>
 
         <p className="text-center text-sm text-gray-400 mt-8">
-          Don't have an account?{' '}
-          <a href="/signup" className="text-blue-500 hover:underline">Sign up</a>
+          Don&apos;t have an account?{' '}
+          <a href="/signup" className="text-blue-500 hover:underline">
+            Sign up
+          </a>
         </p>
       </div>
 
@@ -117,10 +131,13 @@ function LoginContent() {
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-3xl p-8 max-w-md w-full">
             <h3 className="text-2xl font-semibold mb-6">Reset Your Password</h3>
-            
+
             {!forgotSent ? (
               <>
-                <p className="text-gray-400 mb-6">Enter your email address and we'll send you a link to reset your password.</p>
+                <p className="text-gray-400 mb-6">
+                  Enter your email address and we&apos;ll send you a link to reset
+                  your password.
+                </p>
                 <input
                   type="email"
                   value={forgotEmail}
@@ -138,11 +155,11 @@ function LoginContent() {
             ) : (
               <div className="text-center py-8">
                 <p className="text-green-400 text-2xl mb-4">✅ Check your email!</p>
-                <p className="text-gray-400">We've sent you a password reset link.</p>
+                <p className="text-gray-400">We&apos;ve sent you a password reset link.</p>
               </div>
             )}
 
-            <button 
+            <button
               onClick={() => {
                 setShowForgotDialog(false);
                 setForgotSent(false);
@@ -161,7 +178,13 @@ function LoginContent() {
 
 export default function LoginPage() {
   return (
-    <Suspense fallback={<div className="min-h-screen bg-gray-900 flex items-center justify-center">Loading...</div>}>
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+          Loading...
+        </div>
+      }
+    >
       <LoginContent />
     </Suspense>
   );

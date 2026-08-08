@@ -1,8 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+
 import { createBrowserClient } from '@supabase/ssr';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
+
 
 const teamSizeFromEventType = (type: string) => {
   if (!type) return 1;
@@ -16,6 +18,12 @@ export default function EventManagePage() {
   const params = useParams();
   const router = useRouter();
   const eventId = params.id as string;
+
+    const searchParams = useSearchParams();
+
+  const [needsPayoutSetup, setNeedsPayoutSetup] = useState(false);
+  const [stripeConnecting, setStripeConnecting] = useState(false);
+  const [payoutBannerDismissed, setPayoutBannerDismissed] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -81,6 +89,36 @@ const [adminPerms, setAdminPerms] = useState({
         router.push('/login');
         return;
       }
+                  // Stripe Connect status (organizer-level)
+      try {
+        const { data: profile, error: profileErr } = await supabase
+          .from('profiles')
+          .select(
+            'stripe_account_id, stripe_payouts_enabled, stripe_charges_enabled'
+          )
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (profileErr) {
+          console.error('Stripe profile check error:', profileErr);
+        }
+
+        console.log('Stripe profile:', profile);
+
+        const missing =
+          !profile?.stripe_account_id ||
+          profile?.stripe_payouts_enabled !== true;
+
+        setNeedsPayoutSetup(missing);
+      } catch (err) {
+        console.error('Stripe profile check failed:', err);
+        setNeedsPayoutSetup(true);
+      }
+
+      // Always honor create redirect
+      if (searchParams.get('setup_payouts') === '1') {
+        setNeedsPayoutSetup(true);
+      }
 
       const { data: eventData, error: eventError } = await supabase
         .from('tournaments')
@@ -90,7 +128,8 @@ const [adminPerms, setAdminPerms] = useState({
 
       if (eventError || !eventData) {
         setError('Event not found');
-        setLoading(false);
+              setNeedsPayoutSetup(true); // TEMP — remove after you see the banner
+      setLoading(false);
         return;
       }
 
@@ -345,6 +384,30 @@ setRounds(roundsData || []);
       setCourseResults([]);
 
       alert(`⚠️ Using mock data for ${courseName}`);
+    }
+  };
+    const handleConnectPayouts = async () => {
+    setStripeConnecting(true);
+    try {
+      const res = await fetch('/api/stripe/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId: parseInt(eventId, 10) }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not start Stripe setup');
+      }
+      if (data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      alert('Stripe setup started, but no redirect URL was returned.');
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || 'Stripe Connect failed');
+    } finally {
+      setStripeConnecting(false);
     }
   };
 
@@ -618,8 +681,43 @@ setRounds(roundsData || []);
           ← Back
         </button>
 
-        <h1 className="text-4xl font-bold mb-2">{event.name}</h1>
-        <p className="text-gray-400 mb-8">Manage Event Details</p>
+                        <h1 className="text-4xl font-bold mb-2">{event.name}</h1>
+        <p className="text-gray-400 mb-6">Manage Event Details</p>
+
+        {needsPayoutSetup && !payoutBannerDismissed && (
+          <div className="mb-8 rounded-3xl border border-amber-500/40 bg-amber-950/40 p-6">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-lg font-semibold text-amber-300">
+                  Set up payouts
+                </h2>
+                <p className="text-sm text-gray-300 mt-2 leading-relaxed">
+                  Connect Stripe so registration money can be paid out to your
+                  bank. Fried Egg Events never sees or stores your bank details —
+                  Stripe handles that. The platform fee is taken out before
+                  funds hit your Stripe balance.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleConnectPayouts}
+                  disabled={stripeConnecting}
+                  className="bg-amber-500 hover:bg-amber-400 disabled:bg-gray-600 text-gray-900 font-semibold px-6 py-3 rounded-2xl"
+                >
+                  {stripeConnecting ? 'Opening Stripe…' : 'Connect with Stripe'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPayoutBannerDismissed(true)}
+                  className="text-sm text-gray-400 hover:text-white px-4 py-3"
+                >
+                  Remind me later
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Event Image */}
         <div>
