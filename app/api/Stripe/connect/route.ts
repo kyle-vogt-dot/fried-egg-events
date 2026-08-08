@@ -15,14 +15,17 @@ const supabaseAdmin = createClient(
 );
 
 function appOrigin(request: NextRequest) {
-  const fromEnv =
+  const raw =
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.VERCEL_URL;
-  if (fromEnv) {
-    return fromEnv.startsWith('http') ? fromEnv : `https://${fromEnv}`;
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '') ||
+    request.nextUrl.origin;
+
+  const origin = String(raw).trim().replace(/\/$/, '');
+  if (!/^https?:\/\//i.test(origin)) {
+    throw new Error(`Invalid app origin: ${origin}`);
   }
-  return request.nextUrl.origin;
+  return origin;
 }
 
 export async function POST(request: NextRequest) {
