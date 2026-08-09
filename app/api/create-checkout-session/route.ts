@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  
-});
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 // Calculate the total the customer must pay so you receive the desired net amount
 function calculateAmountWithStripeFee(desiredNetDollars: number) {
@@ -22,13 +20,13 @@ function calculateAmountWithStripeFee(desiredNetDollars: number) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { 
-      registration_id, 
-      amount, 
-      player_name, 
-      email, 
-      description, 
-      event_name, 
+    const {
+      registration_id,
+      amount,
+      player_name,
+      email,
+      description,
+      event_name,
       event_id,
       type = 'addon_payment',
       success_url,
@@ -36,36 +34,41 @@ export async function POST(request: NextRequest) {
     } = body;
 
     if (!amount || !email || !event_id) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'Missing required fields' },
+        { status: 400 }
+      );
     }
 
-    const baseUrl = process.env.NEXT_PUBLIC_APP_URL 
-      || process.env.NEXT_PUBLIC_SITE_URL 
-      || 'http://localhost:3000';
+    const baseUrl =
+      process.env.NEXT_PUBLIC_APP_URL ||
+      process.env.NEXT_PUBLIC_SITE_URL ||
+      'http://localhost:3000';
 
     const defaultSuccessUrl = `${baseUrl}/event/${event_id}?payment=success&type=${type}`;
     const defaultCancelUrl = `${baseUrl}/event/${event_id}?payment=cancelled`;
 
-    // Calculate fee so you still receive the full `amount`
-    const { totalCents, feeCents, netCents } = calculateAmountWithStripeFee(amount);
+    const { feeCents, netCents } = calculateAmountWithStripeFee(Number(amount));
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'payment',
       line_items: [
-        // 1. Main event / registration cost
         {
           price_data: {
             currency: 'usd',
             product_data: {
-              name: description || `${type === 'registration' ? 'Registration' : 'Add-ons'} – ${event_name || 'Tournament'}`,
+              name:
+                description ||
+                `${
+                  type === 'registration' ? 'Registration' : 'Add-ons'
+                } – ${event_name || 'Tournament'}`,
               description: player_name ? `${player_name}` : undefined,
             },
             unit_amount: netCents,
           },
           quantity: 1,
         },
-        // 2. Processing fee (covers Stripe)
         {
           price_data: {
             currency: 'usd',
@@ -81,10 +84,18 @@ export async function POST(request: NextRequest) {
       success_url: success_url || defaultSuccessUrl,
       cancel_url: cancel_url || defaultCancelUrl,
       metadata: {
-        registration_id: registration_id || '',
-        event_id,
-        type,
+        registration_id: registration_id ? String(registration_id) : '',
+        event_id: String(event_id),
+        type: String(type),
         net_amount: String(amount),
+      },
+      payment_intent_data: {
+        metadata: {
+          registration_id: registration_id ? String(registration_id) : '',
+          event_id: String(event_id),
+          type: String(type),
+          net_amount: String(amount),
+        },
       },
       customer_email: email,
     });
@@ -92,6 +103,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ url: session.url });
   } catch (error: any) {
     console.error('Stripe Checkout Error:', error);
-    return NextResponse.json({ error: error.message || 'Failed to create checkout session' }, { status: 500 });
+    return NextResponse.json(
+      { error: error.message || 'Failed to create checkout session' },
+      { status: 500 }
+    );
   }
 }

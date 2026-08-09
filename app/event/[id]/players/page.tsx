@@ -56,6 +56,15 @@ function getPairingForRound(
   return { hole: null, slot: null, label: '—' };
 }
 
+function countTeams(regs: any[]) {
+  const names = new Set(
+    regs
+      .map((r) => (r.team_name || '').trim())
+      .filter((n) => n && n.toLowerCase() !== 'individual')
+  );
+  return names.size;
+}
+
 export default function RegisteredPlayersPage() {
   const params = useParams();
   const router = useRouter();
@@ -141,6 +150,7 @@ export default function RegisteredPlayersPage() {
     return Object.entries(grouped).sort(([, aPlayers], [, bPlayers]) => {
       const a = getPairingForRound(aPlayers[0], selectedRoundId);
       const b = getPairingForRound(bPlayers[0], selectedRoundId);
+      
       const aHole = a.hole ?? 999;
       const bHole = b.hole ?? 999;
       if (aHole !== bHole) return aHole - bHole;
@@ -149,6 +159,11 @@ export default function RegisteredPlayersPage() {
       return aSlot - bSlot;
     });
   }, [grouped, selectedRoundId]);
+
+    const teamCount = useMemo(
+    () => countTeams(filteredRegistrations),
+    [filteredRegistrations]
+  );
 
   if (loading) {
     return (
@@ -183,9 +198,13 @@ export default function RegisteredPlayersPage() {
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-10">
           <div>
             <h1 className="text-4xl font-bold">{event.name}</h1>
-            <p className="text-gray-400 mt-2">
+                        <p className="text-gray-400 mt-2">
               Registered Players ({filteredRegistrations.length}
-              {selectedRoundId !== 'all' ? ' in this round' : ''})
+              {selectedRoundId !== 'all' ? ' in this round' : ''}
+              {teamCount > 0
+                ? ` · ${teamCount} team${teamCount === 1 ? '' : 's'}`
+                : ''}
+              )
               {event.course ? ` · ${event.course}` : ''}
               {headerTeeTime ? ` · ${headerTeeTime}` : ''}
             </p>

@@ -432,7 +432,7 @@ useEffect(() => {
         const raw = sessionStorage.getItem(draftKey);
         
 
-        if (raw) {
+                if (raw) {
           const draft = JSON.parse(raw);
           checkoutNetAmount =
             draft.totalCost != null ? Number(draft.totalCost) : null;
@@ -445,39 +445,30 @@ useEffect(() => {
               players: draft.players || [],
               selected_round_ids: draft.selected_round_ids || [],
               discount: draft.discount || null,
+              registration_ids: draft.registration_ids || [],
             })
           );
 
-          const rows = (draft.players || []).map((p: any) => ({
-            event_id: draft.eventId || parseInt(eventId),
-            user_id: p.user_id || null,
-            player_name: p.player_name,
-            player_email: p.player_email || null,
-            team_name: draft.teamName || null,
-            paid: true,
-            checked_in: false,
-            addons_selected: {},
-            selected_round_ids: draft.selected_round_ids || [],
-            discount_code: draft.discount?.code || null,
-            discount_amount: draft.discount?.amount_saved || 0,
-          }));
+          const ids: string[] = (draft.registration_ids || []).map(String);
 
-          if (rows.length === 0) {
-            alert('Payment succeeded but registration draft had no players.');
+          if (!ids.length) {
+            alert(
+              'Payment succeeded but registration ids were missing. Contact support if you were charged.'
+            );
             return;
           }
 
-          const { data: inserted, error: insertErr } = await supabase
+          // Rows were created unpaid before Checkout — mark them paid (no second insert)
+          const { data: updated, error: updateErr } = await supabase
             .from('event_registrations')
-            .insert(rows)
+            .update({ paid: true, payment_method: 'card' })
+            .in('id', ids)
             .select('*');
 
-          console.log('Insert after payment:', { inserted, insertErr });
-
-          if (insertErr) {
+          if (updateErr) {
             alert(
-              'Payment received but saving registration failed: ' +
-                insertErr.message
+              'Payment received but updating registration failed: ' +
+                updateErr.message
             );
             return;
           }
@@ -485,16 +476,34 @@ useEffect(() => {
           sessionStorage.removeItem(draftKey);
 
           myReg =
-            (inserted || []).find((r: any) => r.user_id === user.id) ||
-            (inserted || [])[0] ||
+            (updated || []).find((r: any) => r.user_id === user.id) ||
+            (updated || [])[0] ||
             null;
 
-          paidThisCheckout = inserted || [];
+          paidThisCheckout = updated || [];
+
+          // Save Stripe payment_intent + amount_paid
+          const sessionId = searchParams.get('session_id');
+          if (sessionId) {
+            try {
+              await fetch('/api/confirm-registration-payment', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  session_id: sessionId,
+                  registration_ids: ids,
+                }),
+              });
+            } catch (e) {
+              console.error('confirm-registration-payment failed', e);
+            }
+          }
 
           // ---------- Redeem the discount code ----------
-          if (draftDiscount && inserted && inserted.length > 0) {
+          if (draftDiscount && paidThisCheckout.length > 0) {
             const primary =
-              inserted.find((r: any) => r.user_id === user.id) || inserted[0];
+              paidThisCheckout.find((r: any) => r.user_id === user.id) ||
+              paidThisCheckout[0];
 
             try {
               await fetch('/api/discount-codes/redeem', {
@@ -511,7 +520,6 @@ useEffect(() => {
               });
             } catch (redeemErr) {
               console.error('Discount redeem failed:', redeemErr);
-              // Non-fatal — registration already succeeded
             }
           }
         } else {
@@ -1166,7 +1174,36 @@ setWaitlistPhone('');
         }
       }
 
-      sessionStorage.removeItem(paymentHandledKey);
+            sessionStorage.removeItem(paymentHandledKey);
+
+      // Create unpaid rows first so Stripe metadata has registration ids
+      const regRows = players.map((p: any) => ({
+        event_id: parseInt(eventId),
+        user_id: p.user_id || null,
+        player_name: p.player_name,
+        player_email: p.player_email || null,
+        team_name: isIndividual ? null : finalTeamName,
+        paid: false,
+        checked_in: false,
+        addons_selected: {},
+        selected_round_ids: selectedRoundIds,
+        discount_code: appliedDiscount?.code || null,
+        discount_amount: appliedDiscount?.amount_saved || 0,
+      }));
+
+      const { data: insertedRegs, error: insertErr } = await supabase
+        .from('event_registrations')
+        .insert(regRows)
+        .select('id');
+
+      if (insertErr || !insertedRegs?.length) {
+        throw new Error(
+          insertErr?.message || 'Could not create registration rows'
+        );
+      }
+
+      const registrationIds = insertedRegs.map((r: any) => r.id);
+      const primaryRegistrationId = registrationIds[0];
 
       const draft = {
         eventId: parseInt(eventId),
@@ -1177,6 +1214,7 @@ setWaitlistPhone('');
         selected_round_ids: selectedRoundIds,
         players,
         totalCost,
+        registration_ids: registrationIds,
         discount: appliedDiscount
           ? {
               code: appliedDiscount.code,
@@ -1202,27 +1240,34 @@ setWaitlistPhone('');
           event_name: event.name,
           event_id: event.id,
           type: 'registration',
-          success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration`,
+          registration_id: primaryRegistrationId,
+          registration_ids: registrationIds.join(','),
+          success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${baseUrl}/event/${eventId}?payment=cancelled&type=registration`,
         }),
       });
 
-      const { url } = await response.json();
+      const data = await response.json();
+      const url = data.url;
 
-      if (url) {
-        window.location.href = url;
-        setShowRegisterModal(false);
-      } else {
-        alert('Failed to create payment link');
+      if (!response.ok || !url) {
+        await supabase
+          .from('event_registrations')
+          .delete()
+          .in('id', registrationIds);
+        alert(data.error || 'Failed to create payment link');
+        return;
       }
+
+      window.location.href = url;
+      setShowRegisterModal(false);
     } catch (err: any) {
       console.error(err);
-      alert('Error starting registration');
+      alert(err.message || 'Error starting registration');
     } finally {
       setSubmitting(false);
     }
   };
-
   const viewRegisteredPlayers = () => {
     router.push(`/event/${eventId}/players`);
   };

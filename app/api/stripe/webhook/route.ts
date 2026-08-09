@@ -4,10 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  // @ts-expect-error stripe types lag package versions
-  apiVersion: '2024-11-20.acacia',
-});
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -35,6 +32,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // --- Connect: organizer account flags ---
     if (event.type === 'account.updated') {
       const account = event.data.object as Stripe.Account;
 
@@ -49,6 +47,63 @@ export async function POST(request: NextRequest) {
       if (error) {
         console.error('Profile Stripe update failed:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+    }
+
+    // --- Checkout: mark registration paid + save PaymentIntent ---
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object as Stripe.Checkout.Session;
+
+      const registrationId = session.metadata?.registration_id?.trim();
+      const type = (session.metadata?.type || '').toLowerCase();
+      const netFromMeta = session.metadata?.net_amount
+        ? Number(session.metadata.net_amount)
+        : null;
+
+      const paymentIntentId =
+        typeof session.payment_intent === 'string'
+          ? session.payment_intent
+          : session.payment_intent?.id ?? null;
+
+      const amountPaidTotal =
+        session.amount_total != null ? session.amount_total / 100 : null;
+
+      if (registrationId) {
+        if (type === 'addon' || type === 'addon_payment') {
+          const { error } = await supabaseAdmin
+            .from('event_registrations')
+            .update({
+              paid_addons: true,
+              stripe_payment_intent_id: paymentIntentId,
+            })
+            .eq('id', registrationId);
+
+          if (error) {
+            console.error('Addon payment update failed:', error);
+            return NextResponse.json({ error: error.message }, { status: 500 });
+          }
+        } else {
+          // registration (or empty type)
+          const { error } = await supabaseAdmin
+            .from('event_registrations')
+            .update({
+              paid: true,
+              payment_method: 'card',
+              stripe_payment_intent_id: paymentIntentId,
+              amount_paid: netFromMeta ?? amountPaidTotal,
+            })
+            .eq('id', registrationId);
+
+          if (error) {
+            console.error('Registration payment update failed:', error);
+            return NextResponse.json({ error: error.message }, { status: 500 });
+          }
+        }
+      } else {
+        console.warn(
+          'checkout.session.completed without registration_id metadata',
+          session.id
+        );
       }
     }
 

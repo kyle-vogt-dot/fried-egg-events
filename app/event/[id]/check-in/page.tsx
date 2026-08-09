@@ -29,12 +29,37 @@ function getPairingLabel(reg: any, roundId: number | 'all') {
   return '—';
 }
 
+function buildLiveUrl(
+  eventId: string,
+  reg: any,
+  selectedRoundId: number | 'all'
+) {
+  const base =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (typeof window !== 'undefined' ? window.location.origin : '');
+  const team = encodeURIComponent(
+    (reg.team_name || reg.player_name || '').trim()
+  );
+  const round =
+    selectedRoundId !== 'all' ? `&round=${selectedRoundId}` : '';
+  return `${base}/event/${eventId}/live?team=${team}${round}`;
+}
+
 function isCheckedInForRound(reg: any, roundId: number | 'all') {
   if (roundId === 'all') return !!reg.checked_in;
   const map = reg.round_checkins || {};
   if (map[String(roundId)] != null) return !!map[String(roundId)];
   if (map[roundId as number] != null) return !!map[roundId as number];
   return !!reg.checked_in;
+}
+
+function countTeams(regs: any[]) {
+  const names = new Set(
+    regs
+      .map((r) => (r.team_name || '').trim())
+      .filter((n) => n && n.toLowerCase() !== 'individual')
+  );
+  return names.size;
 }
 
 export default function EventCheckInPage() {
@@ -209,11 +234,12 @@ export default function EventCheckInPage() {
     };
   }, [eventId, supabase]);
 
-  const estimateAmountPaid = (reg: any) => {
+    const estimateAmountPaid = (reg: any) => {
     if (reg.amount_paid != null && Number(reg.amount_paid) > 0) {
       return Number(reg.amount_paid);
     }
-    return (Number(event?.price) || 0) + platformFee;
+    // Don't guess event.price + fee — shows wrong amounts (e.g. $55 vs $48)
+    return null;
   };
 
   const handleRemoveOrRefund = async () => {
@@ -221,14 +247,19 @@ export default function EventCheckInPage() {
     setRefunding(true);
 
     try {
-      const greens = Number(event?.greens_fee || 0);
-      const amountPaid = estimateAmountPaid(refundReg);
+            const greens = Number(event?.greens_fee || 0);
+      const amountPaid = estimateAmountPaid(refundReg); // number | null
 
       let refundAmount = 0;
-      if (refundMode === 'full') refundAmount = amountPaid;
-      if (refundMode === 'minus_greens') refundAmount = Math.max(0, amountPaid - greens);
-      if (refundMode === 'custom') refundAmount = Math.max(0, Number(customRefundAmount) || 0);
-
+      if (refundMode === 'full' && amountPaid != null) {
+        refundAmount = amountPaid;
+      }
+      if (refundMode === 'minus_greens' && amountPaid != null) {
+        refundAmount = Math.max(0, amountPaid - greens);
+      }
+      if (refundMode === 'custom') {
+        refundAmount = Math.max(0, Number(customRefundAmount) || 0);
+      }
       if (refundAmount > 0 && refundReg.stripe_payment_intent_id) {
         const res = await fetch('/api/refund-registration', {
           method: 'POST',
@@ -556,7 +587,7 @@ export default function EventCheckInPage() {
     }
   };
 
-  const toggleCheckIn = async (reg: any) => {
+    const toggleCheckIn = async (reg: any) => {
     const currentlyIn = isCheckedInForRound(reg, selectedRoundId);
 
     if (currentlyIn) {
@@ -581,6 +612,36 @@ export default function EventCheckInPage() {
       alert('Failed to update check-in: ' + error.message);
       return;
     }
+
+    // Email only when checking IN
+    if (!currentlyIn) {
+      const email = (reg.player_email || reg.email || '').trim();
+      if (email) {
+        const pairing = getPairingLabel(reg, selectedRoundId);
+        const teeTime = selectedRound
+          ? formatRoundTime(selectedRound.start_time)
+          : null;
+        const base =
+          process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+        const liveUrl = buildLiveUrl(eventId, reg, selectedRoundId);
+        const leaderboardUrl = `${base}/event/${eventId}/leaderboard`;
+
+        fetch('/api/send-checkin-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: email,
+            playerName: reg.player_name,
+            eventName: event?.name || 'your event',
+            pairing,
+            teeTime,
+            liveUrl,
+            leaderboardUrl,
+          }),
+        }).catch((e) => console.error('Check-in email failed:', e));
+      }
+    }
+
     fetchRegistrations();
   };
 
@@ -596,11 +657,11 @@ export default function EventCheckInPage() {
   }
 
   const greensFee = Number(event?.greens_fee || 0);
-  const previewPaid = refundReg ? estimateAmountPaid(refundReg) : 0;
+    const previewPaid = refundReg ? estimateAmountPaid(refundReg) : null;
   const previewRefund =
-    refundMode === 'full'
+    refundMode === 'full' && previewPaid != null
       ? previewPaid
-      : refundMode === 'minus_greens'
+      : refundMode === 'minus_greens' && previewPaid != null
         ? Math.max(0, previewPaid - greensFee)
         : refundMode === 'custom'
           ? Math.max(0, Number(customRefundAmount) || 0)
@@ -610,9 +671,12 @@ export default function EventCheckInPage() {
     ? formatRoundTime(selectedRound.start_time)
     : null;
 
-  const checkedInCount = filteredRegistrations.filter((r) =>
+    const checkedInRegs = filteredRegistrations.filter((r) =>
     isCheckedInForRound(r, selectedRoundId)
-  ).length;
+  );
+  const checkedInCount = checkedInRegs.length;
+  const teamCount = countTeams(filteredRegistrations);
+  const checkedInTeamCount = countTeams(checkedInRegs);
 
   const addChargePreview = estimateRegCharge();
 
@@ -629,9 +693,14 @@ export default function EventCheckInPage() {
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold mb-2">{event?.name}</h1>
-            <p className="text-gray-400 text-sm sm:text-base">
+                        <p className="text-gray-400 text-sm sm:text-base">
               Player Check-In · {checkedInCount}/{filteredRegistrations.length}{' '}
               checked in
+              {teamCount > 0
+                ? ` · ${checkedInTeamCount}/${teamCount} team${
+                    teamCount === 1 ? '' : 's'
+                  }`
+                : ''}
               {event?.course ? ` · ${event.course}` : ''}
               {headerTeeTime ? ` · ${headerTeeTime}` : ''}
             </p>
@@ -953,7 +1022,7 @@ export default function EventCheckInPage() {
                             )
                           )}
 
-                          <button
+                                                    <button
                             onClick={() => toggleCheckIn(reg)}
                             className={`px-2.5 py-1.5 rounded-xl text-xs font-medium text-white whitespace-nowrap ${
                               isCheckedIn
@@ -963,6 +1032,23 @@ export default function EventCheckInPage() {
                           >
                             {isCheckedIn ? '✓ In' : 'Check In'}
                           </button>
+
+                          {isCheckedIn && (
+                            <a
+                              href={`/event/${eventId}/live?team=${encodeURIComponent(
+                                (reg.team_name || reg.player_name || '').trim()
+                              )}${
+                                selectedRoundId !== 'all'
+                                  ? `&round=${selectedRoundId}`
+                                  : ''
+                              }`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="bg-emerald-700 hover:bg-emerald-600 px-2.5 py-1.5 rounded-xl text-xs font-medium text-white whitespace-nowrap"
+                            >
+                              Live
+                            </a>
+                          )}
 
                           <button
                             onClick={() => {
@@ -1010,7 +1096,9 @@ export default function EventCheckInPage() {
               {refundReg.team_name ? ` · ${refundReg.team_name}` : ''}
             </p>
             <p className="text-center text-sm text-gray-500">
-              Est. paid: ${previewPaid.toFixed(2)}
+              {previewPaid != null
+  ? `Recorded paid: $${previewPaid.toFixed(2)}`
+  : 'Paid amount not recorded — use Custom refund'}
               {greensFee > 0 ? ` · Greens fee: $${greensFee.toFixed(2)}` : ''}
             </p>
 
