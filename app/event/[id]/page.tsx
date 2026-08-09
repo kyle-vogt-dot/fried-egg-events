@@ -351,6 +351,7 @@ useEffect(() => {
     .catch((e) => console.error('Flyer QR failed', e));
 }, [eventId]);
 
+  
   // Force single player when a discount is applied
   useEffect(() => {
     if (appliedDiscount?.one_player_only) {
@@ -358,6 +359,55 @@ useEffect(() => {
       setIsOrganizerOnly(false);
     }
   }, [appliedDiscount]);
+
+  // Browser back from Stripe (no cancel_url) — clean up unpaid draft regs
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const paymentStatus = searchParams.get('payment');
+    if (paymentStatus === 'success') return;
+
+    const cleanupAbandonedCheckout = async () => {
+      try {
+        const raw = sessionStorage.getItem(draftKey);
+        if (!raw) return;
+
+        const draft = JSON.parse(raw);
+        const ids: (string | number)[] = draft.registration_ids || [];
+        if (!ids.length) return;
+
+        const { error: delErr } = await supabase
+          .from('event_registrations')
+          .delete()
+          .in('id', ids)
+          .eq('paid', false);
+
+        if (delErr) {
+          console.error('Abandoned checkout cleanup failed:', delErr);
+          return;
+        }
+
+        draft.registration_ids = [];
+        sessionStorage.setItem(draftKey, JSON.stringify(draft));
+        await fetchData();
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    cleanupAbandonedCheckout();
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        cleanupAbandonedCheckout();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [eventId, searchParams, draftKey]);
 
   const handleShare = async () => {
     const url = `${window.location.origin}/event/${eventId}`;
@@ -380,6 +430,8 @@ useEffect(() => {
       prompt('Copy this link:', url);
     }
   };
+
+  
 
     const selectedPackage = sponsorPackages.find((p) => p.id === selectedPackageId);
 
@@ -436,26 +488,6 @@ useEffect(() => {
         }),
       });
     
-              {paidSponsors.length > 0 && (
-          <div className="mt-8 bg-gray-800/80 rounded-3xl p-6">
-            <h3 className="text-sm uppercase tracking-wide text-gray-400 mb-4">
-              Sponsors
-            </h3>
-            <div className="flex flex-wrap gap-3">
-              {paidSponsors.map((s) => (
-                <a
-                  key={s.id}
-                  href={s.website_url || undefined}
-                  target={s.website_url ? '_blank' : undefined}
-                  rel="noreferrer"
-                  className="bg-gray-900 px-4 py-2 rounded-xl text-sm font-medium hover:bg-gray-700"
-                >
-                  {s.company_name}
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Checkout failed');
@@ -502,6 +534,7 @@ useEffect(() => {
             await fetchData(); // refresh counts / sold out
           }
         }
+        
 
         // Restore form so they can try again
         setMode(draft.mode || '');
@@ -1652,7 +1685,7 @@ setWaitlistPhone('');
             </div>
           )}
 
-          {event.description && (
+                    {event.description && (
             <div className="p-10 border-b border-gray-700">
               <p className="text-gray-500 text-sm mb-3">ABOUT THIS EVENT</p>
               <p className="text-gray-300 leading-relaxed text-lg">
@@ -1660,7 +1693,26 @@ setWaitlistPhone('');
               </p>
             </div>
           )}
-          
+
+          {paidSponsors.length > 0 && (
+            <div className="p-10 border-b border-gray-700">
+              <p className="text-gray-500 text-sm mb-4">SPONSORS</p>
+              <div className="flex flex-wrap gap-3">
+                {paidSponsors.map((s) => (
+                  <a
+                    key={s.id}
+                    href={s.website_url || undefined}
+                    target={s.website_url ? '_blank' : undefined}
+                    rel="noreferrer"
+                    className="bg-gray-900 px-4 py-2 rounded-xl text-sm font-medium hover:bg-gray-700"
+                  >
+                    {s.company_name}
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="p-10 space-y-4">
             {maxPlayers != null && (
               <p className="text-sm text-gray-400 text-center">
