@@ -57,6 +57,17 @@ export default function EventManagePage() {
   const [newAdminName, setNewAdminName] = useState('');
   const [newAdminEmail, setNewAdminEmail] = useState('');
 
+    const [showSponsors, setShowSponsors] = useState(false);
+  const [sponsorPackages, setSponsorPackages] = useState<any[]>([]);
+  const [sponsors, setSponsors] = useState<any[]>([]);
+  const [newPackage, setNewPackage] = useState({
+    name: '',
+    description: '',
+    price: 200,
+    max_quantity: '' as string | number,
+    includes_players: 0,
+  });
+
   const [rounds, setRounds] = useState<any[]>([]);
     const [newRound, setNewRound] = useState({
     name: '',
@@ -171,6 +182,19 @@ const [adminPerms, setAdminPerms] = useState({
         .select('*')
         .eq('event_id', parseInt(eventId));
       setAddons(addonData || []);
+      const { data: pkgData } = await supabase
+        .from('event_sponsor_packages')
+        .select('*')
+        .eq('event_id', parseInt(eventId))
+        .order('sort_order', { ascending: true });
+      setSponsorPackages(pkgData || []);
+
+      const { data: sponsorData } = await supabase
+        .from('event_sponsors')
+        .select('*')
+        .eq('event_id', parseInt(eventId))
+        .order('created_at', { ascending: false });
+      setSponsors(sponsorData || []);
 
       await fetchAdmins();
 
@@ -571,6 +595,143 @@ const [adminPerms, setAdminPerms] = useState({
     setAddons(data || []);
   };
 
+    const handleAddSponsorPackage = async () => {
+    if (!newPackage.name.trim()) return alert('Package name is required');
+    const price = Number(newPackage.price);
+    if (Number.isNaN(price) || price < 0) return alert('Enter a valid price');
+
+    const maxQty =
+      newPackage.max_quantity === '' || newPackage.max_quantity == null
+        ? null
+        : parseInt(String(newPackage.max_quantity), 10);
+
+    const { error } = await supabase.from('event_sponsor_packages').insert({
+      event_id: parseInt(eventId),
+      name: newPackage.name.trim(),
+      description: newPackage.description.trim() || null,
+      price,
+      max_quantity: maxQty,
+      includes_players: Number(newPackage.includes_players) || 0,
+      sort_order: sponsorPackages.length,
+      active: true,
+      times_sold: 0,
+    });
+
+    if (error) {
+      alert('Failed to add package: ' + error.message);
+      return;
+    }
+
+    const { data } = await supabase
+      .from('event_sponsor_packages')
+      .select('*')
+      .eq('event_id', parseInt(eventId))
+      .order('sort_order', { ascending: true });
+    setSponsorPackages(data || []);
+    setNewPackage({
+      name: '',
+      description: '',
+      price: 200,
+      max_quantity: '',
+      includes_players: 0,
+    });
+  };
+
+  const handleTogglePackageActive = async (id: number, active: boolean) => {
+    const { error } = await supabase
+      .from('event_sponsor_packages')
+      .update({ active: !active })
+      .eq('id', id);
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    setSponsorPackages((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, active: !active } : p))
+    );
+  };
+
+  const handleDeleteSponsorPackage = async (id: number) => {
+    if (!confirm('Remove this sponsor package?')) return;
+    const { error } = await supabase
+      .from('event_sponsor_packages')
+      .delete()
+      .eq('id', id);
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    setSponsorPackages((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const handleLoadDefaultPackages = async () => {
+    if (sponsorPackages.length > 0) {
+      if (!confirm('Add default packages on top of existing ones?')) return;
+    }
+    const defaults = [
+      {
+        name: 'Title Sponsor',
+        description:
+          'Event naming rights, logo on event page, featured placement, up to 2 teams included',
+        price: 5000,
+        max_quantity: 1,
+        includes_players: 8,
+        sort_order: 1,
+      },
+      {
+        name: 'Gold Sponsor',
+        description: 'Prominent logo, 1 team included, website recognition',
+        price: 2500,
+        max_quantity: 4,
+        includes_players: 4,
+        sort_order: 2,
+      },
+      {
+        name: 'Silver Sponsor',
+        description: 'Logo on event page, 2 player spots',
+        price: 1000,
+        max_quantity: 8,
+        includes_players: 2,
+        sort_order: 3,
+      },
+      {
+        name: 'Hole Sponsor',
+        description: 'Tee sign at one hole + listing on event page',
+        price: 200,
+        max_quantity: 18,
+        includes_players: 0,
+        sort_order: 4,
+      },
+      {
+        name: 'Contest Sponsor',
+        description: 'Signage at contest hole + announcement recognition',
+        price: 500,
+        max_quantity: 4,
+        includes_players: 0,
+        sort_order: 5,
+      },
+    ].map((d) => ({
+      ...d,
+      event_id: parseInt(eventId),
+      active: true,
+      times_sold: 0,
+    }));
+
+    const { error } = await supabase
+      .from('event_sponsor_packages')
+      .insert(defaults);
+    if (error) {
+      alert(error.message);
+      return;
+    }
+    const { data } = await supabase
+      .from('event_sponsor_packages')
+      .select('*')
+      .eq('event_id', parseInt(eventId))
+      .order('sort_order', { ascending: true });
+    setSponsorPackages(data || []);
+  };
+
     const handleAddRound = async () => {
     if (!newRound.name.trim()) {
       alert('Round name is required');
@@ -899,6 +1060,18 @@ const [adminPerms, setAdminPerms] = useState({
             className="flex-1 sm:flex-none bg-yellow-600 hover:bg-yellow-700 px-6 py-4 rounded-3xl font-medium transition-colors"
           >
             {showAddOns ? 'Hide Add-ons' : 'Manage Add-ons'}
+          </button>
+
+                    <button
+            type="button"
+            onClick={() => setShowSponsors((v) => !v)}
+            className={`px-5 py-3 rounded-2xl font-medium ${
+              showSponsors
+                ? 'bg-emerald-600 text-white'
+                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+            }`}
+          >
+            Sponsors
           </button>
 
           <button
@@ -1257,6 +1430,192 @@ const [adminPerms, setAdminPerms] = useState({
             {addons.length === 0 && (
               <p className="text-gray-400 text-center py-8">No add-ons added yet.</p>
             )}
+          </div>
+        )}
+
+                {/* Sponsors Panel */}
+        {showSponsors && (
+          <div className="bg-gray-900 border border-emerald-500/30 rounded-3xl p-8 mt-8">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+              <h3 className="text-xl font-medium">Sponsor Packages</h3>
+              <button
+                type="button"
+                onClick={handleLoadDefaultPackages}
+                className="text-sm bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-xl"
+              >
+                Load default packages
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-4">
+              <div className="md:col-span-3">
+                <label className="block text-xs text-gray-500 mb-1">Name</label>
+                <input
+                  value={newPackage.name}
+                  onChange={(e) =>
+                    setNewPackage({ ...newPackage, name: e.target.value })
+                  }
+                  placeholder="Hole Sponsor"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-5 py-4"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Price $</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={newPackage.price}
+                  onChange={(e) =>
+                    setNewPackage({
+                      ...newPackage,
+                      price: parseFloat(e.target.value) || 0,
+                    })
+                  }
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-5 py-4"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">
+                  Max qty (blank = ∞)
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={newPackage.max_quantity}
+                  onChange={(e) =>
+                    setNewPackage({
+                      ...newPackage,
+                      max_quantity: e.target.value,
+                    })
+                  }
+                  placeholder="18"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-5 py-4"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">
+                  Includes players
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={newPackage.includes_players}
+                  onChange={(e) =>
+                    setNewPackage({
+                      ...newPackage,
+                      includes_players: parseInt(e.target.value, 10) || 0,
+                    })
+                  }
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-5 py-4"
+                />
+              </div>
+              <div className="md:col-span-3">
+                <button
+                  type="button"
+                  onClick={handleAddSponsorPackage}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 py-4 rounded-3xl font-medium"
+                >
+                  Add Package
+                </button>
+              </div>
+            </div>
+
+            <div className="mb-8">
+              <label className="block text-xs text-gray-500 mb-1">
+                Description / benefits
+              </label>
+              <input
+                value={newPackage.description}
+                onChange={(e) =>
+                  setNewPackage({ ...newPackage, description: e.target.value })
+                }
+                placeholder="Tee sign + listing on event page"
+                className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-5 py-4"
+              />
+            </div>
+
+            <div className="space-y-3 mb-10">
+              {sponsorPackages.map((pkg) => (
+                <div
+                  key={pkg.id}
+                  className="bg-gray-800 p-5 rounded-3xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                >
+                  <div className="min-w-0">
+                    <div className="font-medium">
+                      {pkg.name}{' '}
+                      <span className="text-emerald-400">
+                        ${Number(pkg.price).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="text-sm text-gray-400">
+                      {pkg.description || '—'}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      Sold {pkg.times_sold}
+                      {pkg.max_quantity != null ? ` / ${pkg.max_quantity}` : ''}
+                      {pkg.includes_players > 0
+                        ? ` · includes ${pkg.includes_players} players`
+                        : ''}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleTogglePackageActive(pkg.id, pkg.active)
+                      }
+                      className={`text-sm px-4 py-2 rounded-xl ${
+                        pkg.active
+                          ? 'bg-emerald-900/50 text-emerald-400'
+                          : 'bg-gray-700 text-gray-400'
+                      }`}
+                    >
+                      {pkg.active ? 'Active' : 'Inactive'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteSponsorPackage(pkg.id)}
+                      className="text-red-400 text-sm px-3 py-2"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {sponsorPackages.length === 0 && (
+                <p className="text-gray-500 text-center py-6">
+                  No packages yet. Add one or load defaults.
+                </p>
+              )}
+            </div>
+
+            <h4 className="text-lg font-medium mb-4">Paid sponsors</h4>
+            <div className="space-y-3">
+              {sponsors
+                .filter((s) => s.paid)
+                .map((s) => (
+                  <div
+                    key={s.id}
+                    className="bg-gray-800 px-5 py-4 rounded-2xl flex justify-between gap-3"
+                  >
+                    <div>
+                      <div className="font-medium">{s.company_name}</div>
+                      <div className="text-sm text-gray-400">
+                        {s.contact_email || s.contact_name || '—'}
+                        {s.amount_paid != null
+                          ? ` · $${Number(s.amount_paid).toFixed(2)}`
+                          : ''}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              {sponsors.filter((s) => s.paid).length === 0 && (
+                <p className="text-gray-500 text-center py-4 text-sm">
+                  No paid sponsors yet.
+                </p>
+              )}
+            </div>
           </div>
         )}
 

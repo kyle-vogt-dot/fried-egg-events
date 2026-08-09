@@ -138,6 +138,8 @@ function IncomeStatementPDF({
   discountLines,
   addonRevenue,
   paidAddonPlayers,
+  sponsorRevenue,
+  paidSponsorCount,
   manualIncome,
   manualIncomeTotal,
   platformFeeTotal,
@@ -161,6 +163,8 @@ function IncomeStatementPDF({
   discountLines: { code: string; players: number; totalSaved: number }[];
   addonRevenue: number;
   paidAddonPlayers: number;
+  sponsorRevenue: number;
+  paidSponsorCount: number;
   manualIncome: any[];
   manualIncomeTotal: number;
   platformFeeTotal: number;
@@ -237,6 +241,14 @@ function IncomeStatementPDF({
             {paidAddonPlayers === 1 ? '' : 's'})
           </Text>
           <Text style={pdfStyles.amount}>{money(addonRevenue)}</Text>
+        </View>
+
+        <View style={pdfStyles.row}>
+          <Text style={pdfStyles.label}>
+            Sponsorships ({paidSponsorCount} sponsor
+            {paidSponsorCount === 1 ? '' : 's'})
+          </Text>
+          <Text style={pdfStyles.amount}>{money(sponsorRevenue)}</Text>
         </View>
 
         {manualIncome.map((row) => (
@@ -325,6 +337,7 @@ export default function EventIncomePage() {
   const [rounds, setRounds] = useState<any[]>([]);
   const [manualIncome, setManualIncome] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
+  const [sponsors, setSponsors] = useState<any[]>([]);
   const [platformFee, setPlatformFee] = useState(0);
 
   const [incomeLabel, setIncomeLabel] = useState('');
@@ -349,6 +362,7 @@ export default function EventIncomePage() {
       { data: inc },
       { data: exp },
       { data: fee },
+      { data: sponsorRows },
     ] = await Promise.all([
       supabase.from('tournaments').select('*').eq('id', id).single(),
       supabase.from('event_registrations').select('*').eq('event_id', id),
@@ -373,6 +387,11 @@ export default function EventIncomePage() {
         .select('platform_fee')
         .eq('id', 1)
         .single(),
+      supabase
+        .from('event_sponsors')
+        .select('id, company_name, amount_paid, paid, package_id')
+        .eq('event_id', id)
+        .eq('paid', true),
     ]);
 
     setEvent(ev);
@@ -381,6 +400,7 @@ export default function EventIncomePage() {
     setRounds(rds || []);
     setManualIncome(inc || []);
     setExpenses(exp || []);
+    setSponsors(sponsorRows || []);
     if (fee?.platform_fee != null) setPlatformFee(Number(fee.platform_fee));
     setLoading(false);
   };
@@ -397,7 +417,6 @@ export default function EventIncomePage() {
     [registrations]
   );
 
-  // Per-round: each selected round = 1 seat · Event: 1 seat per player
   const paidSeatCount = useMemo(() => {
     return paidPlayers.reduce((sum, r) => {
       if (!isPerRound) return sum + 1;
@@ -550,6 +569,13 @@ export default function EventIncomePage() {
     [registrations]
   );
 
+  const sponsorRevenue = useMemo(
+    () => sponsors.reduce((s, row) => s + Number(row.amount_paid || 0), 0),
+    [sponsors]
+  );
+
+  const paidSponsorCount = sponsors.length;
+
   const manualIncomeTotal = useMemo(
     () => manualIncome.reduce((s, row) => s + Number(row.amount || 0), 0),
     [manualIncome]
@@ -562,7 +588,11 @@ export default function EventIncomePage() {
 
   const totalExpenses = manualExpenseTotal + greensFeesTotal + platformFeeTotal;
   const grossIncome =
-    registrationRevenue - totalDiscounts + addonRevenue + manualIncomeTotal;
+    registrationRevenue -
+    totalDiscounts +
+    addonRevenue +
+    sponsorRevenue +
+    manualIncomeTotal;
   const net = grossIncome - totalExpenses;
 
   const generatedAt = useMemo(
@@ -571,7 +601,7 @@ export default function EventIncomePage() {
         dateStyle: 'medium',
         timeStyle: 'short',
       }),
-    [loading, registrations, manualIncome, expenses]
+    [loading, registrations, manualIncome, expenses, sponsors]
   );
 
   const pdfFileName = `${String(event?.name || 'event')
@@ -687,6 +717,8 @@ export default function EventIncomePage() {
                 discountLines={discountSummary}
                 addonRevenue={addonRevenue}
                 paidAddonPlayers={paidAddonPlayers}
+                sponsorRevenue={sponsorRevenue}
+                paidSponsorCount={paidSponsorCount}
                 manualIncome={manualIncome}
                 manualIncomeTotal={manualIncomeTotal}
                 platformFeeTotal={platformFeeTotal}
@@ -714,7 +746,7 @@ export default function EventIncomePage() {
           </PDFDownloadLink>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="bg-gray-800 rounded-3xl p-6">
             <p className="text-gray-400 text-sm">Registrations (est.)</p>
             <p className="text-3xl font-bold text-emerald-400 mt-2">
@@ -743,6 +775,16 @@ export default function EventIncomePage() {
             </p>
             <p className="text-xs text-gray-500 mt-1">
               {paidAddonPlayers} paid add-on players
+            </p>
+          </div>
+          <div className="bg-gray-800 rounded-3xl p-6">
+            <p className="text-gray-400 text-sm">Sponsorships</p>
+            <p className="text-3xl font-bold text-emerald-400 mt-2">
+              ${sponsorRevenue.toFixed(2)}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              {paidSponsorCount} paid sponsor
+              {paidSponsorCount === 1 ? '' : 's'}
             </p>
           </div>
           <div className="bg-gray-800 rounded-3xl p-6">
@@ -819,6 +861,31 @@ export default function EventIncomePage() {
                 ${addonRevenue.toFixed(2)}
               </span>
             </div>
+
+            <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
+              <div>
+                <div className="font-medium">Sponsorships</div>
+                <div className="text-sm text-gray-500">
+                  {paidSponsorCount} sponsor
+                  {paidSponsorCount === 1 ? '' : 's'}
+                </div>
+              </div>
+              <span className="text-emerald-400 font-semibold text-lg">
+                ${sponsorRevenue.toFixed(2)}
+              </span>
+            </div>
+
+            {sponsors.map((s) => (
+              <div
+                key={s.id}
+                className="flex justify-between items-center bg-gray-900/50 rounded-2xl px-5 py-3 ml-2 border border-gray-800"
+              >
+                <div className="text-sm text-gray-300">{s.company_name}</div>
+                <span className="text-emerald-400/90 text-sm font-medium">
+                  ${Number(s.amount_paid || 0).toFixed(2)}
+                </span>
+              </div>
+            ))}
 
             <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
               <div>

@@ -219,6 +219,17 @@ export default function EventDetailPage() {
 
   const [isEventAdmin, setIsEventAdmin] = useState(false);
 const [flyerQrDataUrl, setFlyerQrDataUrl] = useState<string | null>(null);
+
+  // ---------- Sponsors ----------
+  const [sponsorPackages, setSponsorPackages] = useState<any[]>([]);
+  const [paidSponsors, setPaidSponsors] = useState<any[]>([]);
+  const [showSponsorModal, setShowSponsorModal] = useState(false);
+  const [selectedPackageId, setSelectedPackageId] = useState<number | null>(null);
+  const [sponsorCompany, setSponsorCompany] = useState('');
+  const [sponsorContactName, setSponsorContactName] = useState('');
+  const [sponsorContactEmail, setSponsorContactEmail] = useState('');
+  const [sponsorWebsite, setSponsorWebsite] = useState('');
+  const [sponsorSubmitting, setSponsorSubmitting] = useState(false);
   
 
   // ---------- Discount state ----------
@@ -309,6 +320,21 @@ const [waitlistDone, setWaitlistDone] = useState(false);
   } else {
     setIsEventAdmin(false);
   }
+    const { data: pkgData } = await supabase
+    .from('event_sponsor_packages')
+    .select('*')
+    .eq('event_id', parseInt(eventId))
+    .eq('active', true)
+    .order('sort_order', { ascending: true });
+  setSponsorPackages(pkgData || []);
+
+  const { data: sponsorRows } = await supabase
+    .from('event_sponsors')
+    .select('id, company_name, logo_url, website_url, package_id')
+    .eq('event_id', parseInt(eventId))
+    .eq('paid', true)
+    .order('created_at', { ascending: true });
+  setPaidSponsors(sponsorRows || []);
 
   setLoading(false);
 };
@@ -352,6 +378,97 @@ useEffect(() => {
       alert('Link copied to clipboard!');
     } catch {
       prompt('Copy this link:', url);
+    }
+  };
+
+    const selectedPackage = sponsorPackages.find((p) => p.id === selectedPackageId);
+
+  const packageSoldOut = (pkg: any) =>
+    pkg.max_quantity != null &&
+    Number(pkg.times_sold) >= Number(pkg.max_quantity);
+
+  const handleSponsorCheckout = async () => {
+    if (!selectedPackage) return alert('Choose a package');
+    if (!sponsorCompany.trim()) return alert('Company name is required');
+    if (!sponsorContactEmail.trim() || !isValidEmail(sponsorContactEmail)) {
+      return alert('Valid contact email is required');
+    }
+    if (packageSoldOut(selectedPackage)) {
+      return alert('That package is sold out');
+    }
+
+    setSponsorSubmitting(true);
+    try {
+            const createRes = await fetch('/api/create-sponsor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: parseInt(eventId),
+          package_id: selectedPackage.id,
+          company_name: sponsorCompany.trim(),
+          contact_name: sponsorContactName.trim() || null,
+          contact_email: sponsorContactEmail.trim().toLowerCase(),
+          website_url: sponsorWebsite.trim() || null,
+          amount_paid: Number(selectedPackage.price),
+        }),
+      });
+      const createData = await createRes.json();
+      if (!createRes.ok || !createData.id) {
+        throw new Error(createData.error || 'Could not create sponsor');
+      }
+      const row = { id: createData.id };
+
+      const amount = Number(selectedPackage.price);
+      const res = await fetch('/api/create-checkout-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount,
+          email: sponsorContactEmail.trim().toLowerCase(),
+          description: `${selectedPackage.name} – ${event?.name || 'Event'}`,
+          event_name: event?.name,
+          event_id: eventId,
+          type: 'sponsorship',
+          player_name: sponsorCompany.trim(),
+          registration_id: String(row.id),
+          success_url: `${window.location.origin}/event/${eventId}?payment=success&type=sponsorship&session_id={CHECKOUT_SESSION_ID}&sponsor_id=${row.id}`,
+          cancel_url: `${window.location.origin}/event/${eventId}?payment=cancelled&type=sponsorship`,
+        }),
+      });
+    
+              {paidSponsors.length > 0 && (
+          <div className="mt-8 bg-gray-800/80 rounded-3xl p-6">
+            <h3 className="text-sm uppercase tracking-wide text-gray-400 mb-4">
+              Sponsors
+            </h3>
+            <div className="flex flex-wrap gap-3">
+              {paidSponsors.map((s) => (
+                <a
+                  key={s.id}
+                  href={s.website_url || undefined}
+                  target={s.website_url ? '_blank' : undefined}
+                  rel="noreferrer"
+                  className="bg-gray-900 px-4 py-2 rounded-xl text-sm font-medium hover:bg-gray-700"
+                >
+                  {s.company_name}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Checkout failed');
+      if (data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      throw new Error('No checkout URL');
+    } catch (e: any) {
+      console.error(e);
+      alert(e.message || 'Could not start sponsorship payment');
+    } finally {
+      setSponsorSubmitting(false);
     }
   };
 
@@ -407,6 +524,41 @@ useEffect(() => {
       return;
     }
 
+    // ---------- Sponsorship payment success ----------
+        if (paymentStatus === 'success' && type === 'sponsorship') {
+      const sponsorId = searchParams.get('sponsor_id');
+      const sessionId = searchParams.get('session_id');
+
+      (async () => {
+        try {
+          if (sessionId && sponsorId) {
+            await fetch('/api/confirm-sponsor-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                session_id: sessionId,
+                sponsor_id: sponsorId,
+              }),
+            });
+            // Receipt + organizer notice
+            await fetch('/api/send-sponsor-emails', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sponsor_id: sponsorId }),
+            });
+          }
+          await fetchData();
+          alert('Thank you! Your sponsorship is confirmed.');
+        } catch (e) {
+          console.error(e);
+        }
+      })();
+      return;
+    }
+
+    
+
+    // ---------- Registration payment success ----------
     if (paymentStatus === 'success' && type === 'registration') {
       if (typeof window !== 'undefined') {
         if (sessionStorage.getItem(paymentHandledKey) === '1') {
@@ -1557,6 +1709,15 @@ setWaitlistPhone('');
     >
       View Registered Players
     </button>
+                    {sponsorPackages.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSponsorModal(true)}
+                    className="flex-1 bg-emerald-700 hover:bg-emerald-600 py-5 rounded-2xl text-xl font-semibold transition-colors"
+                  >
+                    Become a Sponsor
+                  </button>
+                )}
     <button
       onClick={handleShare}
       className="flex-1 bg-gray-700 hover:bg-gray-600 py-4 px-6 rounded-2xl text-lg font-semibold"
@@ -1608,6 +1769,105 @@ setWaitlistPhone('');
             <button
               onClick={() => setShowAuthModal(false)}
               className="w-full mt-6 py-4 text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+            {showSponsorModal && (
+        <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-8">
+            <h2 className="text-2xl font-bold mb-2">Become a Sponsor</h2>
+            <p className="text-gray-400 text-sm mb-6">
+              Choose a package and complete payment. We’ll list your company on
+              the event page.
+            </p>
+
+            <div className="space-y-3 mb-6">
+              {sponsorPackages.map((pkg) => {
+                const soldOut = packageSoldOut(pkg);
+                const selected = selectedPackageId === pkg.id;
+                return (
+                  <button
+                    key={pkg.id}
+                    type="button"
+                    disabled={soldOut}
+                    onClick={() => setSelectedPackageId(pkg.id)}
+                    className={`w-full text-left p-4 rounded-2xl border transition-colors ${
+                      selected
+                        ? 'border-emerald-500 bg-emerald-950/40'
+                        : 'border-gray-700 hover:border-gray-600'
+                    } disabled:opacity-40`}
+                  >
+                    <div className="flex justify-between gap-3">
+                      <span className="font-medium">{pkg.name}</span>
+                      <span className="text-emerald-400 font-semibold">
+                        ${Number(pkg.price).toFixed(2)}
+                      </span>
+                    </div>
+                    {pkg.description && (
+                      <p className="text-sm text-gray-400 mt-1">
+                        {pkg.description}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500 mt-1">
+                      {soldOut
+                        ? 'Sold out'
+                        : pkg.max_quantity != null
+                          ? `${pkg.times_sold || 0} / ${pkg.max_quantity} sold`
+                          : `${pkg.times_sold || 0} sold`}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="space-y-4 mb-6">
+              <input
+                value={sponsorCompany}
+                onChange={(e) => setSponsorCompany(e.target.value)}
+                placeholder="Company name *"
+                className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+              />
+              <input
+                value={sponsorContactName}
+                onChange={(e) => setSponsorContactName(e.target.value)}
+                placeholder="Contact name"
+                className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+              />
+              <input
+                type="email"
+                value={sponsorContactEmail}
+                onChange={(e) => setSponsorContactEmail(e.target.value)}
+                placeholder="Contact email *"
+                className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+              />
+              <input
+                value={sponsorWebsite}
+                onChange={(e) => setSponsorWebsite(e.target.value)}
+                placeholder="Website (optional)"
+                className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleSponsorCheckout}
+              disabled={sponsorSubmitting || !selectedPackageId}
+              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold text-lg"
+            >
+              {sponsorSubmitting
+                ? 'Processing…'
+                : selectedPackage
+                  ? `Pay $${Number(selectedPackage.price).toFixed(2)}`
+                  : 'Select a package'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSponsorModal(false)}
+              className="w-full mt-4 py-3 text-gray-400 hover:text-white"
             >
               Cancel
             </button>
