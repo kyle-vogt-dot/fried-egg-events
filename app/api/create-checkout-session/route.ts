@@ -22,6 +22,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const {
       registration_id,
+      registration_ids, // comma-separated list for team checkouts
       amount,
       player_name,
       email,
@@ -49,6 +50,14 @@ export async function POST(request: NextRequest) {
     const defaultCancelUrl = `${baseUrl}/event/${event_id}?payment=cancelled`;
 
     const { feeCents, netCents } = calculateAmountWithStripeFee(Number(amount));
+
+    const meta = {
+      registration_id: registration_id ? String(registration_id) : '',
+      registration_ids: registration_ids ? String(registration_ids) : '',
+      event_id: String(event_id),
+      type: String(type),
+      net_amount: String(amount),
+    };
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -83,19 +92,9 @@ export async function POST(request: NextRequest) {
       ],
       success_url: success_url || defaultSuccessUrl,
       cancel_url: cancel_url || defaultCancelUrl,
-      metadata: {
-        registration_id: registration_id ? String(registration_id) : '',
-        event_id: String(event_id),
-        type: String(type),
-        net_amount: String(amount),
-      },
+      metadata: meta,
       payment_intent_data: {
-        metadata: {
-          registration_id: registration_id ? String(registration_id) : '',
-          event_id: String(event_id),
-          type: String(type),
-          net_amount: String(amount),
-        },
+        metadata: meta,
       },
       customer_email: email,
     });

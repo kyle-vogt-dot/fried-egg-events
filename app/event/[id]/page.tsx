@@ -479,50 +479,74 @@ useEffect(() => {
     const regIdParam = searchParams.get('registration_id');
 
     if (paymentStatus === 'cancelled' && type === 'registration') {
-      try {
-        sessionStorage.removeItem(paymentHandledKey);
-        const raw = sessionStorage.getItem(draftKey);
-        if (raw) {
-          const draft = JSON.parse(raw);
-          setMode(draft.mode || '');
-          setIsOrganizerOnly(!!draft.isOrganizerOnly);
-          if (draft.mode === 'join') setSelectedTeam(draft.teamName || '');
-          if (draft.mode === 'create') setNewTeamName(draft.teamName || '');
+  (async () => {
+    try {
+      sessionStorage.removeItem(paymentHandledKey);
+      const raw = sessionStorage.getItem(draftKey);
 
-          setAdditionalPlayers(
-            (draft.players || [])
-              .filter((p: any) => !p.user_id)
-              .map((p: any) => ({
-                name: p.player_name || '',
-                email: p.player_email || '',
-              }))
-          );
+      if (raw) {
+        const draft = JSON.parse(raw);
+        const ids: (string | number)[] = draft.registration_ids || [];
 
-          const ids: number[] = draft.selected_round_ids || [];
-          setSelectedPaidRoundIds(ids);
-          setAgreedToWaiver(true);
+        // Remove unpaid rows created before Checkout
+        if (ids.length > 0) {
+          const { error: delErr } = await supabase
+            .from('event_registrations')
+            .delete()
+            .in('id', ids)
+            .eq('paid', false);
 
-          // Restore discount if present
-          if (draft.discount) {
-            setAppliedDiscount({
-              code: draft.discount.code,
-              discount_code_id: draft.discount.discount_code_id,
-              discount_type: 'fixed',
-              amount: draft.discount.amount_saved,
-              amount_saved: draft.discount.amount_saved,
-              label: draft.discount.code,
-              one_player_only: true,
-            });
-            setDiscountCode(draft.discount.code);
+          if (delErr) {
+            console.error('Failed to clean up unpaid regs on cancel:', delErr);
+          } else {
+            await fetchData(); // refresh counts / sold out
           }
-
-          setShowRegisterModal(true);
         }
-      } catch (e) {
-        console.error('Failed to restore registration draft:', e);
+
+        // Restore form so they can try again
+        setMode(draft.mode || '');
+        setIsOrganizerOnly(!!draft.isOrganizerOnly);
+        if (draft.mode === 'join') setSelectedTeam(draft.teamName || '');
+        if (draft.mode === 'create') setNewTeamName(draft.teamName || '');
+
+        setAdditionalPlayers(
+          (draft.players || [])
+            .filter((p: any) => !p.user_id)
+            .map((p: any) => ({
+              name: p.player_name || '',
+              email: p.player_email || '',
+            }))
+        );
+
+        const roundIds: number[] = draft.selected_round_ids || [];
+        setSelectedPaidRoundIds(roundIds);
+        setAgreedToWaiver(true);
+
+        if (draft.discount) {
+          setAppliedDiscount({
+            code: draft.discount.code,
+            discount_code_id: draft.discount.discount_code_id,
+            discount_type: 'fixed',
+            amount: draft.discount.amount_saved,
+            amount_saved: draft.discount.amount_saved,
+            label: draft.discount.code,
+            one_player_only: true,
+          });
+          setDiscountCode(draft.discount.code);
+        }
+
+        // Clear ids so a retry creates fresh rows
+        draft.registration_ids = [];
+        sessionStorage.setItem(draftKey, JSON.stringify(draft));
+
+        setShowRegisterModal(true);
       }
-      return;
+    } catch (e) {
+      console.error('Failed to restore registration draft:', e);
     }
+  })();
+  return;
+}
 
     // ---------- Sponsorship payment success ----------
         if (paymentStatus === 'success' && type === 'sponsorship') {
