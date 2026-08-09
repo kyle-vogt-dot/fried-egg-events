@@ -77,7 +77,7 @@ const [adminPerms, setAdminPerms] = useState({
 
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
+         useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
       setError(null);
@@ -89,7 +89,17 @@ const [adminPerms, setAdminPerms] = useState({
         router.push('/login');
         return;
       }
-                  // Stripe Connect status (organizer-level)
+
+      // 1) Returning from Stripe? Refresh flags first
+      if (searchParams.get('stripe_return') === '1') {
+        try {
+          await fetch('/api/stripe/refresh', { method: 'POST' });
+        } catch (e) {
+          console.error('Stripe refresh failed', e);
+        }
+      }
+
+      // 2) Read profile and decide banner
       try {
         const { data: profile, error: profileErr } = await supabase
           .from('profiles')
@@ -103,20 +113,17 @@ const [adminPerms, setAdminPerms] = useState({
           console.error('Stripe profile check error:', profileErr);
         }
 
-        console.log('Stripe profile:', profile);
-
         const missing =
           !profile?.stripe_account_id ||
           profile?.stripe_payouts_enabled !== true;
 
         setNeedsPayoutSetup(missing);
+
+        if (searchParams.get('setup_payouts') === '1' && missing) {
+          setNeedsPayoutSetup(true);
+        }
       } catch (err) {
         console.error('Stripe profile check failed:', err);
-        setNeedsPayoutSetup(true);
-      }
-
-      // Always honor create redirect
-      if (searchParams.get('setup_payouts') === '1') {
         setNeedsPayoutSetup(true);
       }
 
@@ -128,12 +135,10 @@ const [adminPerms, setAdminPerms] = useState({
 
       if (eventError || !eventData) {
         setError('Event not found');
-              setNeedsPayoutSetup(true); // TEMP — remove after you see the banner
-      setLoading(false);
+        setLoading(false);
         return;
       }
 
-      // Ensure team size matches event type
       const synced = {
         ...eventData,
         max_teammates: teamSizeFromEventType(eventData.event_type || ''),
@@ -141,9 +146,9 @@ const [adminPerms, setAdminPerms] = useState({
       setEvent(synced);
 
       setNewRound((prev) => ({
-  ...prev,
-  greens_fee: Number(eventData?.greens_fee) || 0,
-}));
+        ...prev,
+        greens_fee: Number(eventData?.greens_fee) || 0,
+      }));
 
       const isCreator = eventData.created_by === user.id;
 
@@ -170,15 +175,15 @@ const [adminPerms, setAdminPerms] = useState({
       await fetchAdmins();
 
       const { data: roundsData, error: roundsError } = await supabase
-  .from('event_rounds')
-  .select('*')
-  .eq('event_id', parseInt(eventId))
-  .order('sort_order', { ascending: true });
+        .from('event_rounds')
+        .select('*')
+        .eq('event_id', parseInt(eventId))
+        .order('sort_order', { ascending: true });
 
-if (roundsError) {
-  console.error('Rounds load error:', roundsError);
-}
-setRounds(roundsData || []);
+      if (roundsError) {
+        console.error('Rounds load error:', roundsError);
+      }
+      setRounds(roundsData || []);
 
       const { data: feeData } = await supabase
         .from('platform_settings')
@@ -194,7 +199,7 @@ setRounds(roundsData || []);
     };
 
     fetchData();
-  }, [eventId, supabase, router]);
+  }, [eventId, supabase, router, searchParams]);
 
   const fetchAdmins = async () => {
     const { data } = await supabase

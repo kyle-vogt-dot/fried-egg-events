@@ -57,7 +57,7 @@ export default function CreatedEventsPage() {
   const upcoming = events.filter((e) => eventDay(e.date) >= today);
   const past = events.filter((e) => eventDay(e.date) < today);
 
-  const EventCard = ({
+    const EventCard = ({
     event,
     isPast = false,
   }: {
@@ -82,58 +82,84 @@ export default function CreatedEventsPage() {
         {event.course}
       </p>
 
-      <div className="space-y-2 text-sm">
-        <Link
-          href={`/event/${event.id}/manage`}
-          className="block text-blue-400 hover:text-blue-300 font-medium"
-        >
-          Manage Event →
-        </Link>
-        <Link
-          href={`/event/${event.id}/check-in`}
-          className="block text-blue-400 hover:text-blue-300"
-        >
-          Check-In →
-        </Link>
-        <Link
-          href={`/event/${event.id}/scoring`}
-          className="block text-blue-400 hover:text-blue-300"
-        >
-          Scoring →
-        </Link>
-        <Link
-          href={`/event/${event.id}/leaderboard`}
-          className="block text-blue-400 hover:text-blue-300"
-        >
-          Leaderboard →
-        </Link>
-        <Link
-          href={`/event/${event.id}/pairings`}
-          className="block text-blue-400 hover:text-blue-300"
-        >
-          Pairings →
-        </Link>
-        <Link
-          href={`/event/${event.id}/scorecards`}
-          className="block text-blue-400 hover:text-blue-300"
-        >
-          Scorecards →
-        </Link>
-        <Link
-          href={`/event/${event.id}/income`}
-          className="block text-blue-400 hover:text-blue-300"
-        >
-          Income →
-        </Link>
-        <Link
-          href={`/event/${event.id}`}
-          className="block text-gray-400 hover:text-gray-300"
-        >
-          View public page →
-        </Link>
+      <div className="space-y-4 text-sm">
+        {/* Setup */}
+        <div>
+          <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+            Setup
+          </p>
+          <div className="space-y-1.5">
+            <Link
+              href={`/event/${event.id}/manage`}
+              className="block text-blue-400 hover:text-blue-300 font-medium"
+            >
+              Manage Event →
+            </Link>
+            <Link
+              href={`/event/${event.id}/pairings`}
+              className="block text-blue-400 hover:text-blue-300"
+            >
+              Pairings →
+            </Link>
+            <Link
+              href={`/event/${event.id}/income`}
+              className="block text-blue-400 hover:text-blue-300"
+            >
+              Income →
+            </Link>
+          </div>
+        </div>
+
+        {/* Day of */}
+        <div>
+          <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+            Day of
+          </p>
+          <div className="space-y-1.5">
+            <Link
+              href={`/event/${event.id}/check-in`}
+              className="block text-emerald-400 hover:text-emerald-300"
+            >
+              Check-In →
+            </Link>
+            <Link
+              href={`/event/${event.id}/scoring`}
+              className="block text-emerald-400 hover:text-emerald-300"
+            >
+              Scoring →
+            </Link>
+            <Link
+              href={`/event/${event.id}/leaderboard`}
+              className="block text-emerald-400 hover:text-emerald-300"
+            >
+              Leaderboard →
+            </Link>
+            <Link
+              href={`/event/${event.id}/scorecards`}
+              className="block text-emerald-400 hover:text-emerald-300"
+            >
+              Scorecards →
+            </Link>
+          </div>
+        </div>
+
+        {/* Public */}
+        <div>
+          <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
+            Public
+          </p>
+          <Link
+            href={`/event/${event.id}`}
+            className="block text-gray-400 hover:text-gray-300"
+          >
+            View public page →
+          </Link>
+        </div>
       </div>
     </div>
   );
+
+  
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">

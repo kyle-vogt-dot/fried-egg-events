@@ -99,9 +99,9 @@ export default function CreateTournament() {
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    if (!agreedToTerms) {
+        if (!agreedToTerms) {
       alert(
-        'Please agree to the Terms of Service and Waiver before creating the event.'
+        'Please agree to the Terms of Service and Fee Policy before creating the event.'
       );
       return;
     }
@@ -323,7 +323,9 @@ export default function CreateTournament() {
 
           {error && <p className="text-red-500 text-center">{error}</p>}
 
-          {/* Waiver / Terms Checkbox */}
+                    {error && <p className="text-red-500 text-center">{error}</p>}
+
+          {/* Terms / Fee Policy Checkbox */}
           <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl mt-6">
             <input
               type="checkbox"
@@ -336,8 +338,28 @@ export default function CreateTournament() {
               htmlFor="event-terms"
               className="text-sm text-gray-300 cursor-pointer"
             >
-              I agree to Fried Egg Events Terms of Service and will ensure all
-              participants sign the Waiver & Release of Liability.
+              I agree to the Fried Egg Events{' '}
+              <a
+                href="/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-emerald-400 hover:text-emerald-300 underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Terms of Service
+              </a>{' '}
+              and{' '}
+              <a
+                href="/fees"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-emerald-400 hover:text-emerald-300 underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Fee Policy
+              </a>
+              , and I will ensure all participants receive any required Waiver
+              &amp; Release of Liability.
             </label>
           </div>
 

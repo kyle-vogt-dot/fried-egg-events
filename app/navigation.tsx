@@ -122,7 +122,24 @@ export default function Navigation() {
   >
     🏠 Home
   </Link>
+    <div className="mt-6 pt-6 border-t border-gray-800 space-y-2">
+    <Link
+      href="/terms"
+      onClick={() => setSidebarOpen(false)}
+      className="block px-6 py-3 text-sm text-gray-500 hover:text-gray-300"
+    >
+      Terms of Service
+    </Link>
+    <Link
+      href="/fees"
+      onClick={() => setSidebarOpen(false)}
+      className="block px-6 py-3 text-sm text-gray-500 hover:text-gray-300"
+    >
+      Fee Policy
+    </Link>
+  </div>
 </div>
+
     </div>
   </div>
 )}

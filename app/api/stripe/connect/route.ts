@@ -4,10 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  // @ts-expect-error stripe types lag package versions
-  apiVersion: '2024-11-20.acacia',
-});
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -23,7 +20,7 @@ function appOrigin(request: NextRequest) {
 
   const origin = String(raw).trim().replace(/\/$/, '');
   if (!/^https?:\/\//i.test(origin)) {
-    throw new Error(`Invalid app origin: ${origin}`);
+    return request.nextUrl.origin;
   }
   return origin;
 }
@@ -31,58 +28,36 @@ function appOrigin(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const cookieStore = await cookies();
-
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // ignore in route handlers when cookies are read-only
-            }
-          },
+          getAll: () => cookieStore.getAll(),
+          setAll: () => {},
         },
       }
     );
 
     const {
       data: { user },
-      error: userError,
     } = await supabase.auth.getUser();
 
-    if (userError || !user) {
+    if (!user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
     const body = await request.json().catch(() => ({}));
     const eventId = body?.eventId ? Number(body.eventId) : null;
 
-    // Load existing Stripe account from profile
-    const { data: profile, error: profileError } = await supabaseAdmin
+    // Load existing profile
+    const { data: profile } = await supabaseAdmin
       .from('profiles')
-      .select(
-        'id, email, full_name, stripe_account_id, stripe_payouts_enabled, stripe_charges_enabled'
-      )
+      .select('stripe_account_id, email, full_name')
       .eq('id', user.id)
       .maybeSingle();
 
-    if (profileError) {
-      console.error(profileError);
-      return NextResponse.json(
-        { error: 'Could not load profile' },
-        { status: 500 }
-      );
-    }
-
-    let accountId = profile?.stripe_account_id as string | null;
+    let accountId = profile?.stripe_account_id || null;
 
     // Create Express account if needed
     if (!accountId) {
@@ -93,38 +68,37 @@ export async function POST(request: NextRequest) {
           card_payments: { requested: true },
           transfers: { requested: true },
         },
-        business_profile: {
-          product_description: 'Golf tournament registration and event payouts',
-        },
+        business_type: 'individual',
         metadata: {
-          user_id: user.id,
-          ...(eventId ? { last_event_id: String(eventId) } : {}),
+          supabase_user_id: user.id,
         },
       });
 
       accountId = account.id;
 
-      const { error: updateError } = await supabaseAdmin
-        .from('profiles')
-        .update({
-          stripe_account_id: accountId,
-          stripe_payouts_enabled: false,
-          stripe_charges_enabled: false,
-        })
-        .eq('id', user.id);
+      // IMPORTANT: save account id so refresh can work later
+      const { error: updateErr } = await supabaseAdmin
+  .from('profiles')
+  .upsert(
+    {
+      id: user.id,
+      email: profile?.email || user.email || null,
+      stripe_account_id: accountId,
+    },
+    { onConflict: 'id' }
+  );
 
-      if (updateError) {
-        console.error(updateError);
-        return NextResponse.json(
-          { error: 'Saved Stripe account failed on profile' },
-          { status: 500 }
-        );
-      }
+if (updateErr) {
+  console.error('Failed to save stripe_account_id:', updateErr);
+  return NextResponse.json(
+    { error: 'Could not save Stripe account to profile' },
+    { status: 500 }
+  );
+}
     }
 
     const origin = appOrigin(request);
 
-    // After onboarding, land back on manage (or a dedicated return page)
     const returnPath = eventId
       ? `/event/${eventId}/manage?stripe_return=1`
       : `/platform?stripe_return=1`;
@@ -133,10 +107,13 @@ export async function POST(request: NextRequest) {
       ? `/event/${eventId}/manage?setup_payouts=1`
       : `/platform?setup_payouts=1`;
 
+    const returnUrl = `${origin}${returnPath}`;
+    const refreshUrl = `${origin}${refreshPath}`;
+
     const accountLink = await stripe.accountLinks.create({
       account: accountId,
-      refresh_url: `${origin}${refreshPath}`,
-      return_url: `${origin}${returnPath}`,
+      refresh_url: refreshUrl,
+      return_url: returnUrl,
       type: 'account_onboarding',
     });
 
@@ -147,7 +124,7 @@ export async function POST(request: NextRequest) {
   } catch (err: any) {
     console.error('Stripe connect error:', err);
     return NextResponse.json(
-      { error: err?.message || 'Stripe Connect failed' },
+      { error: err.message || 'Stripe Connect failed' },
       { status: 500 }
     );
   }
