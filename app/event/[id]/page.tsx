@@ -353,12 +353,33 @@ useEffect(() => {
 
   
   // Force single player when a discount is applied
-  useEffect(() => {
+    useEffect(() => {
     if (appliedDiscount?.one_player_only) {
       setAdditionalPlayers([]);
-      setIsOrganizerOnly(false);
+      // Don't force "I'm playing" if they're already on the event
     }
   }, [appliedDiscount]);
+
+      // Joining a team: clear slots; if already registered, stay "not playing"
+      useEffect(() => {
+    if (mode !== 'join') return;
+    setAdditionalPlayers([]);
+    if (!currentUser) return;
+
+    // Per-round events: user may still register themselves on new rounds
+    const perRound = (event?.pricing_mode || 'event') === 'per_round';
+    if (perRound) return;
+
+    const already = registrations.some(
+      (r) =>
+        r.user_id === currentUser.id ||
+        (r.player_email &&
+          currentUser.email &&
+          String(r.player_email).toLowerCase() ===
+            String(currentUser.email).toLowerCase())
+    );
+    if (already) setIsOrganizerOnly(true);
+  }, [selectedTeam, mode, currentUser, registrations, event?.pricing_mode]);
 
   // Browser back from Stripe (no cancel_url) — clean up unpaid draft regs
   useEffect(() => {
@@ -542,7 +563,7 @@ useEffect(() => {
         if (draft.mode === 'join') setSelectedTeam(draft.teamName || '');
         if (draft.mode === 'create') setNewTeamName(draft.teamName || '');
 
-        setAdditionalPlayers(
+                setAdditionalPlayers(
           (draft.players || [])
             .filter((p: any) => !p.user_id)
             .map((p: any) => ({
@@ -645,6 +666,24 @@ useEffect(() => {
           const draft = JSON.parse(raw);
           checkoutNetAmount =
             draft.totalCost != null ? Number(draft.totalCost) : null;
+                                              {alreadyRegistered && (
+                <div className="mb-6 bg-amber-900/40 border border-amber-500/50 rounded-2xl p-4 text-sm text-amber-100">
+                  <p className="font-medium text-amber-300 mb-1">
+                    You’re already registered
+                    {myRegisteredRoundNames.length > 0
+                      ? ` for ${myRegisteredRoundNames.join(', ')}`
+                      : myRegistration?.team_name
+                        ? ` on “${myRegistration.team_name}”`
+                        : ''}
+                    .
+                  </p>
+                  <p className="text-amber-100/90">
+                    You can add teammates to those rounds, or select another
+                    round to register yourself there. You won’t be charged again
+                    for rounds you’re already on.
+                  </p>
+                </div>
+              )}
           draftDiscount = draft.discount || null;
 
           sessionStorage.setItem(
@@ -1055,13 +1094,78 @@ const spotsLeft =
     (p) => !(p.name || '').trim() || !isValidEmail(p.email || '')
   );
 
-  const completeAdditionalPlayers = additionalPlayers.filter(
+    const completeAdditionalPlayers = additionalPlayers.filter(
     (p) => (p.name || '').trim() && isValidEmail(p.email || '')
   );
 
-  const totalPlayers = isOrganizerOnly
-    ? completeAdditionalPlayers.length
-    : 1 + completeAdditionalPlayers.length;
+  // Must be defined BEFORE totalPlayers / effects that use it
+    const myRegistrations = useMemo(() => {
+    if (!currentUser) return [];
+    return registrations.filter(
+      (r) =>
+        r.user_id === currentUser.id ||
+        (r.player_email &&
+          currentUser.email &&
+          String(r.player_email).toLowerCase() ===
+            String(currentUser.email).toLowerCase())
+    );
+  }, [registrations, currentUser]);
+
+  // Any registration on this event (for event-priced tournaments)
+  const alreadyRegistered = myRegistrations.length > 0;
+
+  // Primary row (team name, etc.)
+  const myRegistration = myRegistrations[0] || null;
+
+  // Round ids this user is already on
+  const myRegisteredRoundIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const r of myRegistrations) {
+      const list: number[] = Array.isArray(r.selected_round_ids)
+        ? r.selected_round_ids
+        : [];
+      list.forEach((id) => ids.add(Number(id)));
+    }
+    return Array.from(ids);
+  }, [myRegistrations]);
+
+  const myRegisteredRoundNames = useMemo(() => {
+    return myRegisteredRoundIds
+      .map((id) => rounds.find((r) => r.id === id)?.name || `Round ${id}`)
+      .filter(Boolean);
+  }, [myRegisteredRoundIds, rounds]);
+
+  // Among currently selected paid rounds: which are new vs already on
+  const newlySelectedRoundIds = selectedPaidRoundIds.filter(
+    (id) => !myRegisteredRoundIds.includes(id)
+  );
+  const alreadySelectedRoundIds = selectedPaidRoundIds.filter((id) =>
+    myRegisteredRoundIds.includes(id)
+  );
+
+  // Charge yourself only if: event-priced and not registered, OR per-round with at least one NEW round
+  const countingSelf = isPerRound
+    ? newlySelectedRoundIds.length > 0
+    : !isOrganizerOnly && !alreadyRegistered;
+
+  const selectedTeamMembers = useMemo(() => {
+    if (!selectedTeam) return [];
+    return registrations.filter((r) => r.team_name === selectedTeam);
+  }, [registrations, selectedTeam]);
+
+  const getSpotsLeft = (team: string) => {
+    const count = registrations.filter((r) => r.team_name === team).length;
+    return Math.max(0, maxTeamSize - count);
+  };
+
+  const openSlotsForJoin = selectedTeam ? getSpotsLeft(selectedTeam) : 0;
+
+  // If already registered for this event, never charge them again as player 1
+  
+
+  const totalPlayers = countingSelf
+    ? 1 + completeAdditionalPlayers.length
+    : completeAdditionalPlayers.length;
 
   const selectedRoundsCostPerPlayer = selectedPaidRoundIds.reduce(
     (sum, id) => {
@@ -1079,17 +1183,37 @@ const spotsLeft =
     ? Number(appliedDiscount.amount_saved)
     : 0;
 
+    // Cost of one "seat" across the currently selected rounds
+  const costAllSelectedRounds = Math.max(
+    0,
+    selectedRoundsCostPerPlayer - discountPerPlayer
+  );
+
+  // Cost of only NEW rounds (for someone already on some rounds)
+  const costNewRoundsOnly = newlySelectedRoundIds.reduce((sum, id) => {
+    const round =
+      selectableRounds.find((r) => r.id === id) ||
+      rounds.find((r) => r.id === id);
+    if (!round) return sum;
+    const raw = Number(round.price || 0) + feePerPlayer - discountPerPlayer;
+    return sum + Math.max(0, raw);
+  }, 0);
+
+  const additionalCount = completeAdditionalPlayers.length;
+
   const totalCost = isPerRound
-    ? totalPlayers *
-      Math.max(0, selectedRoundsCostPerPlayer - discountPerPlayer)
-    : totalPlayers *
-      Math.max(
-        0,
-        pricePerPlayer +
-          feePerPlayer +
-          selectedRoundsCostPerPlayer -
-          discountPerPlayer
-      );
+    ? (countingSelf ? costNewRoundsOnly : 0) +
+      additionalCount * costAllSelectedRounds
+    : (countingSelf ? 1 : 0) + additionalCount > 0
+      ? ((countingSelf ? 1 : 0) + additionalCount) *
+        Math.max(
+          0,
+          pricePerPlayer +
+            feePerPlayer +
+            selectedRoundsCostPerPlayer -
+            discountPerPlayer
+        )
+      : 0;
 
   const getSelectedRoundIds = () => {
     if (isPerRound) return [...selectedPaidRoundIds];
@@ -1133,7 +1257,7 @@ const spotsLeft =
     return names.size;
   };
 
-  // True if ANY selected round is at max teams (can't create a new team)
+    // True if ANY selected round is at max teams (can't create a new team)
   const teamsFull = capacityRoundIds.some((rid) => {
     const maxT = maxTeamsForRound(rid);
     if (maxT == null) return false;
@@ -1143,13 +1267,6 @@ const spotsLeft =
   const existingTeams = Array.from(
     new Set(registrations.map((r) => r.team_name).filter(Boolean))
   );
-
-  const getSpotsLeft = (team: string) => {
-    // Spots left on this team (by player count), using event-wide regs
-    // so a team full on one round isn't joinable as a loophole
-    const count = registrations.filter((r) => r.team_name === team).length;
-    return Math.max(0, maxTeamSize - count);
-  };
 
   const updateExtraPlayer = (
     index: number,
@@ -1181,6 +1298,7 @@ const spotsLeft =
       'Player'
     );
   };
+
 
   // ---------- Discount helpers ----------
   const applyDiscountCode = async () => {
@@ -1288,8 +1406,19 @@ setWaitlistPhone('');
       return;
     }
     setCurrentUser(user);
-    setShowRegisterModal(true);
-    setIsOrganizerOnly(false);
+        setShowRegisterModal(true);
+
+    // If they're already on this event, default to adding others only
+    const alreadyOnEvent = registrations.some(
+      (r) =>
+        r.user_id === user.id ||
+        (r.player_email &&
+          user.email &&
+          String(r.player_email).toLowerCase() ===
+            String(user.email).toLowerCase())
+    );
+    setIsOrganizerOnly(alreadyOnEvent);
+
     setMode('');
     setSelectedTeam('');
     setNewTeamName('');
@@ -1326,7 +1455,7 @@ setWaitlistPhone('');
       const selectedRoundIds = getSelectedRoundIds();
       const playerName = getPlayerName(user);
 
-      if (!isIndividual && !finalTeamName) {
+            if (!isIndividual && !finalTeamName) {
         alert('Please select or create a team name');
         setSubmitting(false);
         return;
@@ -1362,7 +1491,7 @@ setWaitlistPhone('');
           user_id: user.id,
         });
       } else {
-        if (!isOrganizerOnly) {
+                if (!isOrganizerOnly && !alreadyRegistered) {
           players.push({
             player_name: playerName,
             player_email: user.email || '',
@@ -1958,7 +2087,22 @@ setWaitlistPhone('');
               <h2 className="text-3xl font-bold mb-6">
                 Register for {event.name}
               </h2>
-
+              {alreadyRegistered && (
+                <div className="mb-6 bg-amber-900/40 border border-amber-500/50 rounded-2xl p-4 text-sm text-amber-100">
+                  <p className="font-medium text-amber-300 mb-1">
+                    You’re already registered
+                    {myRegistration?.team_name
+                      ? ` on “${myRegistration.team_name}”`
+                      : ''}
+                    .
+                  </p>
+                  <p className="text-amber-100/90">
+                    This form only adds <strong>new</strong> players. You will
+                    not be charged again for yourself. Use “Join Existing Team”
+                    to fill open spots (e.g. a spouse or teammate).
+                  </p>
+                </div>
+              )}
               {rounds.length > 0 && (
                 <div className="bg-gray-900 rounded-2xl p-5 mb-6">
                   <p className="text-sm text-gray-400 mb-4 font-medium">
@@ -1996,12 +2140,14 @@ setWaitlistPhone('');
                       {selectableRounds.map((round) => {
                         const checked = selectedPaidRoundIds.includes(round.id);
                         return (
-                          <label
+                                                    <label
                             key={round.id}
                             className={`flex items-center justify-between gap-4 p-4 rounded-2xl cursor-pointer border transition-colors ${
-                              checked
-                                ? 'border-teal-500 bg-teal-950/40'
-                                : 'border-gray-700 hover:border-gray-600'
+                              myRegisteredRoundIds.includes(round.id)
+                                ? 'border-amber-500 bg-amber-950/40'
+                                : checked
+                                  ? 'border-teal-500 bg-teal-950/40'
+                                  : 'border-gray-700 hover:border-gray-600'
                             }`}
                           >
                             <div className="flex items-center gap-3">
@@ -2157,10 +2303,10 @@ setWaitlistPhone('');
                         Max teams reached for the selected round(s). Join a team
                         that still has open spots.
                       </p>
+                      
                     )}
                   </div>
-
-{mode === 'join' && (
+                                    {mode === 'join' && (
                     <div>
                       <label className="block text-sm text-gray-400 mb-2">
                         Select Team
@@ -2187,6 +2333,47 @@ setWaitlistPhone('');
                     </div>
                   )}
 
+                  {mode === 'join' && selectedTeam && (
+                    <div className="mt-4 bg-gray-900 rounded-2xl p-5 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <p className="text-sm text-gray-400 font-medium">
+                          On this team
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {selectedTeamMembers.length}/{maxTeamSize} ·{' '}
+                          {openSlotsForJoin} open
+                        </p>
+                      </div>
+                      {selectedTeamMembers.length === 0 ? (
+                        <p className="text-sm text-gray-500">No players yet</p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {selectedTeamMembers.map((m) => (
+                            <li
+                              key={m.id}
+                              className="flex justify-between text-sm bg-gray-800 rounded-xl px-4 py-3"
+                            >
+                              <span className="font-medium">
+                                {m.player_name || 'Player'}
+                                {(m.user_id === currentUser?.id ||
+                                  (m.player_email &&
+                                    currentUser?.email &&
+                                    String(m.player_email).toLowerCase() ===
+                                      String(currentUser.email).toLowerCase())) && (
+                                  <span className="text-emerald-400 text-xs ml-2">
+                                    (you)
+                                  </span>
+                                )}
+                              </span>
+                              <span className="text-gray-500 text-xs">
+                                {m.paid ? 'Paid' : 'Unpaid'}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                   {mode === 'create' && (
                     <div>
                       <label className="block text-sm text-gray-400 mb-2">
@@ -2204,24 +2391,32 @@ setWaitlistPhone('');
                   
 
                   <div className="flex items-center gap-3 bg-gray-900 p-4 rounded-2xl">
-                    <input
+                                        <input
                       type="checkbox"
                       id="organizer-only"
                       checked={isOrganizerOnly}
-                      onChange={(e) => setIsOrganizerOnly(e.target.checked)}
-                      disabled={!!appliedDiscount}
+                                            onChange={(e) => setIsOrganizerOnly(e.target.checked)}
+                      disabled={
+                        !!appliedDiscount ||
+                        (!isPerRound && alreadyRegistered)
+                      }
                       className="w-5 h-5 accent-blue-600"
                     />
-                    <label
+                                        <label
                       htmlFor="organizer-only"
                       className="text-sm cursor-pointer"
                     >
-                      I am not playing — just registering the team
+                                            {isPerRound && alreadyRegistered
+                        ? 'I’m only adding other players on the selected rounds'
+                        : alreadyRegistered
+                          ? 'I’m only adding other players (I’m already registered)'
+                          : 'I am not playing — just registering the team'}
                     </label>
                   </div>
-
-                  {!isOrganizerOnly && (
+                  
+                                    {!isOrganizerOnly && !alreadyRegistered && (
                     <div className="bg-emerald-900/30 border border-emerald-500 p-5 rounded-2xl">
+
                       <p className="text-sm text-emerald-400 mb-1">
                         You are playing as the first player
                       </p>
@@ -2232,15 +2427,19 @@ setWaitlistPhone('');
                   )}
 
                   
-
-                  <div>
-                    <div className="flex justify-between items-center mb-3">
+<div>
+                                      <div className="flex justify-between items-center mb-3">
                       <label className="text-sm text-gray-400">
-                        Additional Players
+                        {mode === 'join' && selectedTeam
+                          ? 'Add players to this team'
+                          : 'Additional Players'}
                       </label>
                       <span className="text-xs text-gray-500">
                         {completeAdditionalPlayers.length} complete /{' '}
                         {additionalPlayers.length} added
+                        {mode === 'join' && selectedTeam
+                          ? ` · ${openSlotsForJoin} open`
+                          : ''}
                       </span>
                     </div>
 
@@ -2318,13 +2517,15 @@ setWaitlistPhone('');
 })}
 
                     <button
-                      onClick={() => {
+                                            onClick={() => {
                         let maxAdditional = maxTeamSize;
                         if (mode === 'join' && selectedTeam) {
-                          const spotsLeft = getSpotsLeft(selectedTeam);
-                          maxAdditional = isOrganizerOnly
-                            ? spotsLeft
-                            : spotsLeft - 1;
+                          // Only fill open spots — never reserve a slot for "self"
+                          // when already registered or organizer-only
+                          maxAdditional =
+                            alreadyRegistered || isOrganizerOnly
+                              ? openSlotsForJoin
+                              : Math.max(0, openSlotsForJoin - 1);
                         } else if (mode === 'create') {
                           maxAdditional = isOrganizerOnly
                             ? maxTeamSize
@@ -2338,15 +2539,15 @@ setWaitlistPhone('');
                           ]);
                         }
                       }}
-                      disabled={
+                                            disabled={
                         !!appliedDiscount ||
                         (mode === 'join' && !selectedTeam) ||
                         (mode === 'create' && !newTeamName) ||
                         additionalPlayers.length >=
                           (mode === 'join' && selectedTeam
-                            ? isOrganizerOnly
-                              ? getSpotsLeft(selectedTeam)
-                              : getSpotsLeft(selectedTeam) - 1
+                            ? alreadyRegistered || isOrganizerOnly
+                              ? openSlotsForJoin
+                              : Math.max(0, openSlotsForJoin - 1)
                             : isOrganizerOnly
                               ? maxTeamSize
                               : maxTeamSize - 1)
@@ -2435,6 +2636,7 @@ setWaitlistPhone('');
                       (mode === 'join' && !selectedTeam) ||
                       (isPerRound && selectedPaidRoundIds.length === 0) ||
                       hasIncompleteAdditionalPlayers
+                      
                     }
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
