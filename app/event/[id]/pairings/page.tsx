@@ -12,7 +12,8 @@ import {
   PDFDownloadLink,
 } from '@react-pdf/renderer';
 
-type Slot = 'A' | 'B';
+type Slot = 'A' | 'B' | 'C' | 'D';
+type StartFormat = 'shotgun' | 'tee_times' | 'double_tee';
 
 type TeamRow = {
   team_name: string;
@@ -22,6 +23,7 @@ type TeamRow = {
   registration_rows: any[];
   pairing_hole: number | null;
   pairing_slot: Slot | null;
+  tee_time: string | null;
   first_registered_at: string;
 };
 
@@ -32,11 +34,11 @@ function formatPairing(hole: number | null, slot: Slot | null) {
 
 function parsePairing(value: string): { hole: number; slot: Slot } | null {
   const cleaned = value.trim().toUpperCase().replace(/\s+/g, ' ');
-  const match = cleaned.match(/^(\d+)\s*-?\s*([AB])$/);
+  const match = cleaned.match(/^(\d+)\s*-?\s*([ABCD])$/);
   if (!match) return null;
   const hole = parseInt(match[1], 10);
   const slot = match[2] as Slot;
-  if (!hole || (slot !== 'A' && slot !== 'B')) return null;
+  if (!hole || !['A', 'B', 'C', 'D'].includes(slot)) return null;
   return { hole, slot };
 }
 
@@ -61,21 +63,39 @@ function formatRoundTime(startTime: string | null | undefined) {
   return `${h}:${m} ${ampm}`;
 }
 
+/** "08:00" + minutes → "08:10" */
+function addMinutesToTime(hhmm: string, minutes: number): string {
+  const [hStr, mStr] = String(hhmm).slice(0, 5).split(':');
+  let h = parseInt(hStr || '8', 10);
+  let m = parseInt(mStr || '0', 10);
+  if (Number.isNaN(h)) h = 8;
+  if (Number.isNaN(m)) m = 0;
+  const total = h * 60 + m + minutes;
+  const nh = Math.floor(((total % (24 * 60)) + 24 * 60) % (24 * 60) / 60);
+  const nm = ((total % 60) + 60) % 60;
+  return `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
+}
+
 function getRoundPairing(reg: any, roundId: number | null) {
   if (!roundId) {
     return {
       hole: reg.pairing_hole ?? null,
-      slot: (reg.pairing_slot === 'A' || reg.pairing_slot === 'B'
+      slot: (['A', 'B', 'C', 'D'].includes(reg.pairing_slot)
         ? reg.pairing_slot
         : null) as Slot | null,
+      tee_time: reg.pairing_tee_time ?? null,
     };
   }
   const map = reg.round_pairings || {};
   const entry = map[String(roundId)] || map[roundId];
-  if (entry?.hole && (entry.slot === 'A' || entry.slot === 'B')) {
-    return { hole: Number(entry.hole), slot: entry.slot as Slot };
+  if (entry?.hole && ['A', 'B', 'C', 'D'].includes(entry.slot)) {
+    return {
+      hole: Number(entry.hole),
+      slot: entry.slot as Slot,
+      tee_time: entry.tee_time || null,
+    };
   }
-  return { hole: null, slot: null };
+  return { hole: null, slot: null, tee_time: null };
 }
 
 const pairPdfStyles = StyleSheet.create({
@@ -99,6 +119,7 @@ const pairPdfStyles = StyleSheet.create({
     marginBottom: 4,
   },
   thHole: { width: 70, fontWeight: 'bold' },
+  thTime: { width: 70, fontWeight: 'bold' },
   thTeam: { flex: 1, fontWeight: 'bold' },
   thPlayers: { flex: 1.4, fontWeight: 'bold' },
   row: {
@@ -108,6 +129,7 @@ const pairPdfStyles = StyleSheet.create({
     borderBottomColor: '#ddd',
   },
   tdHole: { width: 70 },
+  tdTime: { width: 70 },
   tdTeam: { flex: 1, fontWeight: 'bold' },
   tdPlayers: { flex: 1.4, color: '#333' },
   footer: {
@@ -128,6 +150,7 @@ function PairingsPDF({
   eventDate,
   roundName,
   roundTime,
+  showTime,
   rows,
 }: {
   eventName: string;
@@ -135,7 +158,8 @@ function PairingsPDF({
   eventDate?: string;
   roundName?: string;
   roundTime?: string;
-  rows: { holeSlot: string; team: string; players: string }[];
+  showTime: boolean;
+  rows: { holeSlot: string; time: string; team: string; players: string }[];
 }) {
   const dateStr = eventDate
     ? new Date(String(eventDate) + 'T12:00:00').toLocaleDateString('en-US', {
@@ -150,7 +174,9 @@ function PairingsPDF({
     <Document>
       <Page size="LETTER" style={pairPdfStyles.page}>
         <Text style={pairPdfStyles.brand}>Fried Egg Events</Text>
-        <Text style={pairPdfStyles.title}>{eventName || 'Event'} — Pairings</Text>
+        <Text style={pairPdfStyles.title}>
+          {eventName || 'Event'} — Pairings
+        </Text>
         {dateStr ? (
           <Text style={pairPdfStyles.subtitle}>{dateStr}</Text>
         ) : null}
@@ -165,16 +191,30 @@ function PairingsPDF({
 
         <View style={pairPdfStyles.headerRow}>
           <Text style={pairPdfStyles.thHole}>Hole</Text>
-          <Text style={pairPdfStyles.thTeam}>Team</Text>
+          {showTime ? (
+            <Text style={pairPdfStyles.thTime}>Time</Text>
+          ) : null}
+          <Text style={pairPdfStyles.thTeam}>Team / Group</Text>
           <Text style={pairPdfStyles.thPlayers}>Players</Text>
         </View>
 
         {rows.length === 0 ? (
-          <Text style={pairPdfStyles.empty}>No pairings set for this round.</Text>
+          <Text style={pairPdfStyles.empty}>
+            No pairings set for this round.
+          </Text>
         ) : (
           rows.map((r, i) => (
-            <View key={`${r.holeSlot}-${i}`} style={pairPdfStyles.row} wrap={false}>
+            <View
+              key={`${r.holeSlot}-${i}`}
+              style={pairPdfStyles.row}
+              wrap={false}
+            >
               <Text style={pairPdfStyles.tdHole}>{r.holeSlot || '—'}</Text>
+              {showTime ? (
+                <Text style={pairPdfStyles.tdTime}>
+                  {r.time ? formatRoundTime(r.time) : '—'}
+                </Text>
+              ) : null}
               <Text style={pairPdfStyles.tdTeam}>{r.team}</Text>
               <Text style={pairPdfStyles.tdPlayers}>{r.players}</Text>
             </View>
@@ -207,47 +247,90 @@ export default function EventPairingsPage() {
   const [allRegs, setAllRegs] = useState<any[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [draft, setDraft] = useState<Record<string, string>>({});
+  const [draftTimes, setDraftTimes] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
 
+  // Individual start settings
+  const [startFormat, setStartFormat] = useState<StartFormat>('shotgun');
+  const [pairStartTime, setPairStartTime] = useState('08:00');
+  const [intervalMin, setIntervalMin] = useState(10);
+  const [primaryHole, setPrimaryHole] = useState(1);
+  const [secondaryHole, setSecondaryHole] = useState(10);
+
   const numHoles = useMemo(() => {
-    const n = Number(event?.number_of_holes || 9);
-    return n === 18 ? 18 : 9;
+    const n = Number(event?.number_of_holes || 18);
+    return n === 9 ? 9 : 18;
   }, [event]);
+
+  const isTeamEvent = useMemo(() => {
+    const mt = Number(event?.max_teammates || 0);
+    if (mt > 1) return true;
+    const t = String(event?.event_type || '').toLowerCase();
+    if (
+      t.includes('scramble') ||
+      t.includes('best ball') ||
+      t.includes('team')
+    )
+      return true;
+    if (
+      t.includes('stroke') ||
+      t.includes('individual') ||
+      t.includes('medal')
+    )
+      return false;
+    // Fallback: any multi-player team_name used often → team
+    return mt > 1;
+  }, [event]);
+
+  const slotsPerHole = isTeamEvent ? 2 : 4;
+  const slotLetters: Slot[] = isTeamEvent
+    ? ['A', 'B']
+    : ['A', 'B', 'C', 'D'];
 
   const availableSlots = useMemo(() => {
     const slots: string[] = [];
     for (let h = 1; h <= numHoles; h++) {
-      slots.push(`${h} - A`);
-      slots.push(`${h} - B`);
+      for (const s of slotLetters) {
+        slots.push(`${h} - ${s}`);
+      }
     }
     return slots;
-  }, [numHoles]);
+  }, [numHoles, slotLetters]);
 
   const selectedRound = useMemo(
     () => rounds.find((r) => r.id === selectedRoundId) || null,
     [rounds, selectedRoundId]
   );
 
-    // Sorted list for PDF (by hole, then A before B)
   const pdfRows = useMemo(() => {
     const rows = teams.map((t) => {
       const label = (draft[t.team_name] || '').trim();
       const parsed = label ? parsePairing(label) : null;
       return {
         holeSlot: label || '—',
+        time: draftTimes[t.team_name] || '',
         team: t.team_name,
         players: t.player_names.join(', '),
         sortHole: parsed?.hole ?? 999,
-        sortSlot: parsed?.slot === 'B' ? 1 : 0,
+        sortSlot: parsed
+          ? slotLetters.indexOf(parsed.slot)
+          : 99,
+        sortTime: draftTimes[t.team_name] || '99:99',
       };
     });
-    rows.sort((a, b) => a.sortHole - b.sortHole || a.sortSlot - b.sortSlot);
-    return rows.map(({ holeSlot, team, players }) => ({
+    rows.sort(
+      (a, b) =>
+        a.sortTime.localeCompare(b.sortTime) ||
+        a.sortHole - b.sortHole ||
+        a.sortSlot - b.sortSlot
+    );
+    return rows.map(({ holeSlot, time, team, players }) => ({
       holeSlot,
+      time,
       team,
       players,
     }));
-  }, [teams, draft]);
+  }, [teams, draft, draftTimes, slotLetters]);
 
   const pdfFileName = `${String(event?.name || 'event')
     .replace(/[^a-z0-9]+/gi, '-')
@@ -265,7 +348,6 @@ export default function EventPairingsPage() {
     if (roundId != null) {
       filtered = regs.filter((r) => {
         const ids: number[] = r.selected_round_ids || [];
-        // If no round list stored, include them only when event has a single round
         if (!ids.length) return rounds.length <= 1;
         return ids.includes(roundId);
       });
@@ -273,30 +355,41 @@ export default function EventPairingsPage() {
 
     const byTeam: Record<string, any[]> = {};
     for (const r of filtered) {
-      const key = r.team_name || `Individual:${r.id}`;
-      if (!byTeam[key]) byTeam[key] = [];
-      byTeam[key].push(r);
+      // Individual events: one row per player
+      const key =
+        isTeamEvent || (r.team_name && r.team_name.trim())
+          ? r.team_name || `Individual:${r.id}`
+          : `Individual:${r.id}`;
+      // Force per-player when individual event
+      const groupKey = isTeamEvent
+        ? r.team_name || `Individual:${r.id}`
+        : `Individual:${r.id}`;
+      if (!byTeam[groupKey]) byTeam[groupKey] = [];
+      byTeam[groupKey].push(r);
     }
 
-    const teamRows: TeamRow[] = Object.entries(byTeam).map(([key, players]) => {
-      const first = players[0];
-      const { hole, slot } = getRoundPairing(first, roundId);
+    const teamRows: TeamRow[] = Object.entries(byTeam).map(
+      ([key, players]) => {
+        const first = players[0];
+        const { hole, slot, tee_time } = getRoundPairing(first, roundId);
 
-      const displayName = key.startsWith('Individual:')
-        ? first.player_name || 'Individual'
-        : key;
+        const displayName = key.startsWith('Individual:')
+          ? first.player_name || 'Individual'
+          : key;
 
-      return {
-        team_name: displayName,
-        player_count: players.length,
-        player_names: players.map((p) => p.player_name),
-        registration_ids: players.map((p) => p.id),
-        registration_rows: players,
-        pairing_hole: hole,
-        pairing_slot: slot,
-        first_registered_at: first.created_at,
-      };
-    });
+        return {
+          team_name: displayName,
+          player_count: players.length,
+          player_names: players.map((p) => p.player_name),
+          registration_ids: players.map((p) => p.id),
+          registration_rows: players,
+          pairing_hole: hole,
+          pairing_slot: slot,
+          tee_time: tee_time,
+          first_registered_at: first.created_at,
+        };
+      }
+    );
 
     teamRows.sort(
       (a, b) =>
@@ -320,6 +413,11 @@ export default function EventPairingsPage() {
       .single();
     setEvent(ev);
 
+    // Prefer round start_time if present
+    if (ev?.date) {
+      /* keep pairStartTime as-is unless empty */
+    }
+
     const { data: roundsData } = await supabase
       .from('event_rounds')
       .select('*')
@@ -338,21 +436,16 @@ export default function EventPairingsPage() {
 
     setAllRegs(regs || []);
 
-    // Default selected round
     let roundId = selectedRoundId;
     if (roundId == null && roundList.length > 0) {
       roundId = roundList[0].id;
       setSelectedRoundId(roundId);
+      if (roundList[0].start_time) {
+        setPairStartTime(String(roundList[0].start_time).slice(0, 5));
+      }
     }
 
-    const teamRows = buildTeamsForRound(regs || [], roundId);
-    setTeams(teamRows);
-
-    const nextDraft: Record<string, string> = {};
-    for (const t of teamRows) {
-      nextDraft[t.team_name] = formatPairing(t.pairing_hole, t.pairing_slot);
-    }
-    setDraft(nextDraft);
+    // isTeamEvent depends on event — build after setEvent via effect below
     setLoading(false);
   };
 
@@ -361,45 +454,121 @@ export default function EventPairingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
 
-  // Rebuild team list when round changes
+  // Rebuild when event/regs/round ready
   useEffect(() => {
-    if (loading) return;
+    if (!event) return;
     const teamRows = buildTeamsForRound(allRegs, selectedRoundId);
     setTeams(teamRows);
 
     const nextDraft: Record<string, string> = {};
+    const nextTimes: Record<string, string> = {};
     for (const t of teamRows) {
       nextDraft[t.team_name] = formatPairing(t.pairing_hole, t.pairing_slot);
+      nextTimes[t.team_name] = t.tee_time
+        ? String(t.tee_time).slice(0, 5)
+        : '';
     }
     setDraft(nextDraft);
+    setDraftTimes(nextTimes);
     setMessage(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRoundId]);
+  }, [selectedRoundId, allRegs, event, isTeamEvent]);
 
-  const applyAssignments = (
-    orderedTeams: TeamRow[],
-    mode: 'order' | 'random'
-  ) => {
-    const list = mode === 'random' ? shuffle(orderedTeams) : orderedTeams;
+  /** Team: one slot per team (A/B). Individual: one slot per player (A–D). */
+  const applyAssignments = (orderedTeams: TeamRow[], mode: 'order' | 'random') => {
+    const list = mode === 'random' ? shuffle(orderedTeams) : [...orderedTeams];
     const next: Record<string, string> = {};
+    const nextTimes: Record<string, string> = {};
 
-    list.forEach((team, index) => {
-      if (index >= availableSlots.length) {
-        next[team.team_name] = '';
-        return;
+    if (isTeamEvent) {
+      list.forEach((team, index) => {
+        if (index >= availableSlots.length) {
+          next[team.team_name] = '';
+          nextTimes[team.team_name] = '';
+          return;
+        }
+        next[team.team_name] = availableSlots[index];
+        nextTimes[team.team_name] = pairStartTime;
+      });
+        } else {
+      // --- Individual: order by handicap, else random ---
+      const hasAnyHandicap = list.some(
+        (t) =>
+          t.registration_rows[0]?.handicap != null &&
+          t.registration_rows[0]?.handicap !== ''
+      );
+
+      let ordered = [...list];
+      if (mode === 'random' || !hasAnyHandicap) {
+        ordered = shuffle(list);
+      } else {
+        ordered.sort((a, b) => {
+          const ha = Number(a.registration_rows[0]?.handicap);
+          const hb = Number(b.registration_rows[0]?.handicap);
+          const aN = Number.isFinite(ha) ? ha : 999;
+          const bN = Number.isFinite(hb) ? hb : 999;
+          return aN - bN;
+        });
       }
-      next[team.team_name] = availableSlots[index];
-    });
 
+      // Groups of 4
+      const groups: TeamRow[][] = [];
+      for (let i = 0; i < ordered.length; i += 4) {
+        groups.push(ordered.slice(i, i + 4));
+      }
+
+      if (startFormat === 'shotgun') {
+        // Spread across holes, same start time
+        groups.forEach((group, gi) => {
+          const hole = (gi % numHoles) + 1;
+          group.forEach((player, pi) => {
+            const slot = slotLetters[pi] || 'A';
+            next[player.team_name] = formatPairing(hole, slot);
+            nextTimes[player.team_name] = pairStartTime;
+          });
+        });
+      } else if (startFormat === 'double_tee') {
+        // Half the field on primary hole, half on secondary — parallel times
+        const half = Math.ceil(groups.length / 2);
+        groups.forEach((group, gi) => {
+          const onPrimary = gi < half;
+          const hole = onPrimary ? primaryHole : secondaryHole;
+          const timeIndex = onPrimary ? gi : gi - half;
+          const time = addMinutesToTime(pairStartTime, timeIndex * intervalMin);
+          group.forEach((player, pi) => {
+            const slot = slotLetters[pi] || 'A';
+            next[player.team_name] = formatPairing(hole, slot);
+            nextTimes[player.team_name] = time;
+          });
+        });
+      } else {
+        // tee_times: ALL groups on the same starting hole, staggered times
+        groups.forEach((group, gi) => {
+          const hole = primaryHole;
+          const time = addMinutesToTime(pairStartTime, gi * intervalMin);
+          group.forEach((player, pi) => {
+            const slot = slotLetters[pi] || 'A';
+            next[player.team_name] = formatPairing(hole, slot);
+            nextTimes[player.team_name] = time;
+          });
+        });
+      }
+    }
+
+    // Preserve any teams not in list
     for (const t of teams) {
-      if (!(t.team_name in next)) next[t.team_name] = draft[t.team_name] || '';
+      if (!(t.team_name in next)) {
+        next[t.team_name] = draft[t.team_name] || '';
+        nextTimes[t.team_name] = draftTimes[t.team_name] || '';
+      }
     }
 
     setDraft(next);
+    setDraftTimes(nextTimes);
     setMessage(
       mode === 'random'
-        ? 'Randomized for this round (not saved yet — click Save Pairings)'
-        : 'Assigned in registration order for this round (not saved yet — click Save Pairings)'
+        ? 'Randomized (not saved — click Save Pairings)'
+        : `Assigned (${isTeamEvent ? 'teams A/B' : startFormat.replace('_', ' ')}) — not saved yet`
     );
   };
 
@@ -414,6 +583,12 @@ export default function EventPairingsPage() {
         return next;
       }
 
+      // Individual: only A–D valid; team: only A–B
+      if (isTeamEvent && (parsed.slot === 'C' || parsed.slot === 'D')) {
+        setMessage('Team events use slots A and B only.');
+        return prev;
+      }
+
       const targetLabel = formatPairing(parsed.hole, parsed.slot);
 
       const occupant = Object.entries(next).find(([name, label]) => {
@@ -426,6 +601,13 @@ export default function EventPairingsPage() {
         const oldValue = next[teamName] || '';
         next[occupant[0]] = oldValue;
         next[teamName] = targetLabel;
+        setDraftTimes((times) => {
+          const tnext = { ...times };
+          const tmp = tnext[teamName] || '';
+          tnext[teamName] = tnext[occupant[0]] || '';
+          tnext[occupant[0]] = tmp;
+          return tnext;
+        });
         setMessage(
           `Swapped ${teamName} ↔ ${occupant[0]} (${targetLabel}). Click Save Pairings.`
         );
@@ -459,6 +641,11 @@ export default function EventPairingsPage() {
           setSaving(false);
           return;
         }
+        if (isTeamEvent && (parsed.slot === 'C' || parsed.slot === 'D')) {
+          alert(`Team events only use A/B (${teamName})`);
+          setSaving(false);
+          return;
+        }
         const key = `${parsed.hole}-${parsed.slot}`;
         if (used.has(key)) {
           alert(
@@ -476,6 +663,7 @@ export default function EventPairingsPage() {
       for (const team of teams) {
         const label = (draft[team.team_name] || '').trim();
         const parsed = label ? parsePairing(label) : null;
+        const teeTime = (draftTimes[team.team_name] || '').trim() || null;
 
         for (const reg of team.registration_rows) {
           const existing = { ...(reg.round_pairings || {}) };
@@ -485,6 +673,7 @@ export default function EventPairingsPage() {
               existing[roundKey] = {
                 hole: parsed.hole,
                 slot: parsed.slot,
+                tee_time: teeTime,
               };
             } else {
               delete existing[roundKey];
@@ -493,8 +682,6 @@ export default function EventPairingsPage() {
 
           const payload: any = {
             round_pairings: existing,
-            // Keep flat fields in sync with the round currently being edited
-            // so Registered Players can still read a simple pairing
             pairing_hole: parsed?.hole ?? null,
             pairing_slot: parsed?.slot ?? null,
           };
@@ -506,7 +693,6 @@ export default function EventPairingsPage() {
 
           if (error) throw error;
 
-          // Keep local copy in sync for next save
           reg.round_pairings = existing;
           reg.pairing_hole = payload.pairing_hole;
           reg.pairing_slot = payload.pairing_slot;
@@ -515,9 +701,7 @@ export default function EventPairingsPage() {
 
       setMessage(
         `✅ Pairings saved${
-          selectedRound
-            ? ` for ${selectedRound.name}`
-            : ''
+          selectedRound ? ` for ${selectedRound.name}` : ''
         }`
       );
       await load();
@@ -531,8 +715,13 @@ export default function EventPairingsPage() {
 
   const clearAll = () => {
     const next: Record<string, string> = {};
-    for (const t of teams) next[t.team_name] = '';
+    const nextTimes: Record<string, string> = {};
+    for (const t of teams) {
+      next[t.team_name] = '';
+      nextTimes[t.team_name] = '';
+    }
     setDraft(next);
+    setDraftTimes(nextTimes);
     setMessage('Cleared all pairings for this round (not saved yet)');
   };
 
@@ -558,7 +747,10 @@ export default function EventPairingsPage() {
           <div>
             <h1 className="text-4xl font-bold">{event?.name}</h1>
             <p className="text-gray-400 mt-1">
-              Pairings · {numHoles} holes · up to {numHoles * 2} teams (A/B)
+              Pairings · {numHoles} holes ·{' '}
+              {isTeamEvent
+                ? `teams · ${slotsPerHole} per hole (A/B)`
+                : `individual · ${slotsPerHole} players per tee box`}
               {selectedRound
                 ? ` · ${selectedRound.name}${
                     selectedRound.start_time
@@ -591,11 +783,11 @@ export default function EventPairingsPage() {
               </select>
             )}
 
-            <button
+                        <button
               onClick={() => applyAssignments(teams, 'order')}
               className="bg-gray-700 hover:bg-gray-600 px-5 py-3 rounded-2xl font-medium"
             >
-              Auto (order)
+              {isTeamEvent ? 'Auto (order)' : 'Auto (handicap)'}
             </button>
             <button
               onClick={() => applyAssignments(teams, 'random')}
@@ -609,7 +801,7 @@ export default function EventPairingsPage() {
             >
               Clear
             </button>
-                        <button
+            <button
               onClick={savePairings}
               disabled={saving}
               className="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 px-5 py-3 rounded-2xl font-medium"
@@ -629,6 +821,7 @@ export default function EventPairingsPage() {
                       ? formatRoundTime(selectedRound.start_time)
                       : undefined
                   }
+                  showTime={!isTeamEvent}
                   rows={pdfRows}
                 />
               }
@@ -642,6 +835,124 @@ export default function EventPairingsPage() {
           </div>
         </div>
 
+        {/* Individual start-format controls */}
+        {!isTeamEvent && (
+          <div className="bg-gray-800 rounded-3xl p-6 space-y-4">
+            <h2 className="text-lg font-semibold">Start format</h2>
+            <div className="flex flex-wrap gap-3">
+              {(
+                [
+                  ['shotgun', 'Shotgun'],
+                  ['tee_times', 'Tee times'],
+                  ['double_tee', 'Double tee'],
+                ] as [StartFormat, string][]
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setStartFormat(value)}
+                  className={`px-5 py-3 rounded-2xl font-medium ${
+                    startFormat === value
+                      ? 'bg-teal-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">
+                  Start time
+                </label>
+                <input
+                  type="time"
+                  value={pairStartTime}
+                  onChange={(e) => setPairStartTime(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3"
+                />
+              </div>
+
+              {startFormat !== 'shotgun' && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    Interval (minutes)
+                  </label>
+                  <input
+                    type="number"
+                    min={5}
+                    max={30}
+                    value={intervalMin}
+                    onChange={(e) =>
+                      setIntervalMin(Math.max(1, parseInt(e.target.value) || 10))
+                    }
+                    className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3"
+                  />
+                </div>
+              )}
+
+              {startFormat !== 'shotgun' && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    {startFormat === 'double_tee'
+                      ? 'First hole'
+                      : 'Starting hole'}
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={numHoles}
+                    value={primaryHole}
+                    onChange={(e) =>
+                      setPrimaryHole(
+                        Math.min(
+                          numHoles,
+                          Math.max(1, parseInt(e.target.value) || 1)
+                        )
+                      )
+                    }
+                    className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3"
+                  />
+                </div>
+              )}
+
+                            {startFormat === 'double_tee' && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    Second hole
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={numHoles}
+                    value={secondaryHole}
+                    onChange={(e) =>
+                      setSecondaryHole(
+                        Math.min(
+                          numHoles,
+                          Math.max(1, parseInt(e.target.value) || 10)
+                        )
+                      )
+                    }
+                    className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3"
+                  />
+                </div>
+              )}
+            </div>
+
+            <p className="text-sm text-gray-500">
+              {startFormat === 'shotgun' &&
+                'Groups of 4 are spread across holes; everyone shares the same start time.'}
+                                          {startFormat === 'tee_times' &&
+                `All groups start on hole ${primaryHole}. Groups of 4 every ${intervalMin} min. Ordered by handicap (or random if none).`}
+              {startFormat === 'double_tee' &&
+                `Half the field on hole ${primaryHole}, half on hole ${secondaryHole}, same tee times on both. Ordered by handicap (or random if none).`}
+            </p>
+          </div>
+        )}
+
         {message && (
           <div className="bg-gray-800 border border-gray-700 rounded-2xl px-5 py-4 text-sm text-gray-300">
             {message}
@@ -650,7 +961,7 @@ export default function EventPairingsPage() {
 
         {teams.length === 0 ? (
           <div className="bg-gray-800 rounded-3xl p-12 text-center text-gray-400">
-            No paid teams for this round.
+            No paid {isTeamEvent ? 'teams' : 'players'} for this round.
             {rounds.length > 1
               ? ' Switch rounds above, or wait for registrations that include this round.'
               : ' Pairings only use completed (paid) registrations.'}
@@ -661,9 +972,16 @@ export default function EventPairingsPage() {
               <table className="w-full text-left">
                 <thead>
                   <tr className="border-b border-gray-700 text-gray-400 text-sm">
-                    <th className="py-4 px-6">Team</th>
-                    <th className="py-4 px-6">Players</th>
-                    <th className="py-4 px-6 w-48">Pairing</th>
+                    <th className="py-4 px-6">
+                      {isTeamEvent ? 'Team' : 'Player'}
+                    </th>
+                    <th className="py-4 px-6">
+                      {isTeamEvent ? 'Players' : '—'}
+                    </th>
+                    <th className="py-4 px-6 w-40">Hole / slot</th>
+                    {!isTeamEvent && (
+                      <th className="py-4 px-6 w-36">Tee time</th>
+                    )}
                     <th className="py-4 px-6">Quick pick</th>
                   </tr>
                 </thead>
@@ -675,12 +993,14 @@ export default function EventPairingsPage() {
                     >
                       <td className="py-4 px-6 font-medium">
                         {team.team_name}
-                        <div className="text-xs text-gray-500 mt-1">
-                          {team.player_names.join(', ')}
-                        </div>
+                        {isTeamEvent && (
+                          <div className="text-xs text-gray-500 mt-1">
+                            {team.player_names.join(', ')}
+                          </div>
+                        )}
                       </td>
                       <td className="py-4 px-6 text-gray-400">
-                        {team.player_count}
+                        {isTeamEvent ? team.player_count : '—'}
                       </td>
                       <td className="py-4 px-6">
                         <input
@@ -699,10 +1019,27 @@ export default function EventPairingsPage() {
                               );
                             }
                           }}
-                          placeholder="e.g. 1 - A"
+                          placeholder={
+                            isTeamEvent ? 'e.g. 1 - A' : 'e.g. 1 - A'
+                          }
                           className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3"
                         />
                       </td>
+                      {!isTeamEvent && (
+                        <td className="py-4 px-6">
+                          <input
+                            type="time"
+                            value={draftTimes[team.team_name] || ''}
+                            onChange={(e) =>
+                              setDraftTimes((prev) => ({
+                                ...prev,
+                                [team.team_name]: e.target.value,
+                              }))
+                            }
+                            className="w-full bg-gray-900 border border-gray-600 rounded-xl px-4 py-3"
+                          />
+                        </td>
+                      )}
                       <td className="py-4 px-6">
                         <select
                           value={draft[team.team_name] || ''}
@@ -729,16 +1066,15 @@ export default function EventPairingsPage() {
 
         <div className="text-sm text-gray-500 space-y-1">
           <p>
-            • Choose a <strong>round</strong> first — only teams signed up for
-            that round are listed.
+            • <strong>Team events:</strong> up to 2 teams per hole (A/B).
           </p>
           <p>
-            • Pairings are stored <strong>per round</strong> (round 1’s 1-A is
-            independent of round 2).
+            • <strong>Individual:</strong> 4 players per tee box (A–D). Choose
+            Shotgun, Tee times, or Double tee, then Auto / Randomize.
           </p>
           <p>
-            • <strong>Auto / Randomize / swap</strong> only affect the selected
-            round. Always click <strong>Save Pairings</strong>.
+            • Pairings are stored <strong>per round</strong>. Always click{' '}
+            <strong>Save Pairings</strong>.
           </p>
         </div>
       </div>
