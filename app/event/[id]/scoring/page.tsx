@@ -33,45 +33,65 @@ function defaultHoles(numHoles: number) {
   }));
 }
 
+
+
+function yardsFromScorecardHole(h: any): number {
+  if (h.yardage != null || h.yards != null) {
+    return Number(h.yardage ?? h.yards) || 0;
+  }
+  const tees = h.tees;
+  if (!tees || typeof tees !== 'object') return 0;
+
+  // teeBox1, teeBox2, ... — pick first positive yards
+  for (const key of Object.keys(tees)) {
+    const y = Number(tees[key]?.yards ?? tees[key]?.yardage ?? 0);
+    if (y > 0) return y;
+  }
+  return 0;
+}
+
 function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
   if (!courseData) return defaultHoles(numHoles);
 
-  let holes: any[] = [];
+  const root = courseData.course || courseData.data || courseData;
+  let raw: any[] = [];
 
-  if (
-    courseData.scorecard &&
-    Array.isArray(courseData.scorecard) &&
-    courseData.scorecard.length > 0
-  ) {
-    holes = courseData.scorecard;
-  } else if (courseData.course) {
-    const inner = courseData.course;
-    if (inner.scorecard && Array.isArray(inner.scorecard)) {
-      holes = inner.scorecard;
-    } else if (inner.tees) {
-      const maleTees = inner.tees.male || inner.tees;
-      const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
-      if (teeSet?.holes) holes = teeSet.holes;
-    }
-  } else if (courseData.tees) {
-    const maleTees = courseData.tees.male || courseData.tees;
-    const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
-    if (teeSet?.holes) holes = teeSet.holes;
-    else if (Array.isArray(teeSet)) holes = teeSet;
-  } else if (courseData.holes && Array.isArray(courseData.holes)) {
-    holes = courseData.holes;
+  if (Array.isArray(root.scorecard) && root.scorecard.length > 0) {
+    raw = root.scorecard;
+  } else if (Array.isArray(root.holes) && root.holes.length > 0) {
+    raw = root.holes;
+  } else if (root.tees) {
+    const tees = root.tees;
+    const male = tees.male || tees.Men || tees.men;
+    const list = Array.isArray(male)
+      ? male
+      : Array.isArray(tees)
+        ? tees
+        : [];
+    const tee = list[0];
+    if (tee?.holes) raw = tee.holes;
+    else if (tee?.scorecard) raw = tee.scorecard;
   }
 
-  if (!holes.length) return defaultHoles(numHoles);
+  if (!raw.length) return defaultHoles(numHoles);
 
-  return holes.slice(0, numHoles).map((h: any, index: number) => ({
-    hole: Number(h.Hole || h.hole || index + 1),
-    par: Number(h.Par || h.par) || 4,
-    yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
-    handicap: Number(h.Handicap || h.handicap || index + 1),
-  }));
+  const holes = raw.map((h: any, i: number) => {
+    const par = Number(h.par ?? h.Par ?? 0);
+    const handicap = Number(h.handicap ?? h.Handicap ?? 0);
+    const yardage = yardsFromScorecardHole(h);
+
+    return {
+      hole: Number(h.hole ?? h.Hole ?? i + 1),
+      // API often sends 0 — fall back so scoring UI still works
+      par: par > 0 ? par : 4,
+      yardage: yardage > 0 ? yardage : 400,
+      handicap: handicap > 0 ? handicap : i + 1,
+    };
+  });
+
+  const sliced = holes.slice(0, numHoles);
+  return sliced.length ? sliced : defaultHoles(numHoles);
 }
-
 function getPairingLabel(reg: any, roundId: number | 'all') {
   if (roundId !== 'all') {
     const map = reg.round_pairings || {};

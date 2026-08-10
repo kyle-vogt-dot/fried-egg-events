@@ -54,7 +54,7 @@ export default function CreateTournament() {
     }, 500);
   };
 
-  const searchCourses = async (query: string) => {
+    const searchCourses = async (query: string) => {
     if (query.length < 3) {
       setCourseResults([]);
       return;
@@ -62,13 +62,7 @@ export default function CreateTournament() {
 
     try {
       const res = await fetch(
-        `https://golf-course-api.p.rapidapi.com/search?name=${encodeURIComponent(query)}`,
-        {
-          headers: {
-            'X-RapidAPI-Key': 'f619f2f719msh75809eca0940d3dp19df7fjsn8ab27dcb27f2',
-            'X-RapidAPI-Host': 'golf-course-api.p.rapidapi.com',
-          },
-        }
+        `/api/golf-search?q=${encodeURIComponent(query)}`
       );
 
       if (!res.ok) {
@@ -78,24 +72,45 @@ export default function CreateTournament() {
       }
 
       const data = await res.json();
-      setCourseResults(data.courses || data || []);
+      setCourseResults(data.results || data.courses || data || []);
     } catch (err) {
       console.error('Course search failed:', err);
       setCourseResults([]);
     }
   };
 
-  const selectCourse = (course: any) => {
-    setSelectedCourse(course);
-    setCourseSearch(course.name || course.course_name || '');
+  const selectCourse = async (basicCourse: any) => {
+    const courseName =
+      basicCourse.name ||
+      basicCourse.course_name ||
+      basicCourse.club_name ||
+      '';
+
+    setCourseSearch(courseName);
     setCourseResults([]);
 
-    const loc = getCourseLocation(course);
-    if (loc) {
-      setLocation(loc);
+    const loc = getCourseLocation(basicCourse);
+    if (loc) setLocation(loc);
+
+    try {
+      const res = await fetch(
+        `/api/golf-course-details?id=${encodeURIComponent(
+          basicCourse.id || ''
+        )}&name=${encodeURIComponent(courseName)}`
+      );
+
+      if (!res.ok) throw new Error('Details API failed');
+
+      const fullData = await res.json();
+      setSelectedCourse(fullData);
+
+      const fullLoc = getCourseLocation(fullData);
+      if (fullLoc) setLocation(fullLoc);
+    } catch (err) {
+      console.error('Details fetch failed, using search result:', err);
+      setSelectedCourse(basicCourse);
     }
   };
-
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 

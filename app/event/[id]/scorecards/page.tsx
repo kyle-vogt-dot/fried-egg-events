@@ -37,42 +37,57 @@ function defaultHoles(numHoles: number) {
   }));
 }
 
+function yardsFromScorecardHole(h: any): number {
+  const top = Number(h.yardage ?? h.Yardage ?? h.yards ?? h.distance ?? 0);
+  if (top > 0) return top;
+
+  const tees = h.tees;
+  if (!tees || typeof tees !== 'object') return 0;
+
+  for (const key of Object.keys(tees)) {
+    const y = Number(tees[key]?.yards ?? tees[key]?.yardage ?? 0);
+    if (y > 0) return y;
+  }
+  return 0;
+}
+
 function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
   if (!courseData) return defaultHoles(numHoles);
 
-  let holes: any[] = [];
+  const root = courseData.course || courseData.data || courseData;
+  let raw: any[] = [];
 
-  if (
-    courseData.scorecard &&
-    Array.isArray(courseData.scorecard) &&
-    courseData.scorecard.length > 0
-  ) {
-    holes = courseData.scorecard;
-  } else if (courseData.course) {
-    const inner = courseData.course;
-    if (inner.scorecard && Array.isArray(inner.scorecard)) {
-      holes = inner.scorecard;
-    } else if (inner.tees) {
-      const maleTees = inner.tees.male || inner.tees;
-      const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
-      if (teeSet?.holes) holes = teeSet.holes;
-    }
-  } else if (courseData.tees) {
-    const maleTees = courseData.tees.male || courseData.tees;
-    const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
-    if (teeSet?.holes) holes = teeSet.holes;
-  } else if (courseData.holes && Array.isArray(courseData.holes)) {
-    holes = courseData.holes;
+  if (Array.isArray(root.scorecard) && root.scorecard.length > 0) {
+    raw = root.scorecard;
+  } else if (Array.isArray(root.holes) && typeof root.holes[0] === 'object') {
+    raw = root.holes;
+  } else if (root.tees) {
+    const tees = root.tees;
+    const male = tees.male || tees.Men || tees.men;
+    const list = Array.isArray(male)
+      ? male
+      : Array.isArray(tees)
+        ? tees
+        : [];
+    const teeSet = list[0];
+    if (teeSet?.holes) raw = teeSet.holes;
+    else if (teeSet?.scorecard) raw = teeSet.scorecard;
   }
 
-  if (!holes.length) return defaultHoles(numHoles);
+  if (!raw.length) return defaultHoles(numHoles);
 
-  return holes.slice(0, numHoles).map((h: any, i: number) => ({
-    hole: Number(h.Hole || h.hole || i + 1),
-    par: Number(h.Par || h.par) || 4,
-    yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
-    handicap: Number(h.Handicap || h.handicap || i + 1),
-  }));
+  return raw.slice(0, numHoles).map((h: any, i: number) => {
+    const par = Number(h.Par ?? h.par ?? 0);
+    const handicap = Number(h.Handicap ?? h.handicap ?? 0);
+    const yardage = yardsFromScorecardHole(h);
+
+    return {
+      hole: Number(h.Hole ?? h.hole ?? i + 1),
+      par: par > 0 ? par : 4,
+      yardage: yardage > 0 ? yardage : 400,
+      handicap: handicap > 0 ? handicap : i + 1,
+    };
+  });
 }
 
 function getPairingLabel(reg: any, roundId: number | 'all') {
@@ -441,6 +456,14 @@ export default function EventScorecardsPage() {
   const [generatingAll, setGeneratingAll] = useState(false);
   const [qrMap, setQrMap] = useState<Record<string, string>>({});
 
+  // Manual course scorecard editor
+  const [editHoles, setEditHoles] = useState<
+    { hole: number; par: number; yardage: number; handicap: number }[]
+  >([]);
+  const [showScorecardEditor, setShowScorecardEditor] = useState(false);
+  const [savingScorecard, setSavingScorecard] = useState(false);
+  const [scorecardMsg, setScorecardMsg] = useState('');
+
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
     return n === 9 ? 9 : 18;
@@ -450,6 +473,11 @@ export default function EventScorecardsPage() {
     () => getHolesFromCourseData(event?.course_data, numHoles),
     [event?.course_data, numHoles]
   );
+
+  // Keep editor in sync when course data / hole count changes
+  useEffect(() => {
+    setEditHoles(holes.map((h) => ({ ...h })));
+  }, [holes]);
 
   const selectedRound = useMemo(() => {
     if (selectedRoundId === 'all') return null;
@@ -493,13 +521,64 @@ export default function EventScorecardsPage() {
     fetchData();
   }, [eventId]);
 
+  const updateHole = (
+    index: number,
+    field: 'par' | 'yardage' | 'handicap',
+    value: string
+  ) => {
+    const n = parseInt(value, 10);
+    setEditHoles((prev) => {
+      const next = [...prev];
+      next[index] = {
+        ...next[index],
+        [field]: Number.isFinite(n) ? n : 0,
+      };
+      return next;
+    });
+  };
+
+  const saveScorecard = async () => {
+    setSavingScorecard(true);
+    setScorecardMsg('');
+    try {
+      const scorecard = editHoles.map((h) => ({
+        Hole: h.hole,
+        Par: h.par > 0 ? h.par : 4,
+        yardage: h.yardage > 0 ? h.yardage : 0,
+        Handicap: h.handicap > 0 ? h.handicap : h.hole,
+      }));
+
+      const nextCourseData = {
+        ...(event?.course_data || {}),
+        name: event?.course_data?.name || event?.course || '',
+        scorecard,
+        scorecard_source: 'manual',
+      };
+
+      const { error } = await supabase
+        .from('tournaments')
+        .update({ course_data: nextCourseData })
+        .eq('id', parseInt(eventId, 10));
+
+      if (error) throw error;
+
+      setEvent((prev: any) =>
+        prev ? { ...prev, course_data: nextCourseData } : prev
+      );
+      setScorecardMsg('Scorecard saved — scoring & PDFs will use these values.');
+    } catch (e: any) {
+      console.error(e);
+      setScorecardMsg(e.message || 'Save failed');
+    } finally {
+      setSavingScorecard(false);
+    }
+  };
+
   // Scorecards from registered players + pairings (NOT check-in)
   const teams = useMemo(() => {
     const filtered = registrations.filter((r) => {
-      // Include all registered players for this event/round
       if (selectedRoundId === 'all') return true;
       const ids: number[] = r.selected_round_ids || [];
-      // If no rounds selected on the reg, include when event has 0–1 rounds
       if (!ids.length) return rounds.length <= 1;
       return ids.includes(selectedRoundId as number);
     });
@@ -527,7 +606,6 @@ export default function EventScorecardsPage() {
     return (Object.values(grouped) as any[]).sort((a, b) => {
       const aP = getPairingLabel(a.regs[0], selectedRoundId);
       const bP = getPairingLabel(b.regs[0], selectedRoundId);
-      // Paired groups first, then alphabetical by pairing / name
       if (aP === '—' && bP !== '—') return 1;
       if (aP !== '—' && bP === '—') return -1;
       const cmp = aP.localeCompare(bP);
@@ -624,6 +702,8 @@ export default function EventScorecardsPage() {
     (t) => getPairingLabel(t.regs[0], selectedRoundId) !== '—'
   ).length;
 
+  const totalPar = editHoles.reduce((s, h) => s + (h.par > 0 ? h.par : 4), 0);
+
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-6xl mx-auto">
@@ -694,6 +774,117 @@ export default function EventScorecardsPage() {
           </div>
         </div>
 
+        {/* ===== Course scorecard editor ===== */}
+        <div className="bg-gray-800 border border-gray-700 rounded-3xl p-6 mb-10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
+            <div>
+              <h2 className="text-xl font-semibold">Course scorecard</h2>
+              <p className="text-sm text-gray-400 mt-1">
+                Set par, yardage, and handicap for each hole. Saved on this
+                event so scoring, leaderboard, and PDFs all match.
+                {event?.course_data?.scorecard_source === 'manual' && (
+                  <span className="text-emerald-400"> · Manual values saved</span>
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowScorecardEditor((v) => !v)}
+              className="px-5 py-3 bg-gray-700 hover:bg-gray-600 rounded-2xl text-sm font-medium"
+            >
+              {showScorecardEditor ? 'Hide editor' : 'Edit scorecard'}
+            </button>
+          </div>
+
+          {showScorecardEditor && (
+            <>
+              <div className="overflow-x-auto mt-4">
+                <table className="w-full text-sm min-w-[480px]">
+                  <thead>
+                    <tr className="text-gray-400 text-left border-b border-gray-700">
+                      <th className="py-3 pr-3">Hole</th>
+                      <th className="py-3 pr-3">Par</th>
+                      <th className="py-3 pr-3">Yards</th>
+                      <th className="py-3">Handicap</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {editHoles.map((h, i) => (
+                      <tr
+                        key={h.hole}
+                        className="border-b border-gray-800 last:border-none"
+                      >
+                        <td className="py-2.5 pr-3 font-medium">{h.hole}</td>
+                        <td className="py-2.5 pr-3">
+                          <input
+                            type="number"
+                            min={3}
+                            max={6}
+                            value={h.par || ''}
+                            onChange={(e) =>
+                              updateHole(i, 'par', e.target.value)
+                            }
+                            className="w-16 bg-gray-900 border border-gray-600 rounded-xl px-3 py-2"
+                          />
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <input
+                            type="number"
+                            min={0}
+                            value={h.yardage || ''}
+                            onChange={(e) =>
+                              updateHole(i, 'yardage', e.target.value)
+                            }
+                            className="w-24 bg-gray-900 border border-gray-600 rounded-xl px-3 py-2"
+                          />
+                        </td>
+                        <td className="py-2.5">
+                          <input
+                            type="number"
+                            min={1}
+                            max={18}
+                            value={h.handicap || ''}
+                            onChange={(e) =>
+                              updateHole(i, 'handicap', e.target.value)
+                            }
+                            className="w-16 bg-gray-900 border border-gray-600 rounded-xl px-3 py-2"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-4 mt-5">
+                <button
+                  type="button"
+                  onClick={saveScorecard}
+                  disabled={savingScorecard}
+                  className="bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 px-6 py-3 rounded-2xl font-medium"
+                >
+                  {savingScorecard ? 'Saving…' : 'Save scorecard'}
+                </button>
+                <span className="text-sm text-gray-400">
+                  Total par: <span className="text-white font-medium">{totalPar}</span>
+                </span>
+                {scorecardMsg && (
+                  <span
+                    className={`text-sm ${
+                      scorecardMsg.includes('failed') ||
+                      scorecardMsg.includes('Save failed')
+                        ? 'text-red-400'
+                        : 'text-emerald-400'
+                    }`}
+                  >
+                    {scorecardMsg}
+                  </span>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+
         {teams.length === 0 ? (
           <div className="bg-gray-800 rounded-3xl p-16 text-center text-gray-400">
             No registered players
@@ -718,7 +909,9 @@ export default function EventScorecardsPage() {
                       <p className="text-sm text-gray-400 mt-1">
                         {team.players?.length || 0} player
                         {(team.players?.length || 0) !== 1 ? 's' : ''}
-                        {pairing !== '—' ? ` · Start ${pairing}` : ' · No pairing yet'}
+                        {pairing !== '—'
+                          ? ` · Start ${pairing}`
+                          : ' · No pairing yet'}
                       </p>
                       <p className="text-xs text-gray-500 mt-1">
                         {(team.players || []).join(', ')}
