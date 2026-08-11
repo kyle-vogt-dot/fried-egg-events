@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
@@ -25,42 +25,54 @@ function defaultHoles(numHoles: number) {
   }));
 }
 
+function yardsFromScorecardHole(h: any): number {
+  const top = Number(h.yardage ?? h.Yardage ?? h.yards ?? h.distance ?? 0);
+  if (top > 0) return top;
+  const tees = h.tees;
+  if (!tees || typeof tees !== 'object') return 0;
+  for (const key of Object.keys(tees)) {
+    const y = Number(tees[key]?.yards ?? tees[key]?.yardage ?? 0);
+    if (y > 0) return y;
+  }
+  return 0;
+}
+
 function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
   if (!courseData) return defaultHoles(numHoles);
 
-  let holes: any[] = [];
+  const root = courseData.course || courseData.data || courseData;
+  let raw: any[] = [];
 
-  if (
-    courseData.scorecard &&
-    Array.isArray(courseData.scorecard) &&
-    courseData.scorecard.length > 0
-  ) {
-    holes = courseData.scorecard;
-  } else if (courseData.course) {
-    const inner = courseData.course;
-    if (inner.scorecard && Array.isArray(inner.scorecard)) {
-      holes = inner.scorecard;
-    } else if (inner.tees) {
-      const maleTees = inner.tees.male || inner.tees;
-      const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
-      if (teeSet?.holes) holes = teeSet.holes;
-    }
-  } else if (courseData.tees) {
-    const maleTees = courseData.tees.male || courseData.tees;
-    const teeSet = Array.isArray(maleTees) ? maleTees[0] : maleTees;
-    if (teeSet?.holes) holes = teeSet.holes;
-  } else if (courseData.holes) {
-    holes = courseData.holes;
+  if (Array.isArray(root.scorecard) && root.scorecard.length > 0) {
+    raw = root.scorecard;
+  } else if (Array.isArray(root.holes) && typeof root.holes[0] === 'object') {
+    raw = root.holes;
+  } else if (root.tees) {
+    const tees = root.tees;
+    const male = tees.male || tees.Men || tees.men;
+    const list = Array.isArray(male)
+      ? male
+      : Array.isArray(tees)
+        ? tees
+        : [];
+    const teeSet = list[0];
+    if (teeSet?.holes) raw = teeSet.holes;
+    else if (teeSet?.scorecard) raw = teeSet.scorecard;
   }
 
-  if (!holes.length) return defaultHoles(numHoles);
+  if (!raw.length) return defaultHoles(numHoles);
 
-  return holes.slice(0, numHoles).map((h: any, i: number) => ({
-    hole: Number(h.Hole || h.hole) || i + 1,
-    par: Number(h.par || h.Par) || 4,
-    yardage: Number(h.yardage || h.Yardage || h.distance) || 400,
-    handicap: Number(h.handicap || h.Handicap) || i + 1,
-  }));
+  return raw.slice(0, numHoles).map((h: any, i: number) => {
+    const par = Number(h.Par ?? h.par ?? 0);
+    const handicap = Number(h.Handicap ?? h.handicap ?? 0);
+    const yardage = yardsFromScorecardHole(h);
+    return {
+      hole: Number(h.Hole ?? h.hole ?? i + 1),
+      par: par > 0 ? par : 4,
+      yardage: yardage > 0 ? yardage : 400,
+      handicap: handicap > 0 ? handicap : i + 1,
+    };
+  });
 }
 
 function getStartingHole(
@@ -94,6 +106,27 @@ function formatToPar(toPar: number | null | undefined) {
   if (toPar > 0) return `+${toPar}`;
   return String(toPar);
 }
+
+function lockKey(roundId: number | null) {
+  return roundId != null ? String(roundId) : 'all';
+}
+
+function isScoresLocked(reg: any, roundId: number | null) {
+  const map = reg?.scores_locked_by_round || {};
+  return map[lockKey(roundId)] === true;
+}
+
+/** First hole 1..numHoles with no positive score, or null if complete */
+function findFirstMissingHole(
+  scores: Record<number, number>,
+  numHoles: number
+): number | null {
+  for (let h = 1; h <= numHoles; h++) {
+    if (!(scores[h] != null && Number(scores[h]) > 0)) return h;
+  }
+  return null;
+}
+
 function ScoreMark({
   score,
   par,
@@ -102,55 +135,64 @@ function ScoreMark({
   par: number;
 }) {
   if (score == null || score <= 0) {
-    return <span className="text-gray-500">—</span>;
+    return (
+      <span className="inline-flex items-center justify-center w-8 h-8 text-gray-500 text-sm">
+        —
+      </span>
+    );
   }
 
   const diff = score - par;
+  const base =
+    'inline-flex items-center justify-center w-8 h-8 text-sm font-semibold';
 
-  // Eagle or better: double circle
+  // Eagle or better — double circle
   if (diff <= -2) {
     return (
-      <span className="inline-flex items-center justify-center w-9 h-9 rounded-full border-2 border-emerald-400">
-        <span className="inline-flex items-center justify-center w-7 h-7 rounded-full border-2 border-emerald-300 text-emerald-300 font-semibold text-sm">
+      <span className={`${base} rounded-full border-2 border-emerald-400`}>
+        <span className="inline-flex items-center justify-center w-5 h-5 rounded-full border border-emerald-300 text-emerald-300 text-xs">
           {score}
         </span>
       </span>
     );
   }
 
-  // Birdie: single circle
+  // Birdie — circle
   if (diff === -1) {
     return (
-      <span className="inline-flex items-center justify-center w-9 h-9 rounded-full border-2 border-emerald-400 text-emerald-300 font-semibold text-sm">
+      <span
+        className={`${base} rounded-full border-2 border-emerald-400 text-emerald-300`}
+      >
         {score}
       </span>
     );
   }
 
-  // Par: plain
+  // Par — same footprint, no border
   if (diff === 0) {
-    return <span className="font-semibold text-white text-sm">{score}</span>;
+    return <span className={`${base} text-white`}>{score}</span>;
   }
 
-  // Bogey: single square
+  // Bogey — square
   if (diff === 1) {
     return (
-      <span className="inline-flex items-center justify-center w-9 h-9 border-2 border-orange-400 text-orange-300 font-semibold text-sm">
+      <span
+        className={`${base} border-2 border-orange-400 text-orange-300 rounded-sm`}
+      >
         {score}
       </span>
     );
   }
 
-  // Double bogey+: double square
+  // Double+ — double square
   return (
-    <span className="inline-flex items-center justify-center w-9 h-9 border-2 border-red-400">
-      <span className="inline-flex items-center justify-center w-7 h-7 border-2 border-red-300 text-red-300 font-semibold text-sm">
+    <span className={`${base} border-2 border-red-400 rounded-sm`}>
+      <span className="inline-flex items-center justify-center w-5 h-5 border border-red-300 text-red-300 text-xs">
         {score}
       </span>
     </span>
   );
 }
-
 type LbRow = {
   name: string;
   total: number;
@@ -190,6 +232,14 @@ export default function LiveEventPage() {
   const [leaderboard, setLeaderboard] = useState<LbRow[]>([]);
   const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [submittingFinal, setSubmittingFinal] = useState(false);
+
+  // After a local save, ignore remote reloads briefly so realtime doesn't wipe other holes
+  const ignoreRemoteUntilRef = useRef(0);
+  const scoresRef = useRef(scores);
+  scoresRef.current = scores;
 
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
@@ -232,6 +282,11 @@ export default function LiveEventPage() {
     teamParam ||
     'Your Team';
 
+  const scoresLocked = useMemo(
+    () => isScoresLocked(primaryReg, selectedRoundId),
+    [primaryReg, selectedRoundId]
+  );
+
   const selectedRound = useMemo(
     () => rounds.find((r) => r.id === selectedRoundId) || null,
     [rounds, selectedRoundId]
@@ -244,7 +299,6 @@ export default function LiveEventPage() {
     handicap: currentHole,
   };
 
-  // Your score vs par (holes with scores only)
   const myToPar = useMemo(() => {
     let strokes = 0;
     let parSum = 0;
@@ -261,26 +315,28 @@ export default function LiveEventPage() {
     return played > 0 ? strokes - parSum : null;
   }, [scores, holes, numHoles]);
 
+  const allHolesScored = useMemo(
+    () => findFirstMissingHole(scores, numHoles) == null && numHoles > 0,
+    [scores, numHoles]
+  );
+
   const scorecardRow = useMemo(
     () => leaderboard.find((r) => r.name === scorecardTeam) || null,
     [leaderboard, scorecardTeam]
   );
 
   const blurHole =
-  event?.leaderboard_blur_hole != null &&
-  Number(event.leaderboard_blur_hole) > 0
-    ? Number(event.leaderboard_blur_hole)
-    : null;
+    event?.leaderboard_blur_hole != null &&
+    Number(event.leaderboard_blur_hole) > 0
+      ? Number(event.leaderboard_blur_hole)
+      : null;
 
-const blurActive = useMemo(() => {
-  if (!blurHole) return false;
-  return leaderboard.some((row) => Number(row.holesPlayed) >= blurHole);
-}, [blurHole, leaderboard]);
+  const blurActive = useMemo(() => {
+    if (!blurHole) return false;
+    return leaderboard.some((row) => Number(row.holesPlayed) >= blurHole);
+  }, [blurHole, leaderboard]);
 
-// Players only — never treat creator as “always clear” if you want to test as yourself:
-const showBlurred = blurActive; // temporary test
-// production:
-// const showBlurred = blurActive && !isAdmin;
+  const showBlurred = blurActive && !isAdmin;
 
   useEffect(() => {
     const fetchData = async () => {
@@ -354,12 +410,18 @@ const showBlurred = blurActive; // temporary test
     }
 
     const loadScores = async () => {
+      // Don't clobber local card right after a hole save
+      if (Date.now() < ignoreRemoteUntilRef.current) return;
+
       const ids =
         teamRegs.length > 0
           ? teamRegs.map((r) => String(r.id))
           : [registrationId];
 
-      let query = supabase.from('scores').select('*').in('registration_id', ids);
+      let query = supabase
+        .from('scores')
+        .select('*')
+        .in('registration_id', ids);
 
       if (selectedRoundId != null) {
         query = query.eq('round_id', selectedRoundId);
@@ -369,23 +431,35 @@ const showBlurred = blurActive; // temporary test
 
       if (error) {
         console.error('Load scores error:', error);
-        const { data: fallback } = await supabase
-          .from('scores')
-          .select('*')
-          .in('registration_id', ids);
-        const map: Record<number, number> = {};
-        (fallback || []).forEach((s: any) => {
-          if (Number(s.score) > 0) map[s.hole] = s.score;
-        });
-        setScores(map);
         return;
       }
 
-      const map: Record<number, number> = {};
+      // Build map from DB. Prefer primary reg when multiple team rows exist.
+      const byReg: Record<string, Record<number, number>> = {};
       (data || []).forEach((s: any) => {
-        if (Number(s.score) > 0) map[s.hole] = s.score;
+        const rid = String(s.registration_id);
+        if (!byReg[rid]) byReg[rid] = {};
+        if (Number(s.score) > 0) byReg[rid][s.hole] = Number(s.score);
       });
-      setScores(map);
+
+      const preferred =
+        (registrationId && byReg[registrationId]) ||
+        Object.values(byReg).sort(
+          (a, b) => Object.keys(b).length - Object.keys(a).length
+        )[0] ||
+        {};
+
+      // Merge: never drop a hole we already have locally if DB omitted it briefly
+      setScores((prev) => {
+        const next = { ...preferred };
+        Object.entries(prev).forEach(([hStr, sc]) => {
+          const h = Number(hStr);
+          if (Number(sc) > 0 && !(next[h] > 0)) {
+            next[h] = Number(sc);
+          }
+        });
+        return next;
+      });
     };
 
     loadScores();
@@ -410,7 +484,6 @@ const showBlurred = blurActive; // temporary test
     };
   }, [registrationId, selectedRoundId, teamRegs]);
 
-  // Live leaderboard with per-hole scores + to-par
   useEffect(() => {
     if (activeTab !== 'leaderboard' || registrations.length === 0) return;
 
@@ -418,7 +491,10 @@ const showBlurred = blurActive; // temporary test
     const courseHoles = holes;
 
     const loadLb = async () => {
-      let query = supabase.from('scores').select('*').in('registration_id', regIds);
+      let query = supabase
+        .from('scores')
+        .select('*')
+        .in('registration_id', regIds);
       if (selectedRoundId != null) {
         query = query.eq('round_id', selectedRoundId);
       }
@@ -429,7 +505,6 @@ const showBlurred = blurActive; // temporary test
         return;
       }
 
-      // regId -> hole -> score
       const byReg: Record<string, Record<number, number>> = {};
       (data || []).forEach((s: any) => {
         const id = String(s.registration_id);
@@ -438,31 +513,22 @@ const showBlurred = blurActive; // temporary test
       });
 
       const isTeam = (event?.max_teammates || 1) > 1;
-      const groups: Record<
-        string,
-        { scores: Record<number, number>; taken: boolean }
-      > = {};
+      const groups: Record<string, { scores: Record<number, number> }> = {};
 
       registrations.forEach((r) => {
         const key =
-          isTeam && r.team_name
-            ? r.team_name
-            : r.player_name || 'Player';
+          isTeam && r.team_name ? r.team_name : r.player_name || 'Player';
         const id = String(r.id);
         const holeMap = byReg[id] || {};
 
-        if (!groups[key]) {
-          groups[key] = { scores: {}, taken: false };
-        }
+        if (!groups[key]) groups[key] = { scores: {} };
 
-        // Team: take first member with scores (or min per hole)
         Object.entries(holeMap).forEach(([hStr, sc]) => {
           const h = Number(hStr);
           const prev = groups[key].scores[h];
           groups[key].scores[h] =
             prev !== undefined ? Math.min(prev, sc) : sc;
         });
-        if (Object.keys(holeMap).length > 0) groups[key].taken = true;
       });
 
       const rows: LbRow[] = Object.entries(groups)
@@ -529,19 +595,140 @@ const showBlurred = blurActive; // temporary test
   );
 
   const goPrevHole = () => {
+    if (scoresLocked) return;
     setCurrentHole((h) => (h <= 1 ? numHoles : h - 1));
     setSaveMsg(null);
   };
 
   const goNextHole = () => {
+    if (scoresLocked) return;
     setCurrentHole((h) => (h >= numHoles ? 1 : h + 1));
     setSaveMsg(null);
   };
 
+  /** Save only this hole — never deletes other holes */
+  const persistHoleScore = async (hole: number, num: number) => {
+    const targets = Array.from(
+      new Set(
+        teamRegs
+          .map((r) => (r?.id != null ? String(r.id) : ''))
+          .filter((id) => id.length > 0)
+      )
+    );
+    if (targets.length === 0 && registrationId) targets.push(registrationId);
+    if (targets.length === 0) {
+      throw new Error(
+        'No registration found for this team. Open from scorecard QR or ?team=…'
+      );
+    }
+
+    for (const regId of targets) {
+      // Only this hole — scoped by round when possible
+      if (selectedRoundId != null) {
+        await supabase
+          .from('scores')
+          .delete()
+          .eq('registration_id', regId)
+          .eq('hole', hole)
+          .eq('round_id', selectedRoundId);
+
+        // Also clear legacy rows for this hole with null round_id (old saves)
+        await supabase
+          .from('scores')
+          .delete()
+          .eq('registration_id', regId)
+          .eq('hole', hole)
+          .is('round_id', null);
+      } else {
+        await supabase
+          .from('scores')
+          .delete()
+          .eq('registration_id', regId)
+          .eq('hole', hole);
+      }
+
+      const { error: insErr } = await supabase.from('scores').insert({
+        registration_id: regId,
+        hole,
+        score: num,
+        ...(selectedRoundId != null ? { round_id: selectedRoundId } : {}),
+      });
+      if (insErr) throw insErr;
+    }
+  };
+
+  const tryOpenSubmitOrMissed = (map: Record<number, number>) => {
+    const missing = findFirstMissingHole(map, numHoles);
+    if (missing == null) {
+      setSaveMsg(null);
+      setShowSubmitModal(true);
+      return;
+    }
+    setShowSubmitModal(false);
+    setCurrentHole(missing);
+    setSaveMsg(`Missed score on hole ${missing}`);
+  };
+
   const saveHoleAndAdvance = async () => {
+    if (scoresLocked) {
+      alert(
+        'Scores are submitted. Ask an event admin to edit if something is wrong.'
+      );
+      return;
+    }
+
     const num = scoreInput === '' ? 0 : parseInt(scoreInput, 10);
     if (!Number.isFinite(num) || num < 1) {
       alert('Enter a score for this hole');
+      return;
+    }
+
+    setSaving(true);
+    setSaveMsg(null);
+
+    try {
+      // Optimistic: keep every other hole; only change this one
+      const nextScores = { ...scoresRef.current, [currentHole]: num };
+      setScores(nextScores);
+      ignoreRemoteUntilRef.current = Date.now() + 2500;
+
+      await persistHoleScore(currentHole, num);
+
+      setSaveMsg('Saved');
+
+      const missing = findFirstMissingHole(nextScores, numHoles);
+      if (missing == null) {
+        setShowSubmitModal(true);
+      } else {
+        // Prefer next hole in sequence; if that one is filled, still advance
+        // but if user skipped ahead, surface first gap when they finish a "full" pass
+        const nextHole = currentHole >= numHoles ? 1 : currentHole + 1;
+        setCurrentHole(nextHole);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to save: ' + (err.message || 'Unknown error'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openReviewSubmit = () => {
+    if (scoresLocked) return;
+    tryOpenSubmitOrMissed(scoresRef.current);
+  };
+
+  const submitFinalScores = async () => {
+    if (scoresLocked) {
+      setShowSubmitModal(false);
+      return;
+    }
+
+    const missing = findFirstMissingHole(scoresRef.current, numHoles);
+    if (missing != null) {
+      setShowSubmitModal(false);
+      setCurrentHole(missing);
+      setSaveMsg(`Missed score on hole ${missing}`);
       return;
     }
 
@@ -552,56 +739,62 @@ const showBlurred = blurActive; // temporary test
           .filter((id) => id.length > 0)
       )
     );
-
-    if (targets.length === 0 && registrationId) {
-      targets.push(registrationId);
-    }
-
+    if (targets.length === 0 && registrationId) targets.push(registrationId);
     if (targets.length === 0) {
-      alert(
-        'No registration found for this team. Open the score link from the scorecard QR, or use ?team=<registration_id>.'
-      );
+      alert('No registration found');
       return;
     }
 
-    setSaving(true);
-    setSaveMsg(null);
+    setSubmittingFinal(true);
+    const key = lockKey(selectedRoundId);
 
     try {
       for (const regId of targets) {
-        // Delete all rows for this hole/reg (avoids duplicates if round_id was null before)
-        await supabase
-          .from('scores')
-          .delete()
-          .eq('registration_id', regId)
-          .eq('hole', currentHole);
+        const reg = registrations.find((r) => String(r.id) === regId);
+        const existing = (reg?.scores_locked_by_round || {}) as Record<
+          string,
+          boolean
+        >;
+        const updatedMap = { ...existing, [key]: true };
 
-        const { error: insErr } = await supabase.from('scores').insert({
-          registration_id: regId,
-          hole: currentHole,
-          score: num,
-          ...(selectedRoundId != null ? { round_id: selectedRoundId } : {}),
-        });
+        const { error } = await supabase
+          .from('event_registrations')
+          .update({ scores_locked_by_round: updatedMap })
+          .eq('id', regId);
 
-        if (insErr) throw insErr;
+        if (error) throw error;
       }
 
-      setScores((prev) => ({ ...prev, [currentHole]: num }));
-      setSaveMsg('Saved');
-      setCurrentHole((h) => (h >= numHoles ? 1 : h + 1));
+      setRegistrations((prev) =>
+        prev.map((r) => {
+          if (!targets.includes(String(r.id))) return r;
+          return {
+            ...r,
+            scores_locked_by_round: {
+              ...(r.scores_locked_by_round || {}),
+              [key]: true,
+            },
+          };
+        })
+      );
+
+      setShowSubmitModal(false);
+      setSaveMsg('Submitted');
+      alert(
+        'Scores submitted. An admin can still edit if something looks wrong.'
+      );
     } catch (err: any) {
       console.error(err);
-      alert('Failed to save: ' + (err.message || 'Unknown error'));
+      alert('Submit failed: ' + (err.message || 'Unknown error'));
     } finally {
-      setSaving(false);
+      setSubmittingFinal(false);
     }
   };
 
-  // Circle / square styling relative to par for hole dots
   const holeDotClass = (h: number) => {
-    if (h === currentHole) return 'bg-blue-600 text-white';
+    if (h === currentHole) return 'bg-blue-600 text-white rounded-full';
     const s = scores[h];
-    if (s == null || s <= 0) return 'bg-gray-800 text-gray-500';
+    if (s == null || s <= 0) return 'bg-gray-800 text-gray-500 rounded-full';
     const par = Number(holes.find((x) => x.hole === h)?.par) || 4;
     const diff = s - par;
     if (diff <= -2)
@@ -651,6 +844,11 @@ const showBlurred = blurActive; // temporary test
               {selectedRound ? ` · ${selectedRound.name}` : ''}
               {teeTime ? ` · ${teeTime}` : ''}
             </p>
+            {scoresLocked && (
+              <p className="text-emerald-400 text-xs mt-1 font-medium">
+                Submitted · admin can still edit if needed
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {rounds.length > 0 && (
@@ -738,7 +936,8 @@ const showBlurred = blurActive; // temporary test
                 <button
                   type="button"
                   onClick={goPrevHole}
-                  className="w-14 h-14 shrink-0 rounded-2xl bg-gray-800 hover:bg-gray-700 text-2xl font-bold"
+                  disabled={scoresLocked}
+                  className="w-14 h-14 shrink-0 rounded-2xl bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-2xl font-bold"
                   aria-label="Previous hole"
                 >
                   ←
@@ -750,35 +949,59 @@ const showBlurred = blurActive; // temporary test
                   min={1}
                   max={15}
                   value={scoreInput}
+                  disabled={scoresLocked}
                   onChange={(e) => setScoreInput(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') saveHoleAndAdvance();
+                    if (e.key === 'Enter' && !scoresLocked) saveHoleAndAdvance();
                   }}
                   placeholder="Score"
-                  className="flex-1 bg-gray-800 border border-emerald-600 rounded-2xl text-center text-4xl font-bold py-5 focus:outline-none focus:border-emerald-400"
+                  className="flex-1 bg-gray-800 border border-emerald-600 rounded-2xl text-center text-4xl font-bold py-5 focus:outline-none focus:border-emerald-400 disabled:opacity-50"
                 />
 
                 <button
                   type="button"
                   onClick={goNextHole}
-                  className="w-14 h-14 shrink-0 rounded-2xl bg-gray-800 hover:bg-gray-700 text-2xl font-bold"
+                  disabled={scoresLocked}
+                  className="w-14 h-14 shrink-0 rounded-2xl bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-2xl font-bold"
                   aria-label="Next hole"
                 >
                   →
                 </button>
               </div>
 
-              <button
-                type="button"
-                onClick={saveHoleAndAdvance}
-                disabled={saving}
-                className="mt-4 w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-4 rounded-2xl text-lg font-semibold"
-              >
-                {saving ? 'Saving…' : 'Enter'}
-              </button>
+              {!scoresLocked ? (
+                <button
+                  type="button"
+                  onClick={saveHoleAndAdvance}
+                  disabled={saving}
+                  className="mt-4 w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-4 rounded-2xl text-lg font-semibold"
+                >
+                  {saving ? 'Saving…' : 'Enter'}
+                </button>
+              ) : (
+                <p className="mt-4 text-center text-emerald-400 font-medium">
+                  Card submitted
+                </p>
+              )}
+
+              {!scoresLocked && (
+                <button
+                  type="button"
+                  onClick={openReviewSubmit}
+                  className="mt-3 w-full bg-indigo-600 hover:bg-indigo-700 py-3 rounded-2xl text-sm font-semibold"
+                >
+                  Review & submit card
+                </button>
+              )}
 
               {saveMsg && (
-                <p className="mt-3 text-center text-emerald-400 text-sm">
+                <p
+                  className={`mt-3 text-center text-sm font-medium ${
+                    saveMsg.startsWith('Missed')
+                      ? 'text-amber-400'
+                      : 'text-emerald-400'
+                  }`}
+                >
                   {saveMsg}
                 </p>
               )}
@@ -791,7 +1014,12 @@ const showBlurred = blurActive; // temporary test
                   <button
                     key={h}
                     type="button"
-                    onClick={() => setCurrentHole(h)}
+                    onClick={() => {
+                      if (!scoresLocked) {
+                        setCurrentHole(h);
+                        setSaveMsg(null);
+                      }
+                    }}
                     className={`w-8 h-8 text-xs font-medium ${holeDotClass(h)}`}
                   >
                     {h}
@@ -833,7 +1061,7 @@ const showBlurred = blurActive; // temporary test
                   showBlurred ? 'opacity-40 pointer-events-none' : ''
                 }`}
               >
-                                {leaderboard.map((row, i) => (
+                {leaderboard.map((row, i) => (
                   <li key={row.name}>
                     <button
                       type="button"
@@ -909,8 +1137,8 @@ const showBlurred = blurActive; // temporary test
               {Array.from({ length: numHoles }, (_, i) => {
                 const hole = i + 1;
                 const s = scorecardRow.scores[hole];
-                const par = Number(holes.find((x) => x.hole === hole)?.par) || 4;
-                const diff = s != null && s > 0 ? s - par : null;
+                const par =
+                  Number(holes.find((x) => x.hole === hole)?.par) || 4;
                 return (
                   <div
                     key={hole}
@@ -919,7 +1147,7 @@ const showBlurred = blurActive; // temporary test
                     <div className="text-xs text-gray-500">
                       H{hole} · p{par}
                     </div>
-                                        <div className="mt-1 flex justify-center min-h-[2.25rem] items-center">
+                    <div className="mt-1 flex justify-center min-h-[2.25rem] items-center">
                       <ScoreMark score={s} par={par} />
                     </div>
                   </div>
@@ -942,6 +1170,203 @@ const showBlurred = blurActive; // temporary test
               >
                 {formatToPar(scorecardRow.toPar)}
               </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+            {showSubmitModal && (
+        <div className="fixed inset-0 z-[60] bg-black/85 flex items-center justify-center p-4">
+          <div className="bg-gray-800 rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5 md:p-6">
+            <h2 className="text-2xl font-bold mb-1">Review your scorecard</h2>
+            <p className="text-sm text-gray-400 mb-4">
+              {teamLabel}
+              {selectedRound ? ` · ${selectedRound.name}` : ''} · confirm then
+              submit. After submit, only an admin can change scores.
+            </p>
+
+            {/* Traditional scorecard — swipe/scroll sideways if needed */}
+            <div className="overflow-x-auto -mx-1 px-1 pb-2">
+              <table className="border-collapse text-sm min-w-[640px] w-full">
+                <thead>
+                  <tr className="bg-gray-950">
+                    <th className="text-left py-2.5 px-2 font-semibold text-gray-300 sticky left-0 bg-gray-950 z-10 min-w-[52px]">
+                      HOLE
+                    </th>
+                    {Array.from({ length: Math.min(9, numHoles) }, (_, i) => (
+                      <th
+                        key={`h-${i + 1}`}
+                        className="text-center py-2.5 px-1.5 font-medium text-gray-300 w-9"
+                      >
+                        {i + 1}
+                      </th>
+                    ))}
+                    <th className="text-center py-2.5 px-2 font-semibold text-emerald-400 bg-gray-900/80">
+                      OUT
+                    </th>
+                    {numHoles > 9 &&
+                      Array.from({ length: numHoles - 9 }, (_, i) => (
+                        <th
+                          key={`h-${i + 10}`}
+                          className="text-center py-2.5 px-1.5 font-medium text-gray-300 w-9"
+                        >
+                          {i + 10}
+                        </th>
+                      ))}
+                    {numHoles > 9 && (
+                      <th className="text-center py-2.5 px-2 font-semibold text-emerald-400 bg-gray-900/80">
+                        IN
+                      </th>
+                    )}
+                    <th className="text-center py-2.5 px-2 font-semibold text-white bg-gray-900">
+                      TOT
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {/* PAR row */}
+                  <tr className="border-t border-gray-700">
+                    <td className="py-2 px-2 font-semibold text-gray-400 sticky left-0 bg-gray-800 z-10">
+                      PAR
+                    </td>
+                    {Array.from({ length: Math.min(9, numHoles) }, (_, i) => {
+                      const par = Number(holes[i]?.par) || 4;
+                      return (
+                        <td
+                          key={`p-${i + 1}`}
+                          className="text-center py-2 px-1.5 text-gray-400"
+                        >
+                          {par}
+                        </td>
+                      );
+                    })}
+                    <td className="text-center py-2 px-2 font-semibold text-emerald-400/80 bg-gray-900/40">
+                      {Array.from({ length: Math.min(9, numHoles) }, (_, i) =>
+                        Number(holes[i]?.par) || 4
+                      ).reduce((a, b) => a + b, 0)}
+                    </td>
+                    {numHoles > 9 &&
+                      Array.from({ length: numHoles - 9 }, (_, i) => {
+                        const par = Number(holes[i + 9]?.par) || 4;
+                        return (
+                          <td
+                            key={`p-${i + 10}`}
+                            className="text-center py-2 px-1.5 text-gray-400"
+                          >
+                            {par}
+                          </td>
+                        );
+                      })}
+                    {numHoles > 9 && (
+                      <td className="text-center py-2 px-2 font-semibold text-emerald-400/80 bg-gray-900/40">
+                        {Array.from({ length: numHoles - 9 }, (_, i) =>
+                          Number(holes[i + 9]?.par) || 4
+                        ).reduce((a, b) => a + b, 0)}
+                      </td>
+                    )}
+                    <td className="text-center py-2 px-2 font-semibold text-gray-300 bg-gray-900/60">
+                      {Array.from({ length: numHoles }, (_, i) =>
+                        Number(holes[i]?.par) || 4
+                      ).reduce((a, b) => a + b, 0)}
+                    </td>
+                  </tr>
+
+                  {/* SCORE row */}
+                  <tr className="border-t border-gray-700">
+                    <td className="py-2.5 px-2 font-semibold text-white sticky left-0 bg-gray-800 z-10">
+                      SCORE
+                    </td>
+                    {Array.from({ length: Math.min(9, numHoles) }, (_, i) => {
+                      const hole = i + 1;
+                      const s = scores[hole];
+                      const par = Number(holes[i]?.par) || 4;
+                      return (
+                        <td key={`s-${hole}`} className="text-center py-2.5 px-1">
+                          <div className="flex justify-center">
+                            <ScoreMark
+                              score={s != null && s > 0 ? s : null}
+                              par={par}
+                            />
+                          </div>
+                        </td>
+                      );
+                    })}
+                    <td className="text-center py-2.5 px-2 font-bold text-emerald-400 text-base bg-gray-900/40">
+                      {Array.from({ length: Math.min(9, numHoles) }, (_, i) =>
+                        scores[i + 1] > 0 ? scores[i + 1] : 0
+                      ).reduce((a, b) => a + b, 0) || '—'}
+                    </td>
+                    {numHoles > 9 &&
+                      Array.from({ length: numHoles - 9 }, (_, i) => {
+                        const hole = i + 10;
+                        const s = scores[hole];
+                        const par = Number(holes[i + 9]?.par) || 4;
+                        return (
+                          <td
+                            key={`s-${hole}`}
+                            className="text-center py-2.5 px-1"
+                          >
+                            <div className="flex justify-center">
+                              <ScoreMark
+                                score={s != null && s > 0 ? s : null}
+                                par={par}
+                              />
+                            </div>
+                          </td>
+                        );
+                      })}
+                    {numHoles > 9 && (
+                      <td className="text-center py-2.5 px-2 font-bold text-emerald-400 text-base bg-gray-900/40">
+                        {Array.from({ length: numHoles - 9 }, (_, i) =>
+                          scores[i + 10] > 0 ? scores[i + 10] : 0
+                        ).reduce((a, b) => a + b, 0) || '—'}
+                      </td>
+                    )}
+                    <td className="text-center py-2.5 px-2 font-bold text-white text-lg bg-gray-900/60">
+                      {totalScore || '—'}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-gray-500 mb-4 md:hidden">
+              Swipe sideways to see the full card →
+            </p>
+
+            <div className="flex justify-between items-center text-sm border-t border-gray-700 pt-4 mb-6">
+              <span className="text-gray-400">vs par</span>
+              <span
+                className={`text-xl font-bold ${
+                  myToPar == null
+                    ? 'text-gray-400'
+                    : myToPar < 0
+                      ? 'text-emerald-400'
+                      : myToPar > 0
+                        ? 'text-orange-400'
+                        : 'text-white'
+                }`}
+              >
+                {formatToPar(myToPar)}
+              </span>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3">
+              <button
+                type="button"
+                onClick={submitFinalScores}
+                disabled={submittingFinal}
+                className="flex-1 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
+              >
+                {submittingFinal ? 'Submitting…' : 'Submit scorecard'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSubmitModal(false)}
+                disabled={submittingFinal}
+                className="flex-1 bg-gray-700 hover:bg-gray-600 py-4 rounded-2xl font-semibold"
+              >
+                Keep editing
+              </button>
             </div>
           </div>
         </div>

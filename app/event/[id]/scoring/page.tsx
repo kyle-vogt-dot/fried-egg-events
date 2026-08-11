@@ -24,6 +24,15 @@ function isCheckedInForRound(reg: any, roundId: number | 'all') {
   return !!reg.checked_in;
 }
 
+function lockKey(roundId: number | 'all') {
+  return roundId === 'all' ? 'all' : String(roundId);
+}
+
+function isScoresLocked(reg: any, roundId: number | 'all') {
+  const map = reg?.scores_locked_by_round || {};
+  return map[lockKey(roundId)] === true;
+}
+
 function defaultHoles(numHoles: number) {
   return Array.from({ length: numHoles }, (_, i) => ({
     hole: i + 1,
@@ -33,8 +42,6 @@ function defaultHoles(numHoles: number) {
   }));
 }
 
-
-
 function yardsFromScorecardHole(h: any): number {
   if (h.yardage != null || h.yards != null) {
     return Number(h.yardage ?? h.yards) || 0;
@@ -42,7 +49,6 @@ function yardsFromScorecardHole(h: any): number {
   const tees = h.tees;
   if (!tees || typeof tees !== 'object') return 0;
 
-  // teeBox1, teeBox2, ... — pick first positive yards
   for (const key of Object.keys(tees)) {
     const y = Number(tees[key]?.yards ?? tees[key]?.yardage ?? 0);
     if (y > 0) return y;
@@ -82,7 +88,6 @@ function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
 
     return {
       hole: Number(h.hole ?? h.Hole ?? i + 1),
-      // API often sends 0 — fall back so scoring UI still works
       par: par > 0 ? par : 4,
       yardage: yardage > 0 ? yardage : 400,
       handicap: handicap > 0 ? handicap : i + 1,
@@ -92,6 +97,7 @@ function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
   const sliced = holes.slice(0, numHoles);
   return sliced.length ? sliced : defaultHoles(numHoles);
 }
+
 function getPairingLabel(reg: any, roundId: number | 'all') {
   if (roundId !== 'all') {
     const map = reg.round_pairings || {};
@@ -117,7 +123,6 @@ function ScoreMark({
 
   const diff = score - par;
 
-  // Eagle or better: double circle
   if (diff <= -2) {
     return (
       <span className="inline-flex items-center justify-center w-10 h-10 rounded-full border-2 border-emerald-400">
@@ -128,7 +133,6 @@ function ScoreMark({
     );
   }
 
-  // Birdie: single circle
   if (diff === -1) {
     return (
       <span className="inline-flex items-center justify-center w-10 h-10 rounded-full border-2 border-emerald-400 text-emerald-300 font-semibold text-sm">
@@ -137,7 +141,6 @@ function ScoreMark({
     );
   }
 
-  // Par
   if (diff === 0) {
     return (
       <span className="inline-flex items-center justify-center w-10 h-10 text-white font-semibold text-sm">
@@ -146,7 +149,6 @@ function ScoreMark({
     );
   }
 
-  // Bogey: single square
   if (diff === 1) {
     return (
       <span className="inline-flex items-center justify-center w-10 h-10 border-2 border-orange-400 text-orange-300 font-semibold text-sm">
@@ -155,7 +157,6 @@ function ScoreMark({
     );
   }
 
-  // Double+: double square
   return (
     <span className="inline-flex items-center justify-center w-10 h-10 border-2 border-red-400">
       <span className="inline-flex items-center justify-center w-7 h-7 border-2 border-red-300 text-red-300 font-semibold text-sm">
@@ -207,6 +208,8 @@ export default function EventScoringPage() {
     return rounds.find((r) => r.id === selectedRoundId) || null;
   }, [rounds, selectedRoundId]);
 
+  const isTeamEvent = (event?.max_teammates || 1) > 1;
+
   const scoredRegs = useMemo(() => {
     return registrations.filter((r) => {
       if (!isCheckedInForRound(r, selectedRoundId)) return false;
@@ -217,6 +220,37 @@ export default function EventScoringPage() {
       return ids.includes(selectedRoundId as number);
     });
   }, [registrations, selectedRoundId, rounds.length]);
+
+  // Rebuild lock state from DB whenever regs / round change
+  // Keeps "editing" rows as-is so live reloads don't kick you out of edit mode
+  useEffect(() => {
+    if (!scoredRegs.length) return;
+
+    const grouped = scoredRegs.reduce((acc: any, reg) => {
+      const key =
+        isTeamEvent && reg.team_name
+          ? reg.team_name
+          : reg.player_name || 'Unknown';
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(reg);
+      return acc;
+    }, {});
+
+    setRowMode((prev) => {
+      const next: Record<string, RowMode> = { ...prev };
+
+      Object.entries(grouped).forEach(([teamKey, members]: any) => {
+        if (prev[teamKey] === 'editing') return;
+
+        const locked = (members as any[]).some((m) =>
+          isScoresLocked(m, selectedRoundId)
+        );
+        next[teamKey] = locked ? 'locked' : 'open';
+      });
+
+      return next;
+    });
+  }, [scoredRegs, selectedRoundId, isTeamEvent]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -259,10 +293,16 @@ export default function EventScoringPage() {
     const regIds = registrations.map((r) => String(r.id));
 
     const loadScores = async () => {
-      const { data: scoreData, error } = await supabase
+      let query = supabase
         .from('scores')
         .select('*')
         .in('registration_id', regIds);
+
+      if (selectedRoundId !== 'all') {
+        query = query.eq('round_id', selectedRoundId);
+      }
+
+      const { data: scoreData, error } = await query;
 
       if (error) {
         console.error('Failed to load scores:', error);
@@ -353,15 +393,23 @@ export default function EventScoringPage() {
     }
 
     setSavingKey(teamKey);
+    const key = lockKey(selectedRoundId);
 
     try {
       for (const regId of memberIds) {
+        // Clear existing holes for this reg (+ round when scoped)
         for (const [hole] of holeEntries) {
-          await supabase
+          let del = supabase
             .from('scores')
             .delete()
             .eq('registration_id', regId)
             .eq('hole', parseInt(hole, 10));
+
+          if (selectedRoundId !== 'all') {
+            del = del.eq('round_id', selectedRoundId);
+          }
+
+          await del;
         }
 
         const rows = holeEntries.map(([hole, score]) => ({
@@ -373,11 +421,40 @@ export default function EventScoringPage() {
 
         const { error: insErr } = await supabase.from('scores').insert(rows);
         if (insErr) throw insErr;
+
+        // Persist lock on each registration in the team
+        const reg = registrations.find((r) => String(r.id) === regId);
+        const existing = (reg?.scores_locked_by_round || {}) as Record<
+          string,
+          boolean
+        >;
+        const updatedMap = { ...existing, [key]: true };
+
+        const { error: lockErr } = await supabase
+          .from('event_registrations')
+          .update({ scores_locked_by_round: updatedMap })
+          .eq('id', regId);
+
+        if (lockErr) throw lockErr;
       }
+
+      // Update local regs so refresh / navigation keeps lock
+      setRegistrations((prev) =>
+        prev.map((r) => {
+          if (!memberIds.includes(String(r.id))) return r;
+          return {
+            ...r,
+            scores_locked_by_round: {
+              ...(r.scores_locked_by_round || {}),
+              [key]: true,
+            },
+          };
+        })
+      );
 
       setRowMode((prev) => ({ ...prev, [teamKey]: 'locked' }));
       alert(
-        `Score saved for ${teamKey}${
+        `Score submitted for ${teamKey}${
           selectedRound ? ` · ${selectedRound.name}` : ''
         }`
       );
@@ -401,7 +478,6 @@ export default function EventScoringPage() {
     ? formatRoundTime(selectedRound.start_time)
     : null;
 
-  const isTeamEvent = (event?.max_teammates || 1) > 1;
   const frontCount = Math.min(9, numHoles);
   const backCount = Math.max(0, numHoles - 9);
 
@@ -468,8 +544,8 @@ export default function EventScoringPage() {
               </p>
             )}
             <p className="text-xs text-gray-500 mt-1">
-              ○ under par · ▢ over par · player scores update live unless
-              Editing
+              ○ under par · ▢ over par · Submitted stays locked after leave /
+              refresh
             </p>
           </div>
 
@@ -485,6 +561,7 @@ export default function EventScoringPage() {
                 onChange={(e) => {
                   const v = e.target.value;
                   setSelectedRoundId(v === 'all' ? 'all' : parseInt(v, 10));
+                  // Clear UI modes; effect re-applies locked from DB
                   setRowMode({});
                 }}
                 className="w-full bg-gray-800 border border-gray-600 rounded-2xl px-5 py-4"
@@ -728,20 +805,6 @@ export default function EventScoringPage() {
                               >
                                 Submit
                               </button>
-                              {mode === 'open' && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setRowMode((prev) => ({
-                                      ...prev,
-                                      [teamKey]: 'editing',
-                                    }))
-                                  }
-                                  className="bg-blue-600 hover:bg-blue-700 px-4 py-2.5 rounded-2xl text-sm font-medium"
-                                >
-                                  Edit
-                                </button>
-                              )}
                               {mode === 'editing' && (
                                 <button
                                   type="button"
