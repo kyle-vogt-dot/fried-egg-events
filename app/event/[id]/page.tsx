@@ -418,6 +418,7 @@ useEffect(() => {
 
     cleanupAbandonedCheckout();
 
+
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
         cleanupAbandonedCheckout();
@@ -429,6 +430,48 @@ useEffect(() => {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [eventId, searchParams, draftKey]);
+
+
+    const myRegistrations = useMemo(() => {
+  if (!currentUser) return [];
+  return registrations.filter(
+    (r) =>
+      r.user_id === currentUser.id ||
+      (r.player_email &&
+        currentUser.email &&
+        String(r.player_email).toLowerCase() ===
+          String(currentUser.email).toLowerCase())
+  );
+}, [registrations, currentUser]);
+
+const alreadyRegistered = myRegistrations.length > 0;
+
+  const myRegisteredRoundIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const r of myRegistrations) {
+      const list: number[] = Array.isArray(r.selected_round_ids)
+        ? r.selected_round_ids
+        : [];
+      list.forEach((id) => ids.add(Number(id)));
+      if (r.round_id) ids.add(Number(r.round_id));
+    }
+    return Array.from(ids);
+  }, [myRegistrations]);
+
+const myRegisteredRoundNames = useMemo(() => {
+  if (!myRegistrations.length || !rounds.length) return [] as string[];
+  const names = new Set<string>();
+  for (const reg of myRegistrations) {
+    const ids: number[] =
+      reg.selected_round_ids || reg.round_ids || [];
+    if (!ids.length && reg.round_id) ids.push(reg.round_id);
+    rounds
+      .filter((r) => ids.map(String).includes(String(r.id)))
+      .forEach((r) => names.add(r.name));
+  }
+  return Array.from(names);
+}, [myRegistrations, rounds]);
+  
 
   const handleShare = async () => {
     const url = `${window.location.origin}/event/${eventId}`;
@@ -665,25 +708,7 @@ useEffect(() => {
                 if (raw) {
           const draft = JSON.parse(raw);
           checkoutNetAmount =
-            draft.totalCost != null ? Number(draft.totalCost) : null;
-                                              {alreadyRegistered && (
-                <div className="mb-6 bg-amber-900/40 border border-amber-500/50 rounded-2xl p-4 text-sm text-amber-100">
-                  <p className="font-medium text-amber-300 mb-1">
-                    You’re already registered
-                    {myRegisteredRoundNames.length > 0
-                      ? ` for ${myRegisteredRoundNames.join(', ')}`
-                      : myRegistration?.team_name
-                        ? ` on “${myRegistration.team_name}”`
-                        : ''}
-                    .
-                  </p>
-                  <p className="text-amber-100/90">
-                    You can add teammates to those rounds, or select another
-                    round to register yourself there. You won’t be charged again
-                    for rounds you’re already on.
-                  </p>
-                </div>
-              )}
+            draft.totalCost != null ? Number(draft.totalCost) : null
           draftDiscount = draft.discount || null;
 
           sessionStorage.setItem(
@@ -1098,42 +1123,6 @@ const spotsLeft =
     (p) => (p.name || '').trim() && isValidEmail(p.email || '')
   );
 
-  // Must be defined BEFORE totalPlayers / effects that use it
-    const myRegistrations = useMemo(() => {
-    if (!currentUser) return [];
-    return registrations.filter(
-      (r) =>
-        r.user_id === currentUser.id ||
-        (r.player_email &&
-          currentUser.email &&
-          String(r.player_email).toLowerCase() ===
-            String(currentUser.email).toLowerCase())
-    );
-  }, [registrations, currentUser]);
-
-  // Any registration on this event (for event-priced tournaments)
-  const alreadyRegistered = myRegistrations.length > 0;
-
-  // Primary row (team name, etc.)
-  const myRegistration = myRegistrations[0] || null;
-
-  // Round ids this user is already on
-  const myRegisteredRoundIds = useMemo(() => {
-    const ids = new Set<number>();
-    for (const r of myRegistrations) {
-      const list: number[] = Array.isArray(r.selected_round_ids)
-        ? r.selected_round_ids
-        : [];
-      list.forEach((id) => ids.add(Number(id)));
-    }
-    return Array.from(ids);
-  }, [myRegistrations]);
-
-  const myRegisteredRoundNames = useMemo(() => {
-    return myRegisteredRoundIds
-      .map((id) => rounds.find((r) => r.id === id)?.name || `Round ${id}`)
-      .filter(Boolean);
-  }, [myRegisteredRoundIds, rounds]);
 
   // Among currently selected paid rounds: which are new vs already on
   const newlySelectedRoundIds = selectedPaidRoundIds.filter(
@@ -2087,23 +2076,74 @@ setWaitlistPhone('');
               <h2 className="text-3xl font-bold mb-6">
                 Register for {event.name}
               </h2>
-              {alreadyRegistered && (
-                <div className="mb-6 bg-amber-900/40 border border-amber-500/50 rounded-2xl p-4 text-sm text-amber-100">
-                  <p className="font-medium text-amber-300 mb-1">
-                    You’re already registered
-                    {myRegistration?.team_name
-                      ? ` on “${myRegistration.team_name}”`
-                      : ''}
-                    .
-                  </p>
-                  <p className="text-amber-100/90">
-                    This form only adds <strong>new</strong> players. You will
-                    not be charged again for yourself. Use “Join Existing Team”
-                    to fill open spots (e.g. a spouse or teammate).
-                  </p>
-                </div>
-              )}
-              {rounds.length > 0 && (
+
+              {/* Always show what they’re already on */}
+{alreadyRegistered && (
+  <div className="mb-6 bg-gray-900 border border-emerald-500/40 rounded-2xl p-6 space-y-4">
+    <div className="flex justify-between items-start gap-3">
+      <p className="font-medium text-white text-lg">
+        You’re already registered
+      </p>
+      <span className="text-xs px-3 py-1 rounded-full bg-emerald-900/50 text-emerald-400 shrink-0">
+        Registered
+      </span>
+    </div>
+
+    <div className="space-y-3">
+      {myRegistrations.map((reg) => {
+        const roundNames = (() => {
+          const ids: number[] =
+            reg.selected_round_ids || reg.round_ids || [];
+          if (!ids.length && reg.round_id) ids.push(reg.round_id);
+          return rounds
+            .filter((r) => ids.map(String).includes(String(r.id)))
+            .map((r) => r.name);
+        })();
+
+        return (
+          <div
+            key={reg.id}
+            className="border-t border-emerald-500/30 pt-3 first:border-0 first:pt-0"
+          >
+            <p className="text-sm text-gray-300">
+              {reg.team_name ? `Team: ${reg.team_name}` : 'No team'}
+              {roundNames.length > 0 ? ` · ${roundNames.join(', ')}` : ''}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  </div>
+)}
+
+{/* Only show the “go to My Events” message when they have nothing left to register for */}
+{alreadyRegistered && myRegisteredRoundIds.length >= rounds.length ? (
+  <div className="space-y-6">
+    <p className="text-gray-400 text-sm text-center">
+      You’re registered for every round. To add players to your team, go to{' '}
+      <button
+        type="button"
+        onClick={() => {
+          setShowRegisterModal(false);
+          router.push('/my-events');
+        }}
+        className="text-emerald-400 hover:underline font-medium"
+      >
+        My Events
+      </button>
+      .
+    </p>
+    <button
+      onClick={() => setShowRegisterModal(false)}
+      className="w-full py-4 text-gray-400 hover:text-white text-lg"
+    >
+      Close
+    </button>
+  </div>
+) : (
+                // ---------- NORMAL REGISTRATION FORM ----------
+                <>
+                  {rounds.length > 0 && (
                 <div className="bg-gray-900 rounded-2xl p-5 mb-6">
                   <p className="text-sm text-gray-400 mb-4 font-medium">
                     {(event.pricing_mode || 'event') === 'per_round'
@@ -2646,7 +2686,8 @@ setWaitlistPhone('');
                   </button>
                 </div>
               )}
-
+                </>
+              )}
               <button
                 onClick={() => {
                   sessionStorage.removeItem(draftKey);
