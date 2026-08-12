@@ -197,6 +197,10 @@ export default function EventDetailPage() {
   const eventId = params.id as string;
   const [platformFee, setPlatformFee] = useState(3.0);
 
+  const [sendReceipt, setSendReceipt] = useState(false);
+const [receiptName, setReceiptName] = useState('');
+const [receiptEmail, setReceiptEmail] = useState('');
+
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
   const [rounds, setRounds] = useState<any[]>([]);
@@ -359,6 +363,14 @@ useEffect(() => {
       // Don't force "I'm playing" if they're already on the event
     }
   }, [appliedDiscount]);
+
+  useEffect(() => {
+  if (!currentUser) return;
+  const n = getPlayerName(currentUser) || '';
+  const e = currentUser.email || '';
+  setReceiptName((prev) => prev || n);
+  setReceiptEmail((prev) => prev || e);
+}, [currentUser]);
 
       // Joining a team: clear slots; if already registered, stay "not playing"
       useEffect(() => {
@@ -2125,7 +2137,7 @@ setWaitlistPhone('');
         type="button"
         onClick={() => {
           setShowRegisterModal(false);
-          router.push('/my-events');
+          router.push('/dashboard/play');
         }}
         className="text-emerald-400 hover:underline font-medium"
       >
@@ -2178,43 +2190,54 @@ setWaitlistPhone('');
                         </p>
                       )}
                       {selectableRounds.map((round) => {
-                        const checked = selectedPaidRoundIds.includes(round.id);
-                        return (
-                                                    <label
-                            key={round.id}
-                            className={`flex items-center justify-between gap-4 p-4 rounded-2xl cursor-pointer border transition-colors ${
-                              myRegisteredRoundIds.includes(round.id)
-                                ? 'border-amber-500 bg-amber-950/40'
-                                : checked
-                                  ? 'border-teal-500 bg-teal-950/40'
-                                  : 'border-gray-700 hover:border-gray-600'
-                            }`}
-                          >
-                            <div className="flex items-center gap-3">
-                              <input
-                                type="checkbox"
-                                checked={checked}
-                                onChange={() => togglePaidRound(round.id)}
-                                className="w-5 h-5 accent-teal-600"
-                              />
-                              <div>
-                                <div className="font-medium">{round.name}</div>
-                                {round.start_time && (
-                                  <div className="text-xs text-gray-400">
-                                    {String(round.start_time).slice(0, 5)}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                            <div className="text-sm font-medium text-teal-300">
-                              $
-                              {(Number(round.price || 0) + platformFee).toFixed(
-                                2
-                              )}
-                            </div>
-                          </label>
-                        );
-                      })}
+  const alreadyOn = myRegisteredRoundIds.includes(Number(round.id));
+  const checked = selectedPaidRoundIds.includes(round.id);
+
+  return (
+    <label
+      key={round.id}
+      className={`flex items-center justify-between gap-4 p-4 rounded-2xl border transition-colors ${
+        alreadyOn
+          ? 'border-amber-500 bg-amber-950/40 cursor-not-allowed opacity-80'
+          : checked
+            ? 'border-teal-500 bg-teal-950/40 cursor-pointer'
+            : 'border-gray-700 hover:border-gray-600 cursor-pointer'
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <input
+          type="checkbox"
+          checked={alreadyOn || checked}
+          disabled={alreadyOn}
+          onChange={() => {
+            if (!alreadyOn) togglePaidRound(round.id);
+          }}
+          className="w-5 h-5 accent-teal-600"
+        />
+        <div>
+          <div className="font-medium">
+            {round.name}
+            {alreadyOn && (
+              <span className="ml-2 text-xs text-amber-400">
+                Already registered
+              </span>
+            )}
+          </div>
+          {round.start_time && (
+            <div className="text-xs text-gray-400">
+              {String(round.start_time).slice(0, 5)}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className="text-sm font-medium text-teal-300">
+        {alreadyOn
+          ? '—'
+          : `$${(Number(round.price || 0) + platformFee).toFixed(2)}`}
+      </div>
+    </label>
+  );
+})}
                     </div>
                   )}
                 </div>
@@ -2428,43 +2451,6 @@ setWaitlistPhone('');
                       />
                     </div>
                   )}
-                  
-
-                  <div className="flex items-center gap-3 bg-gray-900 p-4 rounded-2xl">
-                                        <input
-                      type="checkbox"
-                      id="organizer-only"
-                      checked={isOrganizerOnly}
-                                            onChange={(e) => setIsOrganizerOnly(e.target.checked)}
-                      disabled={
-                        !!appliedDiscount ||
-                        (!isPerRound && alreadyRegistered)
-                      }
-                      className="w-5 h-5 accent-blue-600"
-                    />
-                                        <label
-                      htmlFor="organizer-only"
-                      className="text-sm cursor-pointer"
-                    >
-                                            {isPerRound && alreadyRegistered
-                        ? 'I’m only adding other players on the selected rounds'
-                        : alreadyRegistered
-                          ? 'I’m only adding other players (I’m already registered)'
-                          : 'I am not playing — just registering the team'}
-                    </label>
-                  </div>
-                  
-                                    {!isOrganizerOnly && !alreadyRegistered && (
-                    <div className="bg-emerald-900/30 border border-emerald-500 p-5 rounded-2xl">
-
-                      <p className="text-sm text-emerald-400 mb-1">
-                        You are playing as the first player
-                      </p>
-                      <p className="font-medium text-white">
-                        {getPlayerName(currentUser)}
-                      </p>
-                    </div>
-                  )}
 
                   
 <div>
@@ -2664,6 +2650,44 @@ setWaitlistPhone('');
                         Fill in name and a valid email for all additional
                         players to continue.
                       </p>
+                    )}
+                 
+                  </div>
+
+                  {/* Receipt — just above the button */}
+                  <div className="bg-gray-900 rounded-2xl p-4 space-y-4">
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="checkbox"
+                        id="send-receipt"
+                        checked={sendReceipt}
+                        onChange={(e) => setSendReceipt(e.target.checked)}
+                        className="w-5 h-5 accent-blue-600"
+                      />
+                      <label
+                        htmlFor="send-receipt"
+                        className="text-sm cursor-pointer"
+                      >
+                        Please send me a receipt
+                      </label>
+                    </div>
+                    {sendReceipt && (
+                      <div className="space-y-3 pt-1">
+                        <input
+                          type="text"
+                          value={receiptName}
+                          onChange={(e) => setReceiptName(e.target.value)}
+                          placeholder="Name for receipt"
+                          className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
+                        />
+                        <input
+                          type="email"
+                          value={receiptEmail}
+                          onChange={(e) => setReceiptEmail(e.target.value)}
+                          placeholder="Email for receipt"
+                          className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
+                        />
+                      </div>
                     )}
                   </div>
 

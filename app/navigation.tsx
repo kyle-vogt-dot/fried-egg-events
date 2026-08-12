@@ -45,11 +45,11 @@ export default function Navigation() {
             
 
             <Link 
-              href="/" 
-              className="text-sm font-medium text-gray-300 hover:text-white transition-colors hidden md:block"
-            >
-              Home
-            </Link>
+  href="/" 
+  className="text-sm font-medium text-gray-300 hover:text-white transition-colors"
+>
+  Home
+</Link>
           </div>
 
           {/* Right Side - Menu + Auth */}
@@ -104,7 +104,7 @@ export default function Navigation() {
     onClick={() => setSidebarOpen(false)} 
     className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg font-medium text-white"
   >
-    🏌️‍♂️ Play Events
+    🏌️‍♂️ My Events
   </Link>
 
   <Link 
@@ -112,7 +112,7 @@ export default function Navigation() {
   onClick={() => setSidebarOpen(false)} 
   className="block px-6 py-4 rounded-2xl hover:bg-gray-800 text-lg font-medium text-white"
 >
-  📅 Created Events
+  Manage Events
 </Link>
 
   <Link 
