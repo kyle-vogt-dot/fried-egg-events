@@ -812,13 +812,21 @@ const myRegisteredRoundNames = useMemo(() => {
         let draftDiscount: any = null;
 
         const raw = sessionStorage.getItem(draftKey);
-        
 
-                if (raw) {
+        // receipt prefs (survive Stripe redirect via draft)
+        let receiptSend = false;
+        let receiptTo = '';
+        let receiptToName = '';
+
+        if (raw) {
           const draft = JSON.parse(raw);
           checkoutNetAmount =
-            draft.totalCost != null ? Number(draft.totalCost) : null
+            draft.totalCost != null ? Number(draft.totalCost) : null;
           draftDiscount = draft.discount || null;
+
+          receiptSend = !!draft.sendReceipt;
+          receiptTo = draft.receiptEmail || '';
+          receiptToName = draft.receiptName || '';
 
           sessionStorage.setItem(
             lastPaymentKey,
@@ -828,6 +836,9 @@ const myRegisteredRoundNames = useMemo(() => {
               selected_round_ids: draft.selected_round_ids || [],
               discount: draft.discount || null,
               registration_ids: draft.registration_ids || [],
+              sendReceipt: draft.sendReceipt || false,
+              receiptName: draft.receiptName || '',
+              receiptEmail: draft.receiptEmail || '',
             })
           );
 
@@ -1064,13 +1075,26 @@ const myRegisteredRoundNames = useMemo(() => {
             paidThisCheckout.find((p) => p.user_id === user.id) ||
             myReg;
 
-          if (payer?.player_email) {
+                    // draft was already parsed earlier in handleRegistrationSuccess
+
+          const sendToReceipt =
+            receiptSend && isValidEmail(String(receiptTo));
+
+          const emailTo = sendToReceipt
+            ? String(receiptTo).trim().toLowerCase()
+            : payer?.player_email;
+
+          const emailName = sendToReceipt
+            ? String(receiptToName || '').trim() || payer?.player_name
+            : payer?.player_name;
+
+          if (emailTo) {
             await fetch('/api/send-registration-email', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                to: payer.player_email,
-                name: payer.player_name,
+                to: emailTo,
+                name: emailName,
                 eventName: eventData.name,
                 eventDate: eventDateStr,
                 location: eventData.location,
@@ -1086,11 +1110,10 @@ const myRegisteredRoundNames = useMemo(() => {
                 playerCount: playerCountThisPayment,
                 rounds: roundsSummary,
                 discountCode: draftDiscount?.code || null,
-    discountAmount: draftDiscount?.amount_saved || 0,
+                discountAmount: draftDiscount?.amount_saved || 0,
               }),
             });
           }
-
           const emailedTeammates = new Set<string>();
           for (const person of paidThisCheckout) {
             if (!person) continue;
@@ -1717,6 +1740,9 @@ const completeAdditional = additionalPlayers.filter(
               amount_saved: appliedDiscount.amount_saved,
             }
           : null,
+        sendReceipt,
+        receiptName,
+        receiptEmail,
       };
 
       sessionStorage.setItem(draftKey, JSON.stringify(draft));
