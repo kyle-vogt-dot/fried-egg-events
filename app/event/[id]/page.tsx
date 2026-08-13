@@ -463,13 +463,14 @@ useEffect(() => {
     const perRound = (event?.pricing_mode || 'event') === 'per_round';
     if (perRound) return;
 
-    const already = registrations.some(
+      const already = registrations.some(
       (r) =>
-        r.user_id === currentUser.id ||
-        (r.player_email &&
-          currentUser.email &&
-          String(r.player_email).toLowerCase() ===
-            String(currentUser.email).toLowerCase())
+        r.paid === true &&
+        (r.user_id === currentUser.id ||
+          (r.player_email &&
+            currentUser.email &&
+            String(r.player_email).toLowerCase() ===
+              String(currentUser.email).toLowerCase()))
     );
     if (already) setIsOrganizerOnly(true);
   }, [selectedTeam, mode, currentUser, registrations, event?.pricing_mode]);
@@ -482,32 +483,46 @@ useEffect(() => {
     if (paymentStatus === 'success') return;
 
     const cleanupAbandonedCheckout = async () => {
-      try {
-        const raw = sessionStorage.getItem(draftKey);
-        if (!raw) return;
+  try {
+    const raw = sessionStorage.getItem(draftKey);
+    let ids: (string | number)[] = [];
 
-        const draft = JSON.parse(raw);
-        const ids: (string | number)[] = draft.registration_ids || [];
-        if (!ids.length) return;
+    if (raw) {
+      const draft = JSON.parse(raw);
+      ids = draft.registration_ids || [];
+    }
 
-        const { error: delErr } = await supabase
-          .from('event_registrations')
-          .delete()
-          .in('id', ids)
-          .eq('paid', false);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-        if (delErr) {
-          console.error('Abandoned checkout cleanup failed:', delErr);
-          return;
-        }
+    if (ids.length > 0) {
+      await supabase
+        .from('event_registrations')
+        .delete()
+        .in('id', ids)
+        .eq('paid', false);
+    } else if (user) {
+      // Fallback: wipe unpaid drafts for this user on this event
+      await supabase
+        .from('event_registrations')
+        .delete()
+        .eq('event_id', parseInt(eventId))
+        .eq('paid', false)
+        .or(`user_id.eq.${user.id},player_email.eq.${user.email}`);
+    }
 
-        draft.registration_ids = [];
-        sessionStorage.setItem(draftKey, JSON.stringify(draft));
-        await fetchData();
-      } catch (e) {
-        console.error(e);
-      }
-    };
+    if (raw) {
+      const draft = JSON.parse(raw);
+      draft.registration_ids = [];
+      sessionStorage.setItem(draftKey, JSON.stringify(draft));
+    }
+
+    await fetchData();
+  } catch (e) {
+    console.error(e);
+  }
+};
 
     cleanupAbandonedCheckout();
 
@@ -529,11 +544,12 @@ useEffect(() => {
   if (!currentUser) return [];
   return registrations.filter(
     (r) =>
-      r.user_id === currentUser.id ||
-      (r.player_email &&
-        currentUser.email &&
-        String(r.player_email).toLowerCase() ===
-          String(currentUser.email).toLowerCase())
+      r.paid === true &&
+      (r.user_id === currentUser.id ||
+        (r.player_email &&
+          currentUser.email &&
+          String(r.player_email).toLowerCase() ===
+            String(currentUser.email).toLowerCase()))
   );
 }, [registrations, currentUser]);
 
@@ -1230,18 +1246,37 @@ const spotsLeft =
     ? newlySelectedRoundIds.length > 0
     : !isOrganizerOnly && !alreadyRegistered;
 
+      const regsForTeamOnSelectedRounds = (team: string) => {
+    const teamRegs = registrations.filter(
+      (r) => r.team_name === team && r.paid === true
+    );
+    if (!isPerRound) return teamRegs;
+
+    if (selectedPaidRoundIds.length === 0) return [];
+
+    return teamRegs.filter((r) => {
+      const ids: number[] = Array.isArray(r.selected_round_ids)
+        ? r.selected_round_ids.map(Number)
+        : r.round_id
+          ? [Number(r.round_id)]
+          : [];
+      return selectedPaidRoundIds.some((id) => ids.includes(Number(id)));
+    });
+  };
+
   const selectedTeamMembers = useMemo(() => {
     if (!selectedTeam) return [];
-    return registrations.filter((r) => r.team_name === selectedTeam);
-  }, [registrations, selectedTeam]);
+    return regsForTeamOnSelectedRounds(selectedTeam);
+  }, [selectedTeam, registrations, isPerRound, selectedPaidRoundIds]);
 
-  const getSpotsLeft = (team: string) => {
-    const count = registrations.filter((r) => r.team_name === team).length;
+    const getSpotsLeft = (team: string) => {
+    const count = regsForTeamOnSelectedRounds(team).length;
     return Math.max(0, maxTeamSize - count);
   };
 
   const openSlotsForJoin = selectedTeam ? getSpotsLeft(selectedTeam) : 0;
 
+   
   // If already registered for this event, never charge them again as player 1
   
 
@@ -1346,9 +1381,27 @@ const spotsLeft =
     return teamCountForRound(rid) >= maxT;
   });
 
-  const existingTeams = Array.from(
-    new Set(registrations.map((r) => r.team_name).filter(Boolean))
-  );
+   const existingTeams = useMemo(() => {
+    if (isPerRound && selectedPaidRoundIds.length === 0) return [] as string[];
+
+    const names = new Set<string>();
+    for (const r of registrations) {
+      if (!r.team_name) continue;
+      if (!isPerRound) {
+        names.add(r.team_name);
+        continue;
+      }
+      const ids: number[] = Array.isArray(r.selected_round_ids)
+        ? r.selected_round_ids.map(Number)
+        : r.round_id
+          ? [Number(r.round_id)]
+          : [];
+      if (selectedPaidRoundIds.some((id) => ids.includes(Number(id)))) {
+        names.add(r.team_name);
+      }
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [registrations, isPerRound, selectedPaidRoundIds]);
 
   const updateExtraPlayer = (
     index: number,
@@ -1381,6 +1434,12 @@ const spotsLeft =
     );
   };
 
+    useEffect(() => {
+    if (!selectedTeam) return;
+    if (!existingTeams.includes(selectedTeam)) {
+      setSelectedTeam('');
+    }
+  }, [existingTeams, selectedTeam]);
 
   // ---------- Discount helpers ----------
   const applyDiscountCode = async () => {
@@ -1559,8 +1618,7 @@ setWaitlistPhone('');
         setSubmitting(false);
         return;
       }
-
-      const completeAdditional = additionalPlayers.filter(
+const completeAdditional = additionalPlayers.filter(
         (p) => (p.name || '').trim() && isValidEmail(p.email || '')
       );
 
@@ -1573,22 +1631,39 @@ setWaitlistPhone('');
           user_id: user.id,
         });
       } else {
-                if (!isOrganizerOnly && !alreadyRegistered) {
+        // Self only when we're actually charging/counting them for NEW rounds
+        const includeSelf = isPerRound
+          ? newlySelectedRoundIds.length > 0
+          : !isOrganizerOnly && !alreadyRegistered;
+
+        if (includeSelf) {
           players.push({
             player_name: playerName,
             player_email: user.email || '',
             user_id: user.id,
           });
         }
+
         for (const p of completeAdditional) {
+          // Skip if they typed themselves again in an extra slot
+          const sameEmail =
+            user.email &&
+            p.email.trim().toLowerCase() === user.email.toLowerCase();
+          if (sameEmail && includeSelf) continue;
+
           players.push({
             player_name: p.name.trim(),
-            player_email: p.email.trim(),
+            player_email: p.email.trim().toLowerCase(),
             user_id: null,
           });
         }
+
         if (players.length === 0) {
-          alert('Add at least one player to the team');
+          alert(
+            alreadyRegistered
+              ? 'Add at least one teammate, or select a new round to register yourself.'
+              : 'Add at least one player to the team'
+          );
           setSubmitting(false);
           return;
         }

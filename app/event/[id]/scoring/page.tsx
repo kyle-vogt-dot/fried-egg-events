@@ -188,6 +188,7 @@ export default function EventScoringPage() {
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [rowMode, setRowMode] = useState<Record<string, RowMode>>({});
+    const [savingEvent, setSavingEvent] = useState(false);
 
   const teamMembersRef = useRef<Record<string, string[]>>({});
   const rowModeRef = useRef(rowMode);
@@ -466,6 +467,49 @@ export default function EventScoringPage() {
     }
   };
 
+  const saveEvent = async () => {
+    if (event?.is_locked) return;
+
+    const ok = window.confirm(
+      'Save this event? Scores and results will be locked for players. Unlock later from Platform / support.'
+    );
+    if (!ok) return;
+
+    setSavingEvent(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const { error } = await supabase
+        .from('tournaments')
+        .update({
+          is_locked: true,
+          locked_at: new Date().toISOString(),
+          locked_by: user?.id ?? null,
+        })
+        .eq('id', parseInt(eventId));
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      setEvent((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              is_locked: true,
+              locked_at: new Date().toISOString(),
+              locked_by: user?.id ?? null,
+            }
+          : prev
+      );
+    } finally {
+      setSavingEvent(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
@@ -520,7 +564,7 @@ export default function EventScoringPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
+     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-[1400px] mx-auto">
         <button
           onClick={() => router.back()}
@@ -531,9 +575,17 @@ export default function EventScoringPage() {
 
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
           <div>
-            <h1 className="text-4xl font-bold">{event?.name}</h1>
+            <div className="flex flex-wrap items-center gap-3 mb-1">
+              <h1 className="text-4xl font-bold">{event?.name}</h1>
+              {event?.is_locked && (
+                <span className="text-xs px-3 py-1 rounded-full bg-emerald-900/50 text-emerald-400 border border-emerald-500/40">
+                  Saved
+                </span>
+              )}
+            </div>
             <p className="text-gray-400 mt-1">
-              Live Scoring · {numHoles} holes
+              {event?.is_locked ? 'Final Scoring' : 'Live Scoring'} · {numHoles}{' '}
+              holes
               {event?.course ? ` · ${event.course}` : ''}
               {headerTeeTime ? ` · ${headerTeeTime}` : ''}
             </p>
@@ -547,6 +599,20 @@ export default function EventScoringPage() {
               ○ under par · ▢ over par · Submitted stays locked after leave /
               refresh
             </p>
+            {!event?.is_locked ? (
+              <button
+                type="button"
+                onClick={saveEvent}
+                disabled={savingEvent}
+                className="mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 px-5 py-2.5 rounded-2xl text-sm font-semibold"
+              >
+                {savingEvent ? 'Saving…' : 'Save Event'}
+              </button>
+            ) : (
+              <p className="mt-3 text-sm text-gray-500">
+                Event is saved. Contact support or use Platform to unlock.
+              </p>
+            )}
           </div>
 
           {rounds.length > 0 && (
