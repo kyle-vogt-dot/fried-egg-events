@@ -160,7 +160,7 @@ function IncomeStatementPDF({
   event: any;
   registrationRevenue: number;
   totalDiscounts: number;
-  discountLines: { code: string; players: number; totalSaved: number }[];
+    discountLines: { code: string; players: number; rounds: number; totalSaved: number }[];
   addonRevenue: number;
   paidAddonPlayers: number;
   sponsorRevenue: number;
@@ -216,11 +216,16 @@ function IncomeStatementPDF({
           <Text style={pdfStyles.amount}>{money(registrationRevenue)}</Text>
         </View>
 
-        {discountLines.map((d) => (
+                {discountLines.map((d) => (
           <View key={d.code} style={pdfStyles.rowIndent}>
             <Text style={pdfStyles.labelMuted}>
-              Less: discount {d.code} ({d.players} player
-              {d.players === 1 ? '' : 's'})
+              Less: discount {d.code} (
+              {isPerRound
+                ? `${d.rounds} round${d.rounds === 1 ? '' : 's'} · ${d.players} player${
+                    d.players === 1 ? '' : 's'
+                  }`
+                : `${d.players} player${d.players === 1 ? '' : 's'}`}
+              )
             </Text>
             <Text style={pdfStyles.amountMuted}>{money(-d.totalSaved)}</Text>
           </View>
@@ -500,24 +505,31 @@ export default function EventIncomePage() {
     return total;
   }, [registrations, rounds, event, isPerRound, fee]);
 
-  const discountSummary = useMemo(() => {
+    const discountSummary = useMemo(() => {
     const paid = registrations.filter((r) => r.paid && r.discount_code);
     const byCode: Record<
       string,
-      { code: string; players: number; totalSaved: number }
+      { code: string; players: number; rounds: number; totalSaved: number }
     > = {};
 
     for (const reg of paid) {
       const code = String(reg.discount_code).toUpperCase();
       if (!byCode[code]) {
-        byCode[code] = { code, players: 0, totalSaved: 0 };
+        byCode[code] = { code, players: 0, rounds: 0, totalSaved: 0 };
       }
       byCode[code].players += 1;
+
+      const ids: number[] = Array.isArray(reg.selected_round_ids)
+        ? reg.selected_round_ids
+        : [];
+      // Per-round: each selected round is a discounted seat; event mode: 1 unit
+      const roundUnits = isPerRound ? Math.max(ids.length, 1) : 1;
+      byCode[code].rounds += roundUnits;
       byCode[code].totalSaved += Number(reg.discount_amount || 0);
     }
 
     return Object.values(byCode).sort((a, b) => a.code.localeCompare(b.code));
-  }, [registrations]);
+  }, [registrations, isPerRound]);
 
   const totalDiscounts = useMemo(
     () => discountSummary.reduce((s, d) => s + d.totalSaved, 0),
@@ -832,7 +844,7 @@ export default function EventIncomePage() {
               </span>
             </div>
 
-            {discountSummary.map((d) => (
+                        {discountSummary.map((d) => (
               <div
                 key={d.code}
                 className="flex justify-between items-center bg-gray-900/70 rounded-2xl px-5 py-4 border border-amber-900/40"

@@ -85,10 +85,14 @@ function EventFlyerPDF({
   event,
   qrDataUrl,
   registerUrl,
+  paidSponsors = [],
+  sponsorPackages = [],
 }: {
   event: any;
   qrDataUrl: string | null;
   registerUrl: string;
+  paidSponsors?: any[];
+  sponsorPackages?: any[];
 }) {
   const dateStr = event?.date
     ? new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', {
@@ -108,60 +112,70 @@ function EventFlyerPDF({
 
   const imageUrl = event?.image_url || null;
 
-  return (
+  const sponsorNames = (paidSponsors || [])
+    .map((s) => s.company_name)
+    .filter(Boolean);
+
+  const packages = (sponsorPackages || []).filter((p) => p.active !== false);
+
+    return (
     <Document>
-      <Page size="LETTER" style={flyerStyles.page}>
-        <Text style={flyerStyles.brand}>Fried Egg Events</Text>
-        <Text style={flyerStyles.title}>{event?.name || 'Golf Event'}</Text>
+      <Page size="LETTER" style={{ ...flyerStyles.page, padding: 22 }}>
+        <Text style={{ ...flyerStyles.brand, marginBottom: 4 }}>
+          Fried Egg Events
+        </Text>
+        <Text style={{ ...flyerStyles.title, fontSize: 22, marginBottom: 8 }}>
+          {event?.name || 'Golf Event'}
+        </Text>
 
         {imageUrl ? (
-  <View
-    style={{
-      width: '100%',
-      height: 220,
-      marginBottom: 14,
-      alignItems: 'center',
-      justifyContent: 'center',
-    }}
-  >
-    <Image
-      src={imageUrl}
-      style={{
-        maxWidth: '100%',
-        maxHeight: 220,
-        objectFit: 'contain',
-      }}
-    />
-  </View>
-) : null}
+          <View
+            style={{
+              width: '100%',
+              height: 140,
+              marginBottom: 10,
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <Image
+              src={imageUrl}
+              style={{
+                maxWidth: '100%',
+                maxHeight: 140,
+                objectFit: 'contain',
+              }}
+            />
+          </View>
+        ) : null}
 
-        <View style={flyerStyles.box}>
+        <View style={{ ...flyerStyles.box, marginTop: 8, padding: 12 }}>
           {dateStr ? (
-            <Text style={flyerStyles.row}>
+            <Text style={{ ...flyerStyles.row, marginBottom: 4 }}>
               <Text style={flyerStyles.label}>Date: </Text>
               {dateStr}
             </Text>
           ) : null}
           {event?.course ? (
-            <Text style={flyerStyles.row}>
+            <Text style={{ ...flyerStyles.row, marginBottom: 4 }}>
               <Text style={flyerStyles.label}>Course: </Text>
               {event.course}
             </Text>
           ) : null}
           {event?.location ? (
-            <Text style={flyerStyles.row}>
+            <Text style={{ ...flyerStyles.row, marginBottom: 4 }}>
               <Text style={flyerStyles.label}>Location: </Text>
               {event.location}
             </Text>
           ) : null}
           {price ? (
-            <Text style={flyerStyles.row}>
+            <Text style={{ ...flyerStyles.row, marginBottom: 4 }}>
               <Text style={flyerStyles.label}>Price: </Text>
               {price}
             </Text>
           ) : null}
           {event?.number_of_holes ? (
-            <Text style={flyerStyles.row}>
+            <Text style={{ ...flyerStyles.row, marginBottom: 0 }}>
               <Text style={flyerStyles.label}>Format: </Text>
               {event.number_of_holes}-hole
               {event.event_type ? ` · ${event.event_type}` : ''}
@@ -170,25 +184,92 @@ function EventFlyerPDF({
         </View>
 
         {event?.description ? (
-          <Text style={flyerStyles.desc}>
-            {String(event.description).slice(0, 400)}
+          <Text
+            style={{
+              ...flyerStyles.desc,
+              marginTop: 10,
+              fontSize: 10,
+              lineHeight: 1.4,
+            }}
+          >
+            {String(event.description).slice(0, 220)}
+            {String(event.description).length > 220 ? '…' : ''}
           </Text>
         ) : null}
 
-        <View style={flyerStyles.qrWrap}>
+        {sponsorNames.length > 0 ? (
+          <View style={{ marginTop: 10 }}>
+            <Text
+              style={{
+                fontSize: 10,
+                color: '#22c55e',
+                marginBottom: 4,
+                textTransform: 'uppercase',
+                letterSpacing: 1,
+              }}
+            >
+              Sponsors
+            </Text>
+            <Text style={{ fontSize: 10, color: '#e5e7eb', lineHeight: 1.4 }}>
+              {sponsorNames.join('  ·  ')}
+            </Text>
+          </View>
+        ) : null}
+
+        {packages.length > 0 ? (
+          <View style={{ marginTop: 8 }}>
+            <Text
+              style={{
+                fontSize: 10,
+                color: '#22c55e',
+                marginBottom: 4,
+                textTransform: 'uppercase',
+                letterSpacing: 1,
+              }}
+            >
+              Sponsorship Opportunities
+            </Text>
+            {packages.slice(0, 4).map((pkg) => (
+              <Text
+                key={pkg.id}
+                style={{ fontSize: 9, color: '#d1d5db', marginBottom: 2 }}
+              >
+                {pkg.name}
+                {pkg.price != null
+                  ? ` — $${Number(pkg.price).toFixed(2)}`
+                  : ''}
+              </Text>
+            ))}
+          </View>
+        ) : null}
+
+        <View
+          style={{
+            ...flyerStyles.qrWrap,
+            marginTop: 12,
+          }}
+        >
           {qrDataUrl ? (
-            <Image src={qrDataUrl} style={flyerStyles.qr} />
+            <Image
+              src={qrDataUrl}
+              style={{ width: 90, height: 90, backgroundColor: '#fff', padding: 6 }}
+            />
           ) : null}
-          <Text style={flyerStyles.qrHint}>Scan to register</Text>
-          <Text style={flyerStyles.qrHint}>{registerUrl}</Text>
+          <Text style={{ ...flyerStyles.qrHint, marginTop: 6, fontSize: 9 }}>
+            Scan to register
+          </Text>
+          <Text style={{ ...flyerStyles.qrHint, fontSize: 8 }}>
+            {registerUrl}
+          </Text>
         </View>
 
-        <Text style={flyerStyles.footer}>friedeggevents.app</Text>
+        <Text style={{ ...flyerStyles.footer, fontSize: 8, bottom: 16 }}>
+          friedeggevents.app
+        </Text>
       </Page>
     </Document>
   );
 }
-
 export default function EventDetailPage() {
   const [agreedToWaiver, setAgreedToWaiver] = useState(true);
   const params = useParams();
@@ -1640,6 +1721,8 @@ setWaitlistPhone('');
         <EventFlyerPDF
           event={event}
           qrDataUrl={flyerQrDataUrl}
+          paidSponsors={paidSponsors}
+          sponsorPackages={sponsorPackages}
           registerUrl={
             typeof window !== 'undefined'
               ? `${window.location.origin}/event/${eventId}`

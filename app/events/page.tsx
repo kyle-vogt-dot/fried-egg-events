@@ -54,8 +54,12 @@ export default function CreatedEventsPage() {
     return d;
   };
 
-  const upcoming = events.filter((e) => eventDay(e.date) >= today);
-  const past = events.filter((e) => eventDay(e.date) < today);
+    const upcoming = events.filter(
+    (e) => !e.is_locked && eventDay(e.date) >= today
+  );
+  const past = events.filter(
+    (e) => e.is_locked || eventDay(e.date) < today
+  );
 
     const EventCard = ({
     event,
@@ -71,9 +75,9 @@ export default function CreatedEventsPage() {
     >
       <div className="flex items-start justify-between gap-3 mb-1">
         <h3 className="text-xl font-semibold">{event.name}</h3>
-        {isPast && (
+                {(isPast || event.is_locked) && (
           <span className="shrink-0 text-xs px-2.5 py-1 rounded-full bg-gray-700 text-gray-400">
-            Past
+            {event.is_locked ? 'Saved' : 'Past'}
           </span>
         )}
       </div>

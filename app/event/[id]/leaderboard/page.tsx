@@ -169,6 +169,7 @@ export default function EventLeaderboardPage() {
   const [blurHoleInput, setBlurHoleInput] = useState('');
   const [savingBlur, setSavingBlur] = useState(false);
   const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
+  const [savingEvent, setSavingEvent] = useState(false);
 
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
@@ -507,6 +508,48 @@ export default function EventLeaderboardPage() {
       </div>
     );
   }
+    const saveEvent = async () => {
+    if (!isAdmin || event?.is_locked) return;
+
+    const ok = window.confirm(
+      'Save this event? Scores and results will be locked for players. You can unlock later from Platform / support.'
+    );
+    if (!ok) return;
+
+    setSavingEvent(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const { error } = await supabase
+        .from('tournaments')
+        .update({
+          is_locked: true,
+          locked_at: new Date().toISOString(),
+          locked_by: user?.id ?? null,
+        })
+        .eq('id', parseInt(eventId));
+
+      if (error) {
+        alert(error.message);
+        return;
+      }
+
+      setEvent((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              is_locked: true,
+              locked_at: new Date().toISOString(),
+              locked_by: user?.id ?? null,
+            }
+          : prev
+      );
+    } finally {
+      setSavingEvent(false);
+    }
+  };
 
   const headerTeeTime = selectedRound
     ? formatRoundTime(selectedRound.start_time)
@@ -522,17 +565,40 @@ export default function EventLeaderboardPage() {
           ← Back
         </button>
 
-        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
+                <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
           <div>
-            <h1 className="text-4xl font-bold">{event?.name}</h1>
+            <div className="flex flex-wrap items-center gap-3 mb-1">
+              <h1 className="text-4xl font-bold">{event?.name}</h1>
+              {event?.is_locked && (
+                <span className="text-xs px-3 py-1 rounded-full bg-emerald-900/50 text-emerald-400 border border-emerald-500/40">
+                  Saved
+                </span>
+              )}
+            </div>
             <p className="text-gray-400 mt-1">
-              Leaderboard · {event?.course || 'No course'} · Live standings
+              Leaderboard · {event?.course || 'No course'} ·{' '}
+              {event?.is_locked ? 'Final results' : 'Live standings'}
               {headerTeeTime ? ` · ${headerTeeTime}` : ''}
             </p>
             {selectedRound && (
               <p className="text-sm text-teal-400 mt-1">
                 Round: {selectedRound.name}
                 {headerTeeTime ? ` (${headerTeeTime})` : ''}
+              </p>
+            )}
+            {isAdmin && !event?.is_locked && (
+              <button
+                type="button"
+                onClick={saveEvent}
+                disabled={savingEvent}
+                className="mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 px-5 py-2.5 rounded-2xl text-sm font-semibold"
+              >
+                {savingEvent ? 'Saving…' : 'Save Event'}
+              </button>
+            )}
+            {isAdmin && event?.is_locked && (
+              <p className="mt-3 text-sm text-gray-500">
+                Event is saved. Contact support or use Platform to unlock.
               </p>
             )}
           </div>

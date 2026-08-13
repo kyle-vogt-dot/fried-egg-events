@@ -1,20 +1,17 @@
 import Link from 'next/link';
+import BackButton from '../components/BackButton';
 
 export const metadata = {
   title: 'Fee Policy | Fried Egg Events',
-  description: 'Platform fees, organizer payouts, and payment processing for Fried Egg Events.',
+  description:
+    'Platform fees, organizer payouts, and payment processing for Fried Egg Events.',
 };
 
 export default function FeePolicyPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       <div className="max-w-3xl mx-auto px-6 py-12 md:py-16">
-        <Link
-          href="/"
-          className="text-gray-400 hover:text-white text-sm mb-8 inline-block"
-        >
-          ← Back
-        </Link>
+        <BackButton />
 
         <h1 className="text-4xl font-bold mb-2">Fee Policy</h1>
         <p className="text-gray-400 mb-10">
@@ -209,9 +206,6 @@ export default function FeePolicyPage() {
               >
                 support@friedeggevents.app
               </a>
-            </p>
-            <p className="mt-2 text-sm text-gray-500">
-              Update this email if you use a different support address.
             </p>
           </section>
         </div>
