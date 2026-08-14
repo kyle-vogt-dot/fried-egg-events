@@ -889,31 +889,54 @@ const openDetail = async (id: number) => {
     {(() => {
       const maxTeam = selectedItem.event.max_teammates || 4;
 
-      // One card per registration the user has (each can be a different team/round)
-      return selectedItem.regs.map((myReg: any) => {
-        const teamName = myReg.team_name || 'Individual';
+      // One card per (team + round) so same team name on different rounds stays separate
+      const cards: {
+        teamName: string;
+        roundId: number;
+        regId: number;
+      }[] = [];
 
+      for (const myReg of selectedItem.regs) {
+        const teamName = myReg.team_name || 'Individual';
         const roundIds: number[] = Array.isArray(myReg.selected_round_ids)
           ? myReg.selected_round_ids.map(Number)
           : myReg.round_id
             ? [Number(myReg.round_id)]
             : [];
 
-        const teamRounds = rounds.filter((r) =>
-          roundIds.includes(Number(r.id))
-        );
+        if (roundIds.length === 0) {
+          cards.push({ teamName, roundId: 0, regId: myReg.id });
+        } else {
+          for (const rid of roundIds) {
+            if (
+              !cards.some(
+                (c) => c.teamName === teamName && c.roundId === rid
+              )
+            ) {
+              cards.push({ teamName, roundId: rid, regId: myReg.id });
+            }
+          }
+        }
+      }
 
-        // Roster = people on this team who share at least one of these rounds
+      return cards.map((card) => {
+        const teamRounds = card.roundId
+          ? rounds.filter((r) => Number(r.id) === card.roundId)
+          : [];
+
+        // ONLY people on this team for THIS specific round
         const teammates = teamRoster.filter((r) => {
-          if ((r.team_name || 'Individual') !== teamName) return false;
-          if (roundIds.length === 0) return true;
+          if ((r.team_name || 'Individual') !== card.teamName) return false;
+          if (!card.roundId) return true;
+
           const ids: number[] = Array.isArray(r.selected_round_ids)
             ? r.selected_round_ids.map(Number)
             : r.round_id
               ? [Number(r.round_id)]
               : [];
-          if (ids.length === 0) return true; // treat as on all rounds
-          return ids.some((id) => roundIds.includes(id));
+
+          if (ids.length === 0) return false;
+          return ids.includes(card.roundId);
         });
 
         const spotsLeft = Math.max(0, maxTeam - teammates.length);
@@ -938,10 +961,9 @@ const openDetail = async (id: number) => {
 
         return (
           <div
-            key={myReg.id}
+            key={`${card.teamName}-${card.roundId}-${card.regId}`}
             className="bg-gray-900 rounded-2xl p-4 border border-gray-700"
           >
-            {/* Round(s) first, then team name */}
             <div className="mb-3">
               {teamRounds.length > 0 ? (
                 <p className="text-xs text-teal-400 mb-1">
@@ -953,7 +975,7 @@ const openDetail = async (id: number) => {
                     .join('  ·  ')}
                 </p>
               ) : null}
-              <p className="font-medium text-emerald-400">{teamName}</p>
+              <p className="font-medium text-emerald-400">{card.teamName}</p>
             </div>
 
             <ul className="space-y-2">
@@ -993,16 +1015,16 @@ const openDetail = async (id: number) => {
             {spotsLeft > 0 && !selectedItem.isLocked && (
               <button
                 type="button"
-onClick={() => {
-  setAddPlayersContext({
-    teamName,
-    selectedRoundIds: roundIds,
-    regId: myReg.id,
-  });
-  setAddPlayersOpen(true);
-  setNewPlayers([{ name: '', email: '' }]);
-  clearDiscount();
-}}
+                onClick={() => {
+                  setAddPlayersContext({
+                    teamName: card.teamName,
+                    selectedRoundIds: card.roundId ? [card.roundId] : [],
+                    regId: card.regId,
+                  });
+                  setAddPlayersOpen(true);
+                  setNewPlayers([{ name: '', email: '' }]);
+                  clearDiscount();
+                }}
                 className="w-full mt-3 py-3 rounded-xl border border-dashed border-gray-600 text-gray-300 hover:text-white text-sm"
               >
                 + Add teammates ({spotsLeft} open)
