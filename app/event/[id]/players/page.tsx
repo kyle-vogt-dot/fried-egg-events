@@ -20,7 +20,6 @@ function getPairingForRound(
   player: any,
   roundId: number | 'all'
 ): { hole: number | null; slot: string | null; label: string } {
-  // Specific round → use round_pairings JSON
   if (roundId !== 'all') {
     const map = player.round_pairings || {};
     const entry = map[String(roundId)] || map[roundId as number];
@@ -34,7 +33,6 @@ function getPairingForRound(
     return { hole: null, slot: null, label: '—' };
   }
 
-  // "All rounds" → flat fields, else first round_pairings entry
   if (player.pairing_hole && player.pairing_slot) {
     return {
       hole: Number(player.pairing_hole),
@@ -66,9 +64,9 @@ function countTeams(regs: any[]) {
 }
 
 export default function RegisteredPlayersPage() {
-  const params = useParams();
   const router = useRouter();
-  const eventId = params.id as string;
+  const params = useParams<{ id: string }>();
+  const eventId = params.id;
 
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
@@ -109,10 +107,15 @@ export default function RegisteredPlayersPage() {
         .from('event_registrations')
         .select('*')
         .eq('event_id', id)
-        .eq('paid', true)
         .order('created_at', { ascending: true });
 
-      setRegistrations(regData || []);
+      const isListableReg = (r: any) => {
+        if (r.paid === true) return true;
+        const m = String(r.payment_method || '').toLowerCase();
+        return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
+      };
+
+      setRegistrations((regData || []).filter(isListableReg));
       setLoading(false);
     };
 
@@ -150,7 +153,7 @@ export default function RegisteredPlayersPage() {
     return Object.entries(grouped).sort(([, aPlayers], [, bPlayers]) => {
       const a = getPairingForRound(aPlayers[0], selectedRoundId);
       const b = getPairingForRound(bPlayers[0], selectedRoundId);
-      
+
       const aHole = a.hole ?? 999;
       const bHole = b.hole ?? 999;
       if (aHole !== bHole) return aHole - bHole;
@@ -160,7 +163,7 @@ export default function RegisteredPlayersPage() {
     });
   }, [grouped, selectedRoundId]);
 
-    const teamCount = useMemo(
+  const teamCount = useMemo(
     () => countTeams(filteredRegistrations),
     [filteredRegistrations]
   );
@@ -198,7 +201,7 @@ export default function RegisteredPlayersPage() {
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-10">
           <div>
             <h1 className="text-4xl font-bold">{event.name}</h1>
-                        <p className="text-gray-400 mt-2">
+            <p className="text-gray-400 mt-2">
               Registered Players ({filteredRegistrations.length}
               {selectedRoundId !== 'all' ? ' in this round' : ''}
               {teamCount > 0

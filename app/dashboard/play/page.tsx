@@ -137,6 +137,20 @@ export default function MyEventsPage() {
   const [lbLoading, setLbLoading] = useState(false);
   const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
 
+  const [teamRoster, setTeamRoster] = useState<any[]>([]);
+const [platformFee, setPlatformFee] = useState(3);
+const [addPlayersOpen, setAddPlayersOpen] = useState(false);
+const [addPlayersContext, setAddPlayersContext] = useState<{
+  teamName: string;
+  selectedRoundIds: number[];
+  regId: number;
+} | null>(null);
+const [newPlayers, setNewPlayers] = useState<{ name: string; email: string }[]>([]);
+const [discountCode, setDiscountCode] = useState('');
+const [appliedDiscount, setAppliedDiscount] = useState<any>(null);
+const [discountError, setDiscountError] = useState('');
+const [submitting, setSubmitting] = useState(false);
+
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -155,25 +169,30 @@ export default function MyEventsPage() {
       }
       setCurrentUser(user);
 
-      const { data: regs } = await supabase
-        .from('event_registrations')
-        .select('*')
-        .or(`user_id.eq.${user.id},player_email.eq.${user.email}`)
-        .eq('paid', true);
+const { data: regs } = await supabase
+  .from('event_registrations')
+  .select('*')
+  .or(`user_id.eq.${user.id},player_email.eq.${user.email}`);
 
-      const userRegs = regs || [];
-      setRegistrations(userRegs);
+const isListable = (r: any) => {
+  if (r.paid === true) return true;
+  const m = String(r.payment_method || '').toLowerCase();
+  return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
+};
 
-      if (userRegs.length === 0) {
-        setEvents([]);
-        setRounds([]);
-        setLoading(false);
-        return;
-      }
+const userRegs = (regs || []).filter(isListable);
+setRegistrations(userRegs);
 
-      const eventIds = [
-        ...new Set(userRegs.map((r: any) => r.event_id).filter(Boolean)),
-      ];
+if (userRegs.length === 0) {
+  setEvents([]);
+  setRounds([]);
+  setLoading(false);
+  return;
+}
+
+const eventIds = [
+  ...new Set(userRegs.map((r: any) => r.event_id).filter(Boolean)),
+];
 
       const { data: eventRows } = await supabase
         .from('tournaments')
@@ -372,11 +391,228 @@ export default function MyEventsPage() {
     await loadLeaderboardRows(event, firstRoundId);
     setLbLoading(false);
   };
+  const isValidEmail = (email: string) => {
+  const cleaned = (email || '').trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned);
+};
 
-  const openDetail = (id: number) => {
-    setSelectedId(id);
-    setDetailTab('details');
+const applyDiscountCode = async () => {
+  if (!discountCode.trim() || !selectedItem) {
+    setDiscountError('Enter a code');
+    return;
+  }
+  setDiscountError('');
+  try {
+    const price = Number(selectedItem.event.price) || 0;
+    const basePerPlayer = price + platformFee;
+
+    const res = await fetch('/api/discount-codes/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code: discountCode.trim(),
+        eventId: selectedItem.event.id,
+        baseAmount: basePerPlayer,
+      }),
+    });
+    const data = await res.json();
+    if (!data.valid) {
+      setAppliedDiscount(null);
+      setDiscountError(data.error || 'Invalid code');
+      return;
+    }
+    setAppliedDiscount(data);
+  } catch {
+    setDiscountError('Could not validate code');
+    setAppliedDiscount(null);
+  }
+};
+
+const clearDiscount = () => {
+  setAppliedDiscount(null);
+  setDiscountCode('');
+  setDiscountError('');
+};
+
+const handleAddTeammatesCheckout = async () => {
+  if (!selectedItem || !currentUser) return;
+  
+
+  if (!addPlayersContext) {
+    alert('No team/round selected — close and tap Add teammates on a specific round');
+    return;
+  }
+
+  const complete = newPlayers.filter(
+    (p) => (p.name || '').trim() && isValidEmail(p.email || '')
+  );
+  if (complete.length === 0) {
+    alert('Enter a name and valid email for at least one player');
+    return;
+  }
+
+  const incomplete = newPlayers.some(
+    (p) =>
+      ((p.name || '').trim() || (p.email || '').trim()) &&
+      (!(p.name || '').trim() || !isValidEmail(p.email || ''))
+  );
+  if (incomplete) {
+    alert('Fill in name and a valid email for every player, or remove empty rows');
+    return;
+  }
+
+  const teamName = addPlayersContext.teamName;
+  const selectedRoundIds = addPlayersContext.selectedRoundIds;
+
+  const isPerRound =
+    (selectedItem.event.pricing_mode || 'event') === 'per_round';
+
+  let basePerPlayer = 0;
+  if (isPerRound) {
+    basePerPlayer = selectedRoundIds.reduce((sum, id) => {
+      const round = rounds.find((r) => Number(r.id) === Number(id));
+      return sum + (Number(round?.price) || 0) + platformFee;
+    }, 0);
+  } else {
+    basePerPlayer =
+      (Number(selectedItem.event.price) || 0) + platformFee;
+  }
+
+  const discountPer = appliedDiscount
+    ? Number(appliedDiscount.amount_saved) || 0
+    : 0;
+  const perPlayer = Math.max(0, basePerPlayer - discountPer);
+  const totalCost = perPlayer * complete.length;
+
+  setSubmitting(true);
+  try {
+    const regRows = complete.map((p) => ({
+      event_id: selectedItem.event.id,
+      user_id: null,
+      player_name: p.name.trim(),
+      player_email: p.email.trim().toLowerCase(),
+      team_name: teamName,
+      paid: false,
+      checked_in: false,
+      addons_selected: {},
+      selected_round_ids: selectedRoundIds,
+      discount_code: appliedDiscount?.code || null,
+      discount_amount: appliedDiscount?.amount_saved || 0,
+    }));
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from('event_registrations')
+      .insert(regRows)
+      .select('id');
+
+    if (insertErr || !inserted?.length) {
+      throw new Error(insertErr?.message || 'Could not create registrations');
+    }
+
+    const registrationIds = inserted.map((r: any) => r.id);
+    const draftKey = `registration_draft_${selectedItem.event.id}`;
+
+    sessionStorage.setItem(
+      draftKey,
+      JSON.stringify({
+        eventId: selectedItem.event.id,
+        mode: 'join',
+        isIndividual: false,
+        isOrganizerOnly: true,
+        teamName,
+        selected_round_ids: selectedRoundIds,
+        players: complete.map((p) => ({
+          player_name: p.name.trim(),
+          player_email: p.email.trim().toLowerCase(),
+          user_id: null,
+        })),
+        totalCost,
+        registration_ids: registrationIds,
+        discount: appliedDiscount
+          ? {
+              code: appliedDiscount.code,
+              discount_code_id: appliedDiscount.discount_code_id,
+              amount_saved: appliedDiscount.amount_saved,
+            }
+          : null,
+        sendReceipt: false,
+        receiptName: '',
+        receiptEmail: '',
+      })
+    );
+
+    const baseUrl =
+      process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+
+    const res = await fetch('/api/create-checkout-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: totalCost,
+        player_name: complete[0].name.trim(),
+        email: currentUser.email,
+        description: `Add teammates – ${selectedItem.event.name}`,
+        event_name: selectedItem.event.name,
+        event_id: selectedItem.event.id,
+        type: 'registration',
+        registration_id: registrationIds[0],
+        registration_ids: registrationIds.join(','),
+        success_url: `${baseUrl}/event/${selectedItem.event.id}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}&registration_ids=${registrationIds.join(',')}`,
+        cancel_url: `${baseUrl}/dashboard/play?payment=cancelled`,
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.url) {
+      await supabase
+        .from('event_registrations')
+        .delete()
+        .in('id', registrationIds);
+      throw new Error(data.error || 'Checkout failed');
+    }
+
+    window.location.href = data.url;
+  } catch (e: any) {
+    console.error(e);
+    alert(e.message || 'Could not start checkout');
+  } finally {
+    setSubmitting(false);
+  }
+};
+
+
+const openDetail = async (id: number) => {
+  setSelectedId(id);
+  setDetailTab('details');
+  setAddPlayersOpen(false);
+  setNewPlayers([]);
+  setAppliedDiscount(null);
+  setDiscountCode('');
+  setDiscountError('');
+
+  const { data: allRegs } = await supabase
+    .from('event_registrations')
+    .select('*')
+    .eq('event_id', id)
+    .order('created_at', { ascending: true });
+
+  const isListable = (r: any) => {
+    if (r.paid === true) return true;
+    const m = String(r.payment_method || '').toLowerCase();
+    return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
   };
+
+  setTeamRoster((allRegs || []).filter(isListable));
+
+  const { data: feeData } = await supabase
+    .from('platform_settings')
+    .select('platform_fee')
+    .eq('id', 1)
+    .single();
+  if (feeData?.platform_fee != null) {
+    setPlatformFee(Number(feeData.platform_fee));
+  }
+};
 
   if (loading) {
     return (
@@ -648,89 +884,175 @@ export default function MyEventsPage() {
                 </button>
               </div>
 
-              {detailTab === 'details' && (
-                <div className="space-y-4">
-                  {selectedItem.regs.map((reg: any) => {
-                    const roundNames = getRoundNames(reg);
-                    const eventRounds = rounds.filter((r) =>
-                      (reg.selected_round_ids || []).map(String).includes(String(r.id))
-                    );
-                    return (
-                      <div
-                        key={reg.id}
-                        className="bg-gray-900 rounded-2xl p-4 border border-gray-700"
-                      >
-                        {reg.team_name && (
-                          <p className="font-medium text-emerald-400 mb-1">
-                            {reg.team_name}
-                          </p>
-                        )}
-                        <p className="text-sm text-gray-300">
-                          {reg.player_name}
-                          {reg.paid ? (
-                            <span className="text-gray-500"> · Paid</span>
-                          ) : null}
-                        </p>
-                        {roundNames.length > 0 && (
-                          <p className="text-sm text-gray-500 mt-1">
-                            {roundNames.join(', ')}
-                          </p>
-                        )}
-                        {eventRounds.map((r) => {
-                          const t = formatRoundTime(r.start_time);
-                          return (
-                            <p key={r.id} className="text-xs text-teal-400 mt-0.5">
-                              {r.name}
-                              {t ? ` · ${t}` : ''}
-                            </p>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
+{detailTab === 'details' && selectedItem && (
+  <div className="space-y-5">
+    {(() => {
+      const maxTeam = selectedItem.event.max_teammates || 4;
 
-                  <div className="flex flex-col gap-3 pt-2">
-                    <Link
-                      href={`/event/${selectedItem.event.id}`}
-                      className="px-5 py-3 rounded-2xl bg-gray-700 hover:bg-gray-600 text-center font-medium text-sm"
-                    >
-                      Event page / add players
-                    </Link>
-                    {(selectedItem.isLocked ||
-                      (selectedItem.event.date || '').slice(0, 10) < today ||
-                      selectedItem.isCheckedIn) && (
-                      <button
-                        type="button"
-                        onClick={() => openLeaderboard(selectedItem.event)}
-                        className="px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-center font-medium text-sm"
-                      >
-                        Leaderboard
-                      </button>
-                    )}
-                    {selectedItem.isCheckedIn &&
-                      !selectedItem.isLocked &&
-                      (selectedItem.event.date || '').slice(0, 10) === today && (
-                        <Link
-                          href={`/event/${selectedItem.event.id}/live${
-                            selectedItem.regs.find((r: any) => r.team_name)
-                              ?.team_name
-                              ? `?team=${encodeURIComponent(
-                                  String(
-                                    selectedItem.regs.find(
-                                      (r: any) => r.team_name
-                                    )?.team_name
-                                  )
-                                )}`
-                              : ''
-                          }`}
-                          className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-center font-medium text-sm"
-                        >
-                          Live Scoring
-                        </Link>
+      // One card per registration the user has (each can be a different team/round)
+      return selectedItem.regs.map((myReg: any) => {
+        const teamName = myReg.team_name || 'Individual';
+
+        const roundIds: number[] = Array.isArray(myReg.selected_round_ids)
+          ? myReg.selected_round_ids.map(Number)
+          : myReg.round_id
+            ? [Number(myReg.round_id)]
+            : [];
+
+        const teamRounds = rounds.filter((r) =>
+          roundIds.includes(Number(r.id))
+        );
+
+        // Roster = people on this team who share at least one of these rounds
+        const teammates = teamRoster.filter((r) => {
+          if ((r.team_name || 'Individual') !== teamName) return false;
+          if (roundIds.length === 0) return true;
+          const ids: number[] = Array.isArray(r.selected_round_ids)
+            ? r.selected_round_ids.map(Number)
+            : r.round_id
+              ? [Number(r.round_id)]
+              : [];
+          if (ids.length === 0) return true; // treat as on all rounds
+          return ids.some((id) => roundIds.includes(id));
+        });
+
+        const spotsLeft = Math.max(0, maxTeam - teammates.length);
+
+        const sortedTeammates = [...teammates].sort((a, b) => {
+          const aIsYou =
+            a.user_id === currentUser?.id ||
+            (a.player_email &&
+              currentUser?.email &&
+              String(a.player_email).toLowerCase() ===
+                String(currentUser.email).toLowerCase());
+          const bIsYou =
+            b.user_id === currentUser?.id ||
+            (b.player_email &&
+              currentUser?.email &&
+              String(b.player_email).toLowerCase() ===
+                String(currentUser.email).toLowerCase());
+          if (aIsYou && !bIsYou) return -1;
+          if (!aIsYou && bIsYou) return 1;
+          return 0;
+        });
+
+        return (
+          <div
+            key={myReg.id}
+            className="bg-gray-900 rounded-2xl p-4 border border-gray-700"
+          >
+            {/* Round(s) first, then team name */}
+            <div className="mb-3">
+              {teamRounds.length > 0 ? (
+                <p className="text-xs text-teal-400 mb-1">
+                  {teamRounds
+                    .map((r) => {
+                      const t = formatRoundTime(r.start_time);
+                      return `${r.name}${t ? ` · ${t}` : ''}`;
+                    })
+                    .join('  ·  ')}
+                </p>
+              ) : null}
+              <p className="font-medium text-emerald-400">{teamName}</p>
+            </div>
+
+            <ul className="space-y-2">
+              {sortedTeammates.map((m) => {
+                const isYou =
+                  m.user_id === currentUser?.id ||
+                  (m.player_email &&
+                    currentUser?.email &&
+                    String(m.player_email).toLowerCase() ===
+                      String(currentUser.email).toLowerCase());
+                return (
+                  <li
+                    key={m.id}
+                    className="flex justify-between text-sm bg-gray-800 rounded-xl px-3 py-2"
+                  >
+                    <span>
+                      {m.player_name || 'Player'}
+                      {isYou && (
+                        <span className="text-emerald-400 text-xs ml-2">
+                          (you)
+                        </span>
                       )}
-                  </div>
-                </div>
-              )}
+                    </span>
+                    <span className="text-gray-500 text-xs">
+                      {m.paid ? 'Paid' : m.payment_method || 'Comp'}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+
+            <p className="text-xs text-gray-500 mt-3">
+              {teammates.length}/{maxTeam}
+              {spotsLeft > 0 ? ` · ${spotsLeft} open` : ' · Full'}
+            </p>
+
+            {spotsLeft > 0 && !selectedItem.isLocked && (
+              <button
+                type="button"
+onClick={() => {
+  setAddPlayersContext({
+    teamName,
+    selectedRoundIds: roundIds,
+    regId: myReg.id,
+  });
+  setAddPlayersOpen(true);
+  setNewPlayers([{ name: '', email: '' }]);
+  clearDiscount();
+}}
+                className="w-full mt-3 py-3 rounded-xl border border-dashed border-gray-600 text-gray-300 hover:text-white text-sm"
+              >
+                + Add teammates ({spotsLeft} open)
+              </button>
+            )}
+          </div>
+        );
+      });
+    })()}
+
+    <div className="flex flex-col gap-3 pt-1">
+      <Link
+        href={`/event/${selectedItem.event.id}`}
+        className="px-5 py-3 rounded-2xl bg-gray-700 hover:bg-gray-600 text-center font-medium text-sm"
+      >
+        Full event page
+      </Link>
+      {(selectedItem.isLocked ||
+        (selectedItem.event.date || '').slice(0, 10) < today ||
+        selectedItem.isCheckedIn) && (
+        <button
+          type="button"
+          onClick={() => openLeaderboard(selectedItem.event)}
+          className="px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-center font-medium text-sm"
+        >
+          Leaderboard
+        </button>
+      )}
+      {selectedItem.isCheckedIn &&
+        !selectedItem.isLocked &&
+        (selectedItem.event.date || '').slice(0, 10) === today && (
+          <Link
+            href={`/event/${selectedItem.event.id}/live${
+              selectedItem.regs.find((r: any) => r.team_name)?.team_name
+                ? `?team=${encodeURIComponent(
+                    String(
+                      selectedItem.regs.find((r: any) => r.team_name)
+                        ?.team_name
+                    )
+                  )}`
+                : ''
+            }`}
+            className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-center font-medium text-sm"
+          >
+            Live Scoring
+          </Link>
+        )}
+    </div>
+  </div>
+)}
 
               {detailTab === 'invite' && (
                 <div className="text-center space-y-4">
@@ -1072,6 +1394,194 @@ export default function MyEventsPage() {
           </div>
         </div>
       )}
+{addPlayersOpen && selectedItem && (
+  <div className="fixed inset-0 z-[70] bg-black/90 flex items-center justify-center p-4">
+    <div className="bg-gray-800 rounded-3xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6">
+      <h3 className="text-xl font-bold mb-1">Add teammates</h3>
+      <p className="text-sm text-gray-400 mb-5">
+        {addPlayersContext ? (
+  <>
+    {addPlayersContext.teamName}
+    {addPlayersContext.selectedRoundIds.length > 0 && (
+      <span className="text-teal-400">
+        {' · '}
+        {addPlayersContext.selectedRoundIds
+          .map((id) => {
+            const r = rounds.find((x) => Number(x.id) === Number(id));
+            if (!r) return '';
+            const t = formatRoundTime(r.start_time);
+            return `${r.name}${t ? ` ${t}` : ''}`;
+          })
+          .filter(Boolean)
+          .join(', ')}
+      </span>
+    )}
+  </>
+) : (
+  'Your team'
+)}
+      </p>
+
+      {newPlayers.map((p, i) => (
+        <div key={i} className="bg-gray-900 rounded-2xl p-4 mb-3 space-y-3">
+          <div className="flex justify-between">
+            <span className="text-sm text-gray-400">New player {i + 1}</span>
+            {newPlayers.length > 1 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setNewPlayers(newPlayers.filter((_, j) => j !== i))
+                }
+                className="text-red-400 text-sm"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          <input
+            value={p.name}
+            onChange={(e) => {
+              const next = [...newPlayers];
+              next[i] = { ...next[i], name: e.target.value };
+              setNewPlayers(next);
+            }}
+            placeholder="Full name"
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
+          />
+          <input
+            type="email"
+            value={p.email}
+            onChange={(e) => {
+              const next = [...newPlayers];
+              next[i] = { ...next[i], email: e.target.value };
+              setNewPlayers(next);
+            }}
+            placeholder="Email"
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3"
+          />
+        </div>
+      ))}
+
+      <button
+        type="button"
+        onClick={() =>
+          setNewPlayers([...newPlayers, { name: '', email: '' }])
+        }
+        className="w-full py-3 border border-dashed border-gray-600 rounded-xl text-gray-400 text-sm mb-4"
+      >
+        + Another player
+      </button>
+
+      <div className="bg-gray-900 rounded-2xl p-4 mb-4">
+        <label className="block text-sm text-gray-400 mb-2">
+          Discount code
+        </label>
+        {appliedDiscount ? (
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium text-emerald-400">
+                {appliedDiscount.code} applied
+              </p>
+              <p className="text-sm text-gray-400">
+                −${Number(appliedDiscount.amount_saved).toFixed(2)} per player
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearDiscount}
+              className="text-sm text-red-400"
+            >
+              Remove
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              value={discountCode}
+              onChange={(e) =>
+                setDiscountCode(e.target.value.toUpperCase())
+              }
+              placeholder="Enter code"
+              className="flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
+            />
+            <button
+              type="button"
+              onClick={applyDiscountCode}
+              className="bg-teal-600 hover:bg-teal-700 px-4 py-3 rounded-xl font-medium"
+            >
+              Apply
+            </button>
+          </div>
+        )}
+        {discountError && (
+          <p className="text-red-400 text-sm mt-2">{discountError}</p>
+        )}
+      </div>
+
+      {(() => {
+        const complete = newPlayers.filter(
+          (p) => (p.name || '').trim() && isValidEmail(p.email || '')
+        );
+
+        const isPerRound =
+          (selectedItem.event.pricing_mode || 'event') === 'per_round';
+
+        let basePerPlayer = 0;
+        if (isPerRound) {
+          const ids = addPlayersContext?.selectedRoundIds || [];
+          basePerPlayer = ids.reduce((sum, id) => {
+            const round = rounds.find((r) => Number(r.id) === Number(id));
+            return sum + (Number(round?.price) || 0) + platformFee;
+          }, 0);
+        } else {
+          basePerPlayer =
+            (Number(selectedItem.event.price) || 0) + platformFee;
+        }
+
+        const discountPer = appliedDiscount
+          ? Number(appliedDiscount.amount_saved) || 0
+          : 0;
+        const total =
+          Math.max(0, basePerPlayer - discountPer) * complete.length;
+
+        return (
+          <p className="text-center text-lg font-semibold mb-4">
+            Total: ${total.toFixed(2)}
+            {complete.length > 0 && (
+              <span className="text-sm text-gray-400 font-normal">
+                {' '}
+                ({complete.length} player
+                {complete.length !== 1 ? 's' : ''})
+              </span>
+            )}
+          </p>
+        );
+      })()}
+
+      <button
+        type="button"
+        disabled={submitting}
+        onClick={handleAddTeammatesCheckout}
+        className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
+      >
+        {submitting ? 'Processing…' : 'Register & pay'}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => {
+          setAddPlayersOpen(false);
+          setNewPlayers([]);
+          setAddPlayersContext(null);
+          clearDiscount();
+        }}
+        className="w-full mt-3 py-3 text-gray-400"
+      >
+        Cancel
+      </button>
+    </div>
+  </div>
+)}
     </div>
   );
 }

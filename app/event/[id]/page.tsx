@@ -351,6 +351,24 @@ const [waitlistDone, setWaitlistDone] = useState(false);
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned);
   };
 
+  const isListableReg = (r: any) => {
+  if (r.paid === true) return true;
+  const m = String(r.payment_method || '').toLowerCase();
+  if (['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m)) {
+    return true;
+  }
+  return false;
+};
+
+      const getPlayerName = (user: any) => {
+    return (
+      user?.user_metadata?.full_name ||
+      user?.user_metadata?.name ||
+      user?.email?.split('@')[0] ||
+      'Player'
+    );
+  };
+
  const fetchData = async () => {
   setLoading(true);
 
@@ -376,6 +394,8 @@ const [waitlistDone, setWaitlistDone] = useState(false);
     .order('sort_order', { ascending: true });
 
   setRounds(roundsData || []);
+
+  
 
   const { data: feeData } = await supabase
     .from('platform_settings')
@@ -445,6 +465,7 @@ useEffect(() => {
     }
   }, [appliedDiscount]);
 
+
   useEffect(() => {
   if (!currentUser) return;
   const n = getPlayerName(currentUser) || '';
@@ -463,15 +484,15 @@ useEffect(() => {
     const perRound = (event?.pricing_mode || 'event') === 'per_round';
     if (perRound) return;
 
-      const already = registrations.some(
-      (r) =>
-        r.paid === true &&
-        (r.user_id === currentUser.id ||
-          (r.player_email &&
-            currentUser.email &&
-            String(r.player_email).toLowerCase() ===
-              String(currentUser.email).toLowerCase()))
-    );
+const already = registrations.some(
+  (r) =>
+    isListableReg(r) &&
+    (r.user_id === currentUser.id ||
+      (r.player_email &&
+        currentUser.email &&
+        String(r.player_email).toLowerCase() ===
+          String(currentUser.email).toLowerCase()))
+);
     if (already) setIsOrganizerOnly(true);
   }, [selectedTeam, mode, currentUser, registrations, event?.pricing_mode]);
 
@@ -482,7 +503,7 @@ useEffect(() => {
     const paymentStatus = searchParams.get('payment');
     if (paymentStatus === 'success') return;
 
-    const cleanupAbandonedCheckout = async () => {
+const cleanupAbandonedCheckout = async () => {
   try {
     const raw = sessionStorage.getItem(draftKey);
     let ids: (string | number)[] = [];
@@ -496,20 +517,57 @@ useEffect(() => {
       data: { user },
     } = await supabase.auth.getUser();
 
+    // Methods we never auto-delete (created from check-in / comp / cash / etc.)
+    const protectedMethods = new Set([
+      'comp',
+      'complimentary',
+      'cash',
+      'manual',
+      'checkin',
+    ]);
+
+    const isProtected = (paymentMethod: any) => {
+      const m = String(paymentMethod || '').toLowerCase();
+      return protectedMethods.has(m);
+    };
+
     if (ids.length > 0) {
-      await supabase
+      // Only delete the specific draft rows that are unpaid AND not protected
+      const { data: rows } = await supabase
         .from('event_registrations')
-        .delete()
+        .select('id, payment_method')
         .in('id', ids)
         .eq('paid', false);
+
+      const idsToDelete = (rows || [])
+        .filter((r) => !isProtected(r.payment_method))
+        .map((r) => r.id);
+
+      if (idsToDelete.length > 0) {
+        await supabase
+          .from('event_registrations')
+          .delete()
+          .in('id', idsToDelete);
+      }
     } else if (user) {
-      // Fallback: wipe unpaid drafts for this user on this event
-      await supabase
+      // Fallback: only wipe true abandoned Stripe drafts for this user
+      const { data: rows } = await supabase
         .from('event_registrations')
-        .delete()
+        .select('id, payment_method')
         .eq('event_id', parseInt(eventId))
         .eq('paid', false)
         .or(`user_id.eq.${user.id},player_email.eq.${user.email}`);
+
+      const idsToDelete = (rows || [])
+        .filter((r) => !isProtected(r.payment_method))
+        .map((r) => r.id);
+
+      if (idsToDelete.length > 0) {
+        await supabase
+          .from('event_registrations')
+          .delete()
+          .in('id', idsToDelete);
+      }
     }
 
     if (raw) {
@@ -540,11 +598,11 @@ useEffect(() => {
   }, [eventId, searchParams, draftKey]);
 
 
-    const myRegistrations = useMemo(() => {
+const myRegistrations = useMemo(() => {
   if (!currentUser) return [];
   return registrations.filter(
     (r) =>
-      r.paid === true &&
+      isListableReg(r) &&
       (r.user_id === currentUser.id ||
         (r.player_email &&
           currentUser.email &&
@@ -695,18 +753,40 @@ const myRegisteredRoundNames = useMemo(() => {
 
         // Remove unpaid rows created before Checkout
         if (ids.length > 0) {
-          const { error: delErr } = await supabase
-            .from('event_registrations')
-            .delete()
-            .in('id', ids)
-            .eq('paid', false);
+  const protectedMethods = new Set([
+    'comp',
+    'complimentary',
+    'cash',
+    'manual',
+    'checkin',
+  ]);
 
-          if (delErr) {
-            console.error('Failed to clean up unpaid regs on cancel:', delErr);
-          } else {
-            await fetchData(); // refresh counts / sold out
-          }
-        }
+  const { data: rows } = await supabase
+    .from('event_registrations')
+    .select('id, payment_method')
+    .in('id', ids)
+    .eq('paid', false);
+
+  const idsToDelete = (rows || [])
+    .filter((r) => {
+      const m = String(r.payment_method || '').toLowerCase();
+      return !protectedMethods.has(m);
+    })
+    .map((r) => r.id);
+
+  if (idsToDelete.length > 0) {
+    const { error: delErr } = await supabase
+      .from('event_registrations')
+      .delete()
+      .in('id', idsToDelete);
+
+    if (delErr) {
+      console.error('Failed to clean up unpaid regs on cancel:', delErr);
+    } else {
+      await fetchData();
+    }
+  }
+}
         
 
         // Restore form so they can try again
@@ -791,11 +871,14 @@ const myRegisteredRoundNames = useMemo(() => {
     // ---------- Registration payment success ----------
     if (paymentStatus === 'success' && type === 'registration') {
       if (typeof window !== 'undefined') {
-        if (sessionStorage.getItem(paymentHandledKey) === '1') {
-          return;
-        }
-        sessionStorage.setItem(paymentHandledKey, '1');
-      }
+  const sessionId = searchParams.get('session_id') || 'unknown';
+  const handledKey = `payment_handled_${eventId}_${sessionId}`;
+
+  if (sessionStorage.getItem(handledKey) === '1') {
+    return;
+  }
+  sessionStorage.setItem(handledKey, '1');
+}
 
       const handleRegistrationSuccess = async () => {
         const {
@@ -813,13 +896,21 @@ const myRegisteredRoundNames = useMemo(() => {
 
         const raw = sessionStorage.getItem(draftKey);
 
-        // receipt prefs (survive Stripe redirect via draft)
+        // receipt prefs
         let receiptSend = false;
         let receiptTo = '';
         let receiptToName = '';
+        let draft: any = null;
 
         if (raw) {
-          const draft = JSON.parse(raw);
+          try {
+            draft = JSON.parse(raw);
+          } catch {
+            draft = null;
+          }
+        }
+
+        if (draft) {
           checkoutNetAmount =
             draft.totalCost != null ? Number(draft.totalCost) : null;
           draftDiscount = draft.discount || null;
@@ -841,17 +932,23 @@ const myRegisteredRoundNames = useMemo(() => {
               receiptEmail: draft.receiptEmail || '',
             })
           );
+        }
 
-          const ids: string[] = (draft.registration_ids || []).map(String);
+        // Prefer draft ids, then URL ids (My Events add-teammates)
+        let ids: string[] = (draft?.registration_ids || []).map(String);
 
-          if (!ids.length) {
-            alert(
-              'Payment succeeded but registration ids were missing. Contact support if you were charged.'
-            );
-            return;
+        if (!ids.length) {
+          const fromUrl = searchParams.get('registration_ids');
+          if (fromUrl) {
+            ids = fromUrl
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean);
           }
+        }
 
-          // Rows were created unpaid before Checkout — mark them paid (no second insert)
+        if (ids.length > 0) {
+          // Mark unpaid draft rows paid (main registration + add-teammates)
           const { data: updated, error: updateErr } = await supabase
             .from('event_registrations')
             .update({ paid: true, payment_method: 'card' })
@@ -866,7 +963,9 @@ const myRegisteredRoundNames = useMemo(() => {
             return;
           }
 
-          sessionStorage.removeItem(draftKey);
+          if (raw) {
+            sessionStorage.removeItem(draftKey);
+          }
 
           myReg =
             (updated || []).find((r: any) => r.user_id === user.id) ||
@@ -892,7 +991,7 @@ const myRegisteredRoundNames = useMemo(() => {
             }
           }
 
-          // ---------- Redeem the discount code ----------
+          // Redeem discount if present
           if (draftDiscount && paidThisCheckout.length > 0) {
             const primary =
               paidThisCheckout.find((r: any) => r.user_id === user.id) ||
@@ -916,6 +1015,7 @@ const myRegisteredRoundNames = useMemo(() => {
             }
           }
         } else {
+          // Legacy fallback: no ids in draft or URL
           const lastRaw = sessionStorage.getItem(lastPaymentKey);
           if (lastRaw) {
             try {
@@ -936,7 +1036,7 @@ const myRegisteredRoundNames = useMemo(() => {
           if (findErr || !regs?.[0]) {
             console.error('Find registration error:', findErr);
             alert(
-              'Payment succeeded but we could not find your registration.'
+              'Payment succeeded but we could not find your registration. Contact support if you were charged.'
             );
             return;
           }
@@ -945,7 +1045,7 @@ const myRegisteredRoundNames = useMemo(() => {
 
           const { error: updateErr } = await supabase
             .from('event_registrations')
-            .update({ paid: true })
+            .update({ paid: true, payment_method: 'card' })
             .eq('id', myReg.id);
 
           if (updateErr) {
@@ -969,6 +1069,7 @@ const myRegisteredRoundNames = useMemo(() => {
         }
 
         setShowSuccessMessage(true);
+          
 
         const { data: refreshed } = await supabase
           .from('event_registrations')
@@ -1025,6 +1126,7 @@ const myRegisteredRoundNames = useMemo(() => {
                   sum +
                   (Number(r.price || 0) + feePerPlayer) * playerCountThisPayment
                 );
+               
               }, 0);
             } else {
               const baseWithFee = (Number(eventData.price) || 0) + feePerPlayer;
@@ -1223,6 +1325,7 @@ const maxPlayers =
 // Per-round: each selected round is a seat (1 person × 3 rounds = 3)
 // Event pricing: 1 seat per registration row
 const registeredCount = registrations.reduce((sum, r) => {
+  if (!isListableReg(r)) return sum;
   if (!isPerRound) return sum + 1;
   const ids: number[] = Array.isArray(r.selected_round_ids)
     ? r.selected_round_ids
@@ -1264,14 +1367,17 @@ const spotsLeft =
     myRegisteredRoundIds.includes(id)
   );
 
+
+
   // Charge yourself only if: event-priced and not registered, OR per-round with at least one NEW round
   const countingSelf = isPerRound
     ? newlySelectedRoundIds.length > 0
     : !isOrganizerOnly && !alreadyRegistered;
+    
 
       const regsForTeamOnSelectedRounds = (team: string) => {
     const teamRegs = registrations.filter(
-      (r) => r.team_name === team && r.paid === true
+      (r) => r.team_name === team && isListableReg(r)
     );
     if (!isPerRound) return teamRegs;
 
@@ -1448,14 +1554,7 @@ const spotsLeft =
     );
   };
 
-  const getPlayerName = (user: any) => {
-    return (
-      user?.user_metadata?.full_name ||
-      user?.user_metadata?.name ||
-      user?.email?.split('@')[0] ||
-      'Player'
-    );
-  };
+
 
     useEffect(() => {
     if (!selectedTeam) return;
@@ -2959,4 +3058,4 @@ const completeAdditional = additionalPlayers.filter(
       )}
     </div>
   );
-}
+  }
