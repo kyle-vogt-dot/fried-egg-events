@@ -1,18 +1,10 @@
 'use client';
-export const dynamic = 'force-dynamic';
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 
 function LoginContent() {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [showForgotDialog, setShowForgotDialog] = useState(false);
-  const [forgotEmail, setForgotEmail] = useState('');
-  const [forgotSent, setForgotSent] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -21,15 +13,35 @@ function LoginContent() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
-  const handleSubmit = async (formData: FormData) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+
+  const [showForgotDialog, setShowForgotDialog] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotError, setForgotError] = useState<string | null>(null);
+
+  const safeRedirect = () => {
+    const raw = searchParams.get('redirect') || '/';
+    // prevent open redirects
+    if (raw.startsWith('/') && !raw.startsWith('//')) return raw;
+    return '/';
+  };
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
     setLoading(true);
     setError(null);
 
-    const email = formData.get('email') as string;
-    const password = formData.get('password') as string;
+    const form = e.currentTarget;
+    const email = (form.elements.namedItem('email') as HTMLInputElement).value;
+    const password = (form.elements.namedItem('password') as HTMLInputElement)
+      .value;
 
     const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
+      email: email.trim(),
       password,
     });
 
@@ -39,23 +51,46 @@ function LoginContent() {
       return;
     }
 
-    const redirectUrl = searchParams.get('redirect') || '/';
-    router.push(redirectUrl);
+    router.push(safeRedirect());
     router.refresh();
   };
 
   const sendResetLink = async () => {
-    if (!forgotEmail) return alert('Please enter your email');
-
-    const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-
-    if (error) {
-      alert(error.message);
-    } else {
-      setForgotSent(true);
+    const email = forgotEmail.trim();
+    if (!email) {
+      setForgotError('Please enter your email');
+      return;
     }
+
+    setForgotLoading(true);
+    setForgotError(null);
+
+    const origin =
+      typeof window !== 'undefined' ? window.location.origin : '';
+
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+      email,
+      {
+        redirectTo: `${origin}/reset-password`,
+      }
+    );
+
+    setForgotLoading(false);
+
+    if (resetError) {
+      setForgotError(resetError.message);
+      return;
+    }
+
+    setForgotSent(true);
+  };
+
+  const closeForgot = () => {
+    setShowForgotDialog(false);
+    setForgotSent(false);
+    setForgotEmail('');
+    setForgotError(null);
+    setForgotLoading(false);
   };
 
   return (
@@ -63,13 +98,16 @@ function LoginContent() {
       <div className="max-w-md w-full bg-gray-800 rounded-3xl p-10">
         <h1 className="text-4xl font-bold text-center mb-8">Log In</h1>
 
-        <form action={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="block text-sm font-medium mb-2">Email Address</label>
+            <label className="block text-sm font-medium mb-2">
+              Email Address
+            </label>
             <input
               name="email"
               type="email"
               required
+              autoComplete="email"
               className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
               placeholder="you@example.com"
             />
@@ -126,7 +164,6 @@ function LoginContent() {
         </p>
       </div>
 
-      {/* Forgot Password Dialog */}
       {showForgotDialog && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-3xl p-8 max-w-md w-full">
@@ -135,37 +172,44 @@ function LoginContent() {
             {!forgotSent ? (
               <>
                 <p className="text-gray-400 mb-6">
-                  Enter your email address and we&apos;ll send you a link to reset
-                  your password.
+                  Enter your email and we&apos;ll send a link to set a new
+                  password.
                 </p>
                 <input
                   type="email"
                   value={forgotEmail}
                   onChange={(e) => setForgotEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-2xl mb-6"
+                  autoComplete="email"
+                  className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-2xl mb-4"
                 />
+                {forgotError && (
+                  <p className="text-red-400 text-sm mb-4">{forgotError}</p>
+                )}
                 <button
+                  type="button"
                   onClick={sendResetLink}
-                  className="w-full py-4 bg-blue-600 hover:bg-blue-700 rounded-2xl font-medium mb-4"
+                  disabled={forgotLoading}
+                  className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-2xl font-medium mb-4"
                 >
-                  Send Reset Link
+                  {forgotLoading ? 'Sending…' : 'Send Reset Link'}
                 </button>
               </>
             ) : (
-              <div className="text-center py-8">
-                <p className="text-green-400 text-2xl mb-4">✅ Check your email!</p>
-                <p className="text-gray-400">We&apos;ve sent you a password reset link.</p>
+              <div className="text-center py-6">
+                <p className="text-green-400 text-xl mb-3">Check your email</p>
+                <p className="text-gray-400 text-sm">
+                  We sent a reset link to{' '}
+                  <span className="text-white">{forgotEmail.trim()}</span>.
+                  Open it on this device to choose a new password.
+                </p>
               </div>
             )}
 
             <button
-              onClick={() => {
-                setShowForgotDialog(false);
-                setForgotSent(false);
-                setForgotEmail('');
-              }}
-              className="w-full mt-4 py-3 text-gray-400 hover:text-white"
+              type="button"
+              onClick={closeForgot}
+              className="w-full mt-2 py-3 text-gray-400 hover:text-white"
             >
               Close
             </button>
@@ -180,8 +224,8 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-gray-900 flex items-center justify-center">
-          Loading...
+        <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+          Loading…
         </div>
       }
     >
