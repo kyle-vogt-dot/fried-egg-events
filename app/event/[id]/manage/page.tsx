@@ -161,21 +161,30 @@ const [adminPerms, setAdminPerms] = useState({
         greens_fee: Number(eventData?.greens_fee) || 0,
       }));
 
-      const isCreator = eventData.created_by === user.id;
+const email = (user.email || '').toLowerCase();
 
-      const { data: adminData } = await supabase
-        .from('event_admins')
-        .select('id')
-        .eq('event_id', parseInt(eventId))
-        .eq('user_id', user.id)
-        .single();
+// Attach user_id if invited by email before they had a profile
+await supabase
+  .from('event_admins')
+  .update({ user_id: user.id })
+  .eq('email', email)
+  .is('user_id', null);
 
-      const isEventAdmin = !!adminData;
-      setIsAdmin(isCreator || isEventAdmin);
+const isCreator = eventData.created_by === user.id;
 
-      if (!isCreator && !isEventAdmin) {
-        setError("You don't have permission to manage this event.");
-      }
+const { data: adminData } = await supabase
+  .from('event_admins')
+  .select('id, permissions')
+  .eq('event_id', parseInt(eventId))
+  .or(`user_id.eq.${user.id},email.eq."${email}"`)
+  .maybeSingle();
+
+const isEventAdmin = !!adminData;
+setIsAdmin(isCreator || isEventAdmin);
+
+if (!isCreator && !isEventAdmin) {
+  setError("You don't have permission to manage this event.");
+}
 
       const { data: addonData } = await supabase
         .from('event_addons')

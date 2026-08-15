@@ -27,7 +27,9 @@ export default function ProfilePage() {
 
   useEffect(() => {
     const fetchProfile = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (!user) {
         router.push('/login');
         return;
@@ -38,28 +40,76 @@ export default function ProfilePage() {
       setEmail(user.email || '');
       setAvatarUrl(user.user_metadata?.avatar_url || '');
 
-      // For created events
-const { data: created } = await supabase
-  .from('tournaments')
-  .select('*')
-  .eq('created_by', user.id)
-  .eq('is_active', true)
-  .order('date', { ascending: false });
+      // Backfill admin rows that were invited by email only
+      if (user.email) {
+        await supabase
+          .from('event_admins')
+          .update({ user_id: user.id })
+          .eq('email', user.email.toLowerCase())
+          .is('user_id', null);
+      }
 
-      /// For registered events (if you have a join)
-const { data: registered } = await supabase
-  .from('event_registrations')
-  .select('*, tournament(*)')
-  .eq('user_id', user.id)
-  .eq('tournament.is_active', true);   // ← Add this if possible
+      // Events I created
+      const { data: created } = await supabase
+        .from('tournaments')
+        .select('*')
+        .eq('created_by', user.id)
+        .order('date', { ascending: false });
+
+      // Events where I'm an admin
+const { data: adminRows, error: adminErr } = await supabase
+  .from('event_admins')
+  .select('event_id, permissions')
+  .or(
+    `user_id.eq.${user.id},email.eq."${(user.email || '').toLowerCase()}"`
+  );
+
+console.log('adminRows', adminRows, 'adminErr', adminErr);
+
+const adminIds = [
+  ...new Set((adminRows || []).map((r) => r.event_id).filter(Boolean)),
+];
+console.log('adminIds', adminIds);
+      let adminEvents: any[] = [];
+      if (adminIds.length > 0) {
+        const { data } = await supabase
+          .from('tournaments')
+          .select('*')
+          .in('id', adminIds)
+          .order('date', { ascending: false });
+        adminEvents = data || [];
+      }
+
+      // Merge: creator + admin (tag role)
+      const byId = new Map<number, any>();
+      for (const e of created || []) {
+        byId.set(e.id, { ...e, role: 'creator', permissions: null });
+      }
+      for (const e of adminEvents) {
+        if (!byId.has(e.id)) {
+          const row = (adminRows || []).find((r) => r.event_id === e.id);
+          byId.set(e.id, {
+            ...e,
+            role: 'admin',
+            permissions: row?.permissions || {},
+          });
+        }
+      }
+
+      setCreatedEvents(Array.from(byId.values()));
+
+      // Registered (player) events
+      const { data: registered } = await supabase
+        .from('event_registrations')
+        .select('*, tournament:tournaments(*)')
+        .eq('user_id', user.id);
 
       setRegisteredEvents(registered || []);
-
       setLoading(false);
     };
 
     fetchProfile();
-  }, [router]);
+  }, [router, supabase]);
 
   const handleSaveProfile = async () => {
     setSaving(true);
@@ -108,7 +158,7 @@ const { data: registered } = await supabase
           </button>
         </div>
 
-        {/* Created Events Tab */}
+        {/* Manage Events Tab */}
         {activeTab === 'created' && (
           <div>
             <h3 className="text-2xl font-semibold mb-6">Created Events</h3>
@@ -117,16 +167,30 @@ const { data: registered } = await supabase
               <div className="mb-12">
                 <h4 className="text-lg text-gray-400 mb-4">Upcoming</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {createdUpcoming.map((e) => (
-                    <a
-                      key={e.id}
-                      href={`/event/${e.id}/admin`}
-                      className="bg-gray-800 p-8 rounded-3xl hover:bg-gray-700 transition-colors"
-                    >
-                      <h4 className="text-xl font-semibold">{e.name}</h4>
-                      <p className="text-gray-400 mt-2">{new Date(e.date).toLocaleDateString()}</p>
-                    </a>
-                  ))}
+{createdUpcoming.map((e) => {
+  const href =
+    e.role === 'creator' || e.permissions?.manage
+      ? `/event/${e.id}/manage`
+      : e.permissions?.checkin
+        ? `/event/${e.id}/check-in`
+        : `/event/${e.id}`;
+
+  return (
+    <a
+      key={e.id}
+      href={href}
+      className="bg-gray-800 p-8 rounded-3xl hover:bg-gray-700 transition-colors"
+    >
+      <h4 className="text-xl font-semibold">{e.name}</h4>
+      <p className="text-gray-400 mt-2">
+        {new Date(e.date + 'T12:00:00').toLocaleDateString()}
+        {e.role === 'admin' && (
+          <span className="ml-2 text-xs text-indigo-400">Admin</span>
+        )}
+      </p>
+    </a>
+  );
+})}
                 </div>
               </div>
             )}

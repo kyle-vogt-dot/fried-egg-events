@@ -273,7 +273,7 @@ export default function CreateTournament() {
 
                     return (
                       <div
-                        key={idx}
+                        key={course.id ?? `${course.name}-${idx}`}
                         onClick={() => selectCourse(course)}
                         className="px-6 py-4 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none"
                       >
@@ -338,7 +338,7 @@ export default function CreateTournament() {
 
           {error && <p className="text-red-500 text-center">{error}</p>}
 
-                    {error && <p className="text-red-500 text-center">{error}</p>}
+
 
           {/* Terms / Fee Policy Checkbox */}
           <div className="flex items-start gap-3 bg-gray-900 p-5 rounded-2xl mt-6">
