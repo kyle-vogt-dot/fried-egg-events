@@ -25,6 +25,7 @@ export default function EventManagePage() {
   const [stripeConnecting, setStripeConnecting] = useState(false);
   const [payoutBannerDismissed, setPayoutBannerDismissed] = useState(false);
 
+
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -45,6 +46,7 @@ export default function EventManagePage() {
   const [showAdmins, setShowAdmins] = useState(false);
   const [showRounds, setShowRounds] = useState(false);
   const [saving, setSaving] = useState(false);
+const [deleting, setDeleting] = useState(false); // ← here with the rest
 
   const [newFlight, setNewFlight] = useState({ name: '', range: '' });
   const [newAddon, setNewAddon] = useState({
@@ -801,48 +803,90 @@ if (!isCreator && !isEventAdmin) {
     });
   };
 
-  const handleDeleteRound = async (id: number) => {
-    if (!confirm('Remove this round?')) return;
-    await supabase.from('event_rounds').delete().eq('id', id);
-    setRounds((prev) => prev.filter((r) => r.id !== id));
-  };
 
-  const handleDeleteEvent = async () => {
-    if (
-      !confirm(
-        `⚠️ Delete this entire event?\n\n${event.name}\n\nThis action cannot be undone!`
-      )
-    ) {
-      return;
-    }
 
-    if (
-      !confirm(
-        'Are you 100% sure? All registrations, scores, and data will be permanently deleted.'
-      )
-    ) {
-      return;
-    }
+const handleDeleteEvent = async () => {
+  if (!event) return;
 
-    try {
-      setSaving(true);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user || event.created_by !== user.id) {
+    alert('Only the event creator can delete this event.');
+    return;
+  }
+
+  const ok = confirm(
+    `Delete “${event.name}” permanently?\n\nThis removes registrations, rounds, scores, add-ons, sponsors, and income/expense rows for this event. This cannot be undone.`
+  );
+  if (!ok) return;
+
+  const double = confirm('Type-level confirm: really delete this event?');
+  if (!double) return;
+
+  setDeleting(true);
+  const id = parseInt(eventId, 10);
+
+  try {
+    // Order: children first (skip any table that doesn't exist)
+    const steps: { table: string; column?: string }[] = [
+      { table: 'scores' }, // may be via registration_id — see note below
+      { table: 'event_refunds' },
+      { table: 'event_income_entries' },
+      { table: 'event_expenses' },
+      { table: 'event_sponsors' },
+      { table: 'event_sponsor_packages' },
+      { table: 'event_addons' },
+      { table: 'event_admins' },
+      { table: 'event_rounds' },
+      { table: 'event_registrations' },
+    ];
+
+    for (const step of steps) {
+      if (step.table === 'scores') {
+        // scores linked by registration_id
+        const { data: regs } = await supabase
+          .from('event_registrations')
+          .select('id')
+          .eq('event_id', id);
+        const regIds = (regs || []).map((r) => r.id);
+        if (regIds.length > 0) {
+          const { error } = await supabase
+            .from('scores')
+            .delete()
+            .in('registration_id', regIds);
+          if (error) console.warn('scores delete:', error.message);
+        }
+        continue;
+      }
 
       const { error } = await supabase
-        .from('tournaments')
+        .from(step.table)
         .delete()
-        .eq('id', parseInt(eventId));
-
-      if (error) throw error;
-
-      alert('✅ Event has been permanently deleted.');
-      router.push('/dashboard');
-    } catch (err: any) {
-      console.error(err);
-      alert('Failed to delete event: ' + err.message);
-    } finally {
-      setSaving(false);
+        .eq('event_id', id);
+      if (error) {
+        // table may not exist or RLS — log and continue when possible
+        console.warn(`${step.table} delete:`, error.message);
+      }
     }
-  };
+
+    const { error: eventErr } = await supabase
+      .from('tournaments')
+      .delete()
+      .eq('id', id)
+      .eq('created_by', user.id); // extra safety
+
+    if (eventErr) throw eventErr;
+
+    alert('Event deleted.');
+    router.push('/events');
+  } catch (e: any) {
+    console.error(e);
+    alert(e.message || 'Failed to delete event');
+  } finally {
+    setDeleting(false);
+  }
+};
 
   const teamSize = teamSizeFromEventType(event.event_type || '');
 
@@ -1258,12 +1302,14 @@ if (!isCreator && !isEventAdmin) {
   {` · Greens $${Number(round.greens_fee || 0).toFixed(2)}/player`}
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleDeleteRound(round.id)}
-                    className="text-red-500 hover:text-red-600 text-sm font-medium px-4 py-2"
-                  >
-                    Remove
-                  </button>
+<button
+  type="button"
+  onClick={handleDeleteEvent}
+  disabled={saving || deleting}
+  className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded-3xl font-medium text-lg"
+>
+  {deleting ? 'Deleting…' : '🗑️ Delete Event'}
+</button>
                 </div>
               ))}
             </div>
