@@ -14,8 +14,10 @@ import {
   PDFDownloadLink,
   Image,
 } from '@react-pdf/renderer';
+
 const flyerStyles = StyleSheet.create({
   page: {
+    
     padding: 28,
     fontFamily: 'Helvetica',
     backgroundColor: '#111827',
@@ -84,16 +86,22 @@ const flyerStyles = StyleSheet.create({
 function EventFlyerPDF({
   event,
   qrDataUrl,
+  imageSize = null,
+  
   registerUrl,
   paidSponsors = [],
   sponsorPackages = [],
+  imageDataUrl = null,  // ← add
 }: {
   event: any;
   qrDataUrl: string | null;
+  imageSize?: { w: number; h: number } | null;
   registerUrl: string;
   paidSponsors?: any[];
   sponsorPackages?: any[];
+  imageDataUrl?: string | null;  // ← add
 }) {
+
   const dateStr = event?.date
     ? new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', {
         weekday: 'long',
@@ -110,7 +118,20 @@ function EventFlyerPDF({
         ? `$${Number(event.price).toFixed(2)} per player`
         : '';
 
-  const imageUrl = event?.image_url || null;
+const resolveImageUrl = (url: string | null | undefined) => {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  // already absolute
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  // site-relative
+  if (trimmed.startsWith('/') && typeof window !== 'undefined') {
+    return `${window.location.origin}${trimmed}`;
+  }
+  return null;
+};
+
+const imageUrl = resolveImageUrl(event?.image_url);
 
   const sponsorNames = (paidSponsors || [])
     .map((s) => s.company_name)
@@ -128,26 +149,25 @@ function EventFlyerPDF({
           {event?.name || 'Golf Event'}
         </Text>
 
-        {imageUrl ? (
-          <View
-            style={{
-              width: '100%',
-              height: 140,
-              marginBottom: 10,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Image
-              src={imageUrl}
-              style={{
-                maxWidth: '100%',
-                maxHeight: 140,
-                objectFit: 'contain',
-              }}
-            />
-          </View>
-        ) : null}
+{imageDataUrl ? (
+  <View
+    style={{
+      width: '100%',
+      marginBottom: 10,
+      alignItems: 'center',
+    }}
+  >
+    <Image
+      src={imageDataUrl}
+      style={{
+        width: 320,
+        height: imageSize
+          ? Math.round((320 * imageSize.h) / imageSize.w)
+          : 180,
+      }}
+    />
+  </View>
+) : null}
 
         <View style={{ ...flyerStyles.box, marginTop: 8, padding: 12 }}>
           {dateStr ? (
@@ -216,32 +236,40 @@ function EventFlyerPDF({
           </View>
         ) : null}
 
-        {packages.length > 0 ? (
-          <View style={{ marginTop: 8 }}>
-            <Text
-              style={{
-                fontSize: 10,
-                color: '#22c55e',
-                marginBottom: 4,
-                textTransform: 'uppercase',
-                letterSpacing: 1,
-              }}
-            >
-              Sponsorship Opportunities
-            </Text>
-            {packages.slice(0, 4).map((pkg) => (
-              <Text
-                key={pkg.id}
-                style={{ fontSize: 9, color: '#d1d5db', marginBottom: 2 }}
-              >
-                {pkg.name}
-                {pkg.price != null
-                  ? ` — $${Number(pkg.price).toFixed(2)}`
-                  : ''}
-              </Text>
-            ))}
-          </View>
+{packages.length > 0 ? (
+  <View style={{ marginTop: 10 }}>
+    <Text
+      style={{
+        fontSize: 10,
+        color: '#22c55e',
+        marginBottom: 6,
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+      }}
+    >
+      Sponsorship Opportunities
+    </Text>
+    {packages.slice(0, 6).map((pkg) => (
+      <View key={pkg.id} style={{ marginBottom: 6 }}>
+        <Text style={{ fontSize: 10, color: '#f9fafb', marginBottom: 1 }}>
+          {pkg.name}
+          {pkg.price != null ? ` — $${Number(pkg.price).toFixed(2)}` : ''}
+          {pkg.includes_players > 0
+            ? ` · ${pkg.includes_players} player${
+                pkg.includes_players === 1 ? '' : 's'
+              }`
+            : ''}
+        </Text>
+        {pkg.description ? (
+          <Text style={{ fontSize: 8, color: '#9ca3af', lineHeight: 1.3 }}>
+            {String(pkg.description).slice(0, 120)}
+            {String(pkg.description).length > 120 ? '…' : ''}
+          </Text>
         ) : null}
+      </View>
+    ))}
+  </View>
+) : null}
 
         <View
           style={{
@@ -277,6 +305,9 @@ export default function EventDetailPage() {
   const searchParams = useSearchParams();
   const eventId = params.id as string;
   const [platformFee, setPlatformFee] = useState(3.0);
+const [flyerImageDataUrl, setFlyerImageDataUrl] = useState<string | null>(null);
+const [flyerImageSize, setFlyerImageSize] = useState<{ w: number; h: number } | null>(null);
+const [flyerImageReady, setFlyerImageReady] = useState(true); // true when no image needed
 
   const [sendReceipt, setSendReceipt] = useState(false);
 const [receiptName, setReceiptName] = useState('');
@@ -448,6 +479,74 @@ const [waitlistDone, setWaitlistDone] = useState(false);
 
   setLoading(false);
 };
+
+useEffect(() => {
+  const url = event?.image_url;
+  if (!url || typeof url !== 'string') {
+    setFlyerImageDataUrl(null);
+    setFlyerImageSize(null);
+    setFlyerImageReady(true);
+    return;
+  }
+
+  setFlyerImageReady(false);
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const absolute = url.startsWith('http')
+        ? url
+        : `${window.location.origin}${url.startsWith('/') ? '' : '/'}${url}`;
+
+      const res = await fetch(absolute, { mode: 'cors' });
+      if (!res.ok) throw new Error(`fetch ${res.status}`);
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const img = new window.Image();
+      img.crossOrigin = 'anonymous';
+
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('img decode failed'));
+        img.src = objectUrl;
+      });
+
+      const maxW = 1000;
+      const maxH = 420;
+      const scale = Math.min(maxW / img.width, maxH / img.height, 1);
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('no canvas');
+      ctx.drawImage(img, 0, 0, w, h);
+
+      const jpeg = canvas.toDataURL('image/jpeg', 0.72);
+      URL.revokeObjectURL(objectUrl);
+
+      if (!cancelled) {
+        setFlyerImageDataUrl(jpeg);
+        setFlyerImageSize({ w, h });
+        setFlyerImageReady(true);
+      }
+    } catch (e) {
+      console.error('Flyer image normalize failed', e);
+      if (!cancelled) {
+        setFlyerImageDataUrl(null);
+        setFlyerImageSize(null);
+        setFlyerImageReady(true); // allow flyer without photo
+      }
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [event?.image_url]);
 
 useEffect(() => {
   fetchData();
@@ -1802,19 +1901,20 @@ const completeAdditional = additionalPlayers.filter(
             sessionStorage.removeItem(paymentHandledKey);
 
       // Create unpaid rows first so Stripe metadata has registration ids
-      const regRows = players.map((p: any) => ({
-        event_id: parseInt(eventId),
-        user_id: p.user_id || null,
-        player_name: p.player_name,
-        player_email: p.player_email || null,
-        team_name: isIndividual ? null : finalTeamName,
-        paid: false,
-        checked_in: false,
-        addons_selected: {},
-        selected_round_ids: selectedRoundIds,
-        discount_code: appliedDiscount?.code || null,
-        discount_amount: appliedDiscount?.amount_saved || 0,
-      }));
+const regRows = players.map((p: any) => ({
+  event_id: parseInt(eventId),
+  user_id: p.user_id || null,
+  player_name: p.player_name,
+  player_email: p.player_email || null,
+  team_name: isIndividual ? null : finalTeamName,
+  paid: false,
+  payment_method: 'pending_checkout',
+  checked_in: false,
+  addons_selected: {},
+  selected_round_ids: selectedRoundIds,
+  discount_code: appliedDiscount?.code || null,
+  discount_amount: appliedDiscount?.amount_saved || 0,
+}));
 
       const { data: insertedRegs, error: insertErr } = await supabase
         .from('event_registrations')
@@ -1926,29 +2026,37 @@ paid: false,
         >
           ← Back to All Events
         </button>
-        {isEventAdmin && event && (
+{isEventAdmin && event && (
   <div className="flex items-center gap-2 justify-center">
-    <PDFDownloadLink
-      document={
-        <EventFlyerPDF
-          event={event}
-          qrDataUrl={flyerQrDataUrl}
-          paidSponsors={paidSponsors}
-          sponsorPackages={sponsorPackages}
-          registerUrl={
-            typeof window !== 'undefined'
-              ? `${window.location.origin}/event/${eventId}`
-              : `https://friedeggevents.app/event/${eventId}`
-          }
-        />
-      }
-      fileName={`${String(event.name || 'event')
-        .replace(/[^a-z0-9]+/gi, '-')
-        .replace(/^-|-$/g, '')}-flyer.pdf`}
-      className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 px-5 py-3 rounded-2xl font-semibold text-sm"
-    >
-      {({ loading }) => (loading ? 'Preparing…' : '📄 Create Flyer')}
-    </PDFDownloadLink>
+    {!flyerImageReady ? (
+      <span className="text-sm text-gray-400 px-4 py-2">
+        Preparing image…
+      </span>
+    ) : (
+      <PDFDownloadLink
+        document={
+          <EventFlyerPDF
+            event={event}
+            qrDataUrl={flyerQrDataUrl}
+            paidSponsors={paidSponsors}
+            sponsorPackages={sponsorPackages}
+            imageDataUrl={flyerImageDataUrl}
+            imageSize={flyerImageSize}
+            registerUrl={
+              typeof window !== 'undefined'
+                ? `${window.location.origin}/event/${eventId}`
+                : `https://friedeggevents.app/event/${eventId}`
+            }
+          />
+        }
+        fileName={`${String(event.name || 'event')
+          .replace(/[^a-z0-9]+/gi, '-')
+          .replace(/^-|-$/g, '')}-flyer.pdf`}
+        className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 px-5 py-3 rounded-2xl font-semibold text-sm"
+      >
+        {({ loading }) => (loading ? 'Building PDF…' : '📄 Create Flyer')}
+      </PDFDownloadLink>
+    )}
     <span
       title="Create a PDF flyer for this event"
       className="text-gray-400 text-sm cursor-help select-none"
