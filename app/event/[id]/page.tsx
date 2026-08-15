@@ -352,13 +352,18 @@ const [waitlistDone, setWaitlistDone] = useState(false);
   };
 
   const isListableReg = (r: any) => {
-  if (r.paid === true) return true;
-  const m = String(r.payment_method || '').toLowerCase();
-  if (['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m)) {
-    return true;
-  }
-  return false;
-};
+    if (r.refunded === true) return false;
+    if (r.paid === true) return true;
+    const m = String(r.payment_method || '').toLowerCase();
+    return [
+      'comp',
+      'complimentary',
+      'cash',
+      'manual',
+      'checkin',
+      'payment_link',
+    ].includes(m);
+  };
 
       const getPlayerName = (user: any) => {
     return (
@@ -518,16 +523,18 @@ const cleanupAbandonedCheckout = async () => {
     } = await supabase.auth.getUser();
 
     // Methods we never auto-delete (created from check-in / comp / cash / etc.)
-    const protectedMethods = new Set([
+const protectedMethods = new Set([
       'comp',
       'complimentary',
       'cash',
       'manual',
       'checkin',
+      'payment_link',
     ]);
 
     const isProtected = (paymentMethod: any) => {
       const m = String(paymentMethod || '').toLowerCase();
+      if (!m || m === 'pending_checkout' || m === 'draft') return false;
       return protectedMethods.has(m);
     };
 
@@ -538,6 +545,7 @@ const cleanupAbandonedCheckout = async () => {
         .select('id, payment_method')
         .in('id', ids)
         .eq('paid', false);
+        
 
       const idsToDelete = (rows || [])
         .filter((r) => !isProtected(r.payment_method))
@@ -556,7 +564,7 @@ const cleanupAbandonedCheckout = async () => {
         .select('id, payment_method')
         .eq('event_id', parseInt(eventId))
         .eq('paid', false)
-        .or(`user_id.eq.${user.id},player_email.eq.${user.email}`);
+  .or(`user_id.eq.${user.id},player_email.eq.${user.email}`);
 
       const idsToDelete = (rows || [])
         .filter((r) => !isProtected(r.payment_method))
@@ -1812,6 +1820,7 @@ const completeAdditional = additionalPlayers.filter(
         .from('event_registrations')
         .insert(regRows)
         .select('id');
+        
 
       if (insertErr || !insertedRegs?.length) {
         throw new Error(
@@ -1831,8 +1840,11 @@ const completeAdditional = additionalPlayers.filter(
         selected_round_ids: selectedRoundIds,
         players,
         totalCost,
+        payment_method: 'pending_checkout',
+paid: false,
         registration_ids: registrationIds,
         discount: appliedDiscount
+        
           ? {
               code: appliedDiscount.code,
               discount_code_id: appliedDiscount.discount_code_id,
@@ -3058,4 +3070,4 @@ const completeAdditional = additionalPlayers.filter(
       )}
     </div>
   );
-  }
+}

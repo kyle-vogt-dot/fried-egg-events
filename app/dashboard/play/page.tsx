@@ -6,6 +6,21 @@ import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import QRCode from 'qrcode';
 
+
+function isListable(r: any) {
+  if (r.refunded === true) return false;
+  if (r.paid === true) return true;
+  const m = String(r.payment_method || '').toLowerCase();
+  return [
+    'comp',
+    'complimentary',
+    'cash',
+    'manual',
+    'checkin',
+    'payment_link',
+  ].includes(m);
+}
+
 function formatToPar(toPar: number | null | undefined) {
   if (toPar == null) return '—';
   if (toPar === 0) return 'E';
@@ -175,9 +190,17 @@ const { data: regs } = await supabase
   .or(`user_id.eq.${user.id},player_email.eq.${user.email}`);
 
 const isListable = (r: any) => {
+  if (r.refunded === true) return false;
   if (r.paid === true) return true;
   const m = String(r.payment_method || '').toLowerCase();
-  return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
+  return [
+    'comp',
+    'complimentary',
+    'cash',
+    'manual',
+    'checkin',
+    'payment_link',
+  ].includes(m);
 };
 
 const userRegs = (regs || []).filter(isListable);
@@ -274,13 +297,19 @@ const eventIds = [
       setInviteQr(null);
       return;
     }
-    const team =
-      selectedItem.regs.find((r) => r.team_name)?.team_name || '';
+
+    const regIds = selectedItem.regs
+      .map((r: any) => r.id)
+      .filter(Boolean)
+      .join(',');
+
     const origin =
       typeof window !== 'undefined' ? window.location.origin : '';
-    const url = `${origin}/event/${selectedItem.event.id}${
-      team ? `?joinTeam=${encodeURIComponent(team)}` : ''
+
+    const url = `${origin}/event/${selectedItem.event.id}/join${
+      regIds ? `?regs=${encodeURIComponent(regIds)}` : ''
     }`;
+
     QRCode.toDataURL(url, { width: 280, margin: 1, errorCorrectionLevel: 'M' })
       .then(setInviteQr)
       .catch(() => setInviteQr(null));
@@ -496,6 +525,7 @@ const handleAddTeammatesCheckout = async () => {
       checked_in: false,
       addons_selected: {},
       selected_round_ids: selectedRoundIds,
+      payment_method: 'pending_checkout',
       discount_code: appliedDiscount?.code || null,
       discount_amount: appliedDiscount?.amount_saved || 0,
     }));
@@ -520,6 +550,7 @@ const handleAddTeammatesCheckout = async () => {
         isIndividual: false,
         isOrganizerOnly: true,
         teamName,
+        payment_method: 'pending_checkout',
         selected_round_ids: selectedRoundIds,
         players: complete.map((p) => ({
           player_name: p.name.trim(),
@@ -590,19 +621,46 @@ const openDetail = async (id: number) => {
   setDiscountCode('');
   setDiscountError('');
 
+  const isListable = (r: any) => {
+    if (r.refunded === true) return false;
+    if (r.paid === true) return true;
+    const m = String(r.payment_method || '').toLowerCase();
+    return [
+      'comp',
+      'complimentary',
+      'cash',
+      'manual',
+      'checkin',
+      'payment_link',
+    ].includes(m);
+  };
+
+  // Fresh roster for this event
   const { data: allRegs } = await supabase
     .from('event_registrations')
     .select('*')
     .eq('event_id', id)
     .order('created_at', { ascending: true });
 
-  const isListable = (r: any) => {
-    if (r.paid === true) return true;
-    const m = String(r.payment_method || '').toLowerCase();
-    return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
-  };
-
   setTeamRoster((allRegs || []).filter(isListable));
+
+  // Refresh THIS user's regs so refunded rounds drop off the cards
+  if (currentUser) {
+    const { data: myRegs } = await supabase
+      .from('event_registrations')
+      .select('*')
+      .eq('event_id', id)
+      .or(
+        `user_id.eq.${currentUser.id},player_email.eq.${currentUser.email}`
+      );
+
+    const listableMine = (myRegs || []).filter(isListable);
+
+    setRegistrations((prev) => {
+      const others = prev.filter((r) => Number(r.event_id) !== Number(id));
+      return [...others, ...listableMine];
+    });
+  }
 
   const { data: feeData } = await supabase
     .from('platform_settings')
@@ -896,7 +954,7 @@ const openDetail = async (id: number) => {
         regId: number;
       }[] = [];
 
-      for (const myReg of selectedItem.regs) {
+      for (const myReg of selectedItem.regs.filter(isListable)) {
         const teamName = myReg.team_name || 'Individual';
         const roundIds: number[] = Array.isArray(myReg.selected_round_ids)
           ? myReg.selected_round_ids.map(Number)
@@ -1103,10 +1161,10 @@ const openDetail = async (id: number) => {
                         }`
                       : ''}
                   </p>
-                  <p className="text-xs text-amber-400/90">
-                    Full team-invite registration page (open slots only) is
-                    next on the list.
-                  </p>
+                 <p className="text-xs text-gray-500">
+  Anyone who scans this will sign in, then can join your open
+  team spots for the rounds you&apos;re on.
+</p>
                 </div>
               )}
             </div>

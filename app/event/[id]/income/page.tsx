@@ -418,7 +418,21 @@ export default function EventIncomePage() {
   const fee = platformFee;
 
   const paidPlayers = useMemo(
-    () => registrations.filter((r) => r.paid),
+    () => registrations.filter((r) => r.paid === true && r.refunded !== true),
+    [registrations]
+  );
+
+  // Paid + comp/cash/etc. — for greens (course payment)
+  const isPlayingForGreens = (r: any) => {
+    if (r.refunded === true) return false;
+    if (r.paid === true) return true;
+    const m = String(r.payment_method || '').toLowerCase();
+    return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
+  };
+
+  // Paid + comp/cash/etc. — for greens (course payment)
+  const greensPlayers = useMemo(
+    () => registrations.filter(isPlayingForGreens),
     [registrations]
   );
 
@@ -441,16 +455,16 @@ export default function EventIncomePage() {
         const roundFee = Number(round.greens_fee ?? event?.greens_fee ?? 0);
         if (roundFee <= 0) continue;
 
-        let playersOnRound = paidPlayers.filter((r) => {
+        let playersOnRound = greensPlayers.filter((r) => {
           const ids: number[] = r.selected_round_ids || [];
           return ids.includes(round.id);
         }).length;
 
-        const anyoneHasRounds = paidPlayers.some(
+        const anyoneHasRounds = greensPlayers.some(
           (r) => (r.selected_round_ids || []).length > 0
         );
         if (!anyoneHasRounds) {
-          playersOnRound = paidPlayers.length;
+          playersOnRound = greensPlayers.length;
         }
 
         const amount = playersOnRound * roundFee;
@@ -466,7 +480,7 @@ export default function EventIncomePage() {
       const count =
         event?.greens_guarantee_count != null
           ? Number(event.greens_guarantee_count)
-          : paidPlayers.length;
+          : greensPlayers.length;
       const amount = count * perPlayer;
       total = amount;
       if (amount > 0) {
@@ -479,7 +493,7 @@ export default function EventIncomePage() {
     }
 
     return { greensFeesTotal: total, greensLines: lines };
-  }, [isPerRound, rounds, event, paidPlayers]);
+  }, [isPerRound, rounds, event, greensPlayers]);
 
   const registrationRevenue = useMemo(() => {
     const paid = registrations.filter((r) => r.paid);
@@ -1016,8 +1030,14 @@ export default function EventIncomePage() {
                 </p>
                 <p className="text-xs text-gray-500 mt-1">
                   {isPerRound
-                    ? 'Per-round: players on each round × that round’s greens fee'
-                    : 'Event: paid players × event greens fee'}
+                    ? 'Per-round: playing players (paid + comp) on each round × that round’s greens fee'
+                    : 'Event: playing players (paid + comp) × event greens fee'}
+                  {greensPlayers.length !== paidPlayers.length && (
+                    <span className="text-teal-400">
+                      {' '}
+                      · {greensPlayers.length} playing · {paidPlayers.length} paid
+                    </span>
+                  )}
                 </p>
               </div>
             </div>

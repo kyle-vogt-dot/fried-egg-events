@@ -18,6 +18,13 @@ export async function POST(request: NextRequest) {
       amount, // dollars
     } = body;
 
+    if (!registration_id) {
+      return NextResponse.json(
+        { error: 'registration_id is required' },
+        { status: 400 }
+      );
+    }
+
     if (!payment_intent_id) {
       return NextResponse.json(
         { error: 'payment_intent_id is required for Stripe refund' },
@@ -33,6 +40,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Load registration first (audit + safety)
+    const { data: reg, error: regErr } = await supabaseAdmin
+      .from('event_registrations')
+      .select('id, paid, refunded, event_id, player_name, player_email')
+      .eq('id', registration_id)
+      .maybeSingle();
+
+    if (regErr || !reg) {
+      return NextResponse.json(
+        { error: 'Registration not found' },
+        { status: 404 }
+      );
+    }
+
+    if (reg.refunded === true) {
+      return NextResponse.json(
+        { error: 'Registration is already marked refunded' },
+        { status: 400 }
+      );
+    }
+
     const amountCents = Math.round(amountDollars * 100);
 
     const refund = await stripe.refunds.create({
@@ -40,21 +68,38 @@ export async function POST(request: NextRequest) {
       amount: amountCents,
       reason: 'requested_by_customer',
       metadata: {
-        registration_id: registration_id ? String(registration_id) : '',
+        registration_id: String(registration_id),
+        event_id: reg.event_id != null ? String(reg.event_id) : '',
       },
     });
 
-    // Optional: stamp registration before delete (if row still exists)
-    if (registration_id) {
-      await supabaseAdmin
-        .from('event_registrations')
-        .update({
-          refunded: true,
-          stripe_refund_id: refund.id,
-          refund_amount: amountDollars,
-        })
-        .eq('id', registration_id);
-      // Ignore errors if columns don't exist yet
+    // Keep the row — mark refunded, drop off active rosters
+    const { error: updateErr } = await supabaseAdmin
+      .from('event_registrations')
+      .update({
+        paid: false,
+        refunded: true,
+        refunded_at: new Date().toISOString(),
+        stripe_refund_id: refund.id,
+        refund_amount: amountDollars,
+        // optional: payment_method: 'refunded',
+      })
+      .eq('id', registration_id);
+
+    if (updateErr) {
+      console.error('Refund succeeded in Stripe but DB update failed:', updateErr);
+      return NextResponse.json(
+        {
+          success: true,
+          warning:
+            'Stripe refund created but registration update failed — fix row manually',
+          refund_id: refund.id,
+          status: refund.status,
+          amount: amountDollars,
+          db_error: updateErr.message,
+        },
+        { status: 200 }
+      );
     }
 
     return NextResponse.json({
@@ -62,11 +107,12 @@ export async function POST(request: NextRequest) {
       refund_id: refund.id,
       status: refund.status,
       amount: amountDollars,
+      registration_id,
     });
   } catch (err: any) {
     console.error('Stripe refund error:', err);
     return NextResponse.json(
-      { error: err.message || 'Refund failed' },
+      { error: err?.message || 'Refund failed' },
       { status: 500 }
     );
   }

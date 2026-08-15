@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import { PDFDownloadLink } from '@react-pdf/renderer';
+import { RegistrationRosterPDF } from '@/app/components/RegistrationRosterPDF';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -73,6 +75,7 @@ export default function RegisteredPlayersPage() {
   const [rounds, setRounds] = useState<any[]>([]);
   const [selectedRoundId, setSelectedRoundId] = useState<number | 'all'>('all');
   const [loading, setLoading] = useState(true);
+  const [isCreator, setIsCreator] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -83,6 +86,10 @@ export default function RegisteredPlayersPage() {
     const fetchData = async () => {
       const id = parseInt(eventId);
 
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
       const { data: eventData } = await supabase
         .from('tournaments')
         .select('*')
@@ -90,6 +97,8 @@ export default function RegisteredPlayersPage() {
         .single();
 
       if (eventData) setEvent(eventData);
+
+      setIsCreator(!!user && eventData?.created_by === user.id);
 
       const { data: roundsData } = await supabase
         .from('event_rounds')
@@ -112,7 +121,9 @@ export default function RegisteredPlayersPage() {
       const isListableReg = (r: any) => {
         if (r.paid === true) return true;
         const m = String(r.payment_method || '').toLowerCase();
-        return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
+        return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(
+          m
+        );
       };
 
       setRegistrations((regData || []).filter(isListableReg));
@@ -191,12 +202,34 @@ export default function RegisteredPlayersPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
       <div className="max-w-6xl mx-auto">
-        <button
-          onClick={() => router.push(`/event/${eventId}`)}
-          className="text-gray-400 hover:text-white flex items-center gap-2 mb-6"
-        >
-          ← Back to Event Details
-        </button>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <button
+            onClick={() => router.push(`/event/${eventId}`)}
+            className="text-gray-400 hover:text-white flex items-center gap-2"
+          >
+            ← Back to Event Details
+          </button>
+
+          {isCreator && registrations.length > 0 && (
+            <PDFDownloadLink
+              document={
+                <RegistrationRosterPDF
+                  event={event}
+                  rounds={rounds}
+                  registrations={registrations}
+                />
+              }
+              fileName={`${(event.name || 'event')
+                .replace(/\s+/g, '-')
+                .toLowerCase()}-registrations.pdf`}
+              className="inline-block bg-teal-600 hover:bg-teal-700 px-5 py-3 rounded-2xl text-sm font-medium text-white text-center"
+            >
+              {({ loading: pdfLoading }) =>
+                pdfLoading ? 'Preparing PDF…' : 'Download PDF'
+              }
+            </PDFDownloadLink>
+          )}
+        </div>
 
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-10">
           <div>

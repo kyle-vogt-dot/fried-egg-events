@@ -207,7 +207,23 @@ export default function EventCheckInPage() {
       .from('event_registrations')
       .select('*')
       .eq('event_id', parseInt(eventId));
-    setRegistrations(data || []);
+
+    setRegistrations(
+      (data || []).filter((r) => {
+        if (r.refunded === true) return false;
+        if (r.paid === true) return true;
+        const m = String(r.payment_method || '').toLowerCase();
+        // intentional unpaid only — not abandoned Stripe drafts
+        return [
+          'comp',
+          'complimentary',
+          'cash',
+          'manual',
+          'checkin',
+          'payment_link',
+        ].includes(m);
+      })
+    );
   };
 
   useEffect(() => {
@@ -247,7 +263,7 @@ export default function EventCheckInPage() {
     setRefunding(true);
 
     try {
-            const greens = Number(event?.greens_fee || 0);
+      const greens = Number(event?.greens_fee || 0);
       const amountPaid = estimateAmountPaid(refundReg); // number | null
 
       let refundAmount = 0;
@@ -260,6 +276,8 @@ export default function EventCheckInPage() {
       if (refundMode === 'custom') {
         refundAmount = Math.max(0, Number(customRefundAmount) || 0);
       }
+
+      // Stripe refund (API also marks the registration refunded — no delete)
       if (refundAmount > 0 && refundReg.stripe_payment_intent_id) {
         const res = await fetch('/api/refund-registration', {
           method: 'POST',
@@ -275,10 +293,22 @@ export default function EventCheckInPage() {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.error || 'Stripe refund failed');
         }
-      } else if (refundAmount > 0 && !refundReg.stripe_payment_intent_id) {
-        console.log('No Stripe payment intent; recording refund in DB only');
+      } else {
+        // Comp / cash / remove with $0 — soft-cancel only, keep the row
+        const { error } = await supabase
+          .from('event_registrations')
+          .update({
+            paid: false,
+            refunded: true,
+            refunded_at: new Date().toISOString(),
+            refund_amount: refundAmount || 0,
+          })
+          .eq('id', refundReg.id);
+
+        if (error) throw error;
       }
 
+      // Optional audit log
       try {
         const {
           data: { user },
@@ -295,12 +325,7 @@ export default function EventCheckInPage() {
         // table may not exist yet
       }
 
-      const { error } = await supabase
-        .from('event_registrations')
-        .delete()
-        .eq('id', refundReg.id);
-
-      if (error) throw error;
+      // Do NOT delete the registration row
 
       setShowRefundModal(false);
       setRefundReg(null);
@@ -310,12 +335,12 @@ export default function EventCheckInPage() {
 
       alert(
         refundAmount > 0
-          ? `Removed. Refund recorded: $${refundAmount.toFixed(2)}${
+          ? `Refund recorded: $${refundAmount.toFixed(2)}${
               refundReg.stripe_payment_intent_id
                 ? ''
                 : ' (cash/manual — no Stripe charge)'
-            }`
-          : 'Player removed (no refund).'
+            }. Player kept in history, removed from active roster.`
+          : 'Player removed from active roster (no refund). Row kept in history.'
       );
     } catch (e: any) {
       console.error(e);
@@ -354,12 +379,18 @@ export default function EventCheckInPage() {
           player_name: newPlayerName.trim(),
           player_email: newPlayerEmail.trim() || null,
           team_name: newPlayerTeam.trim() || null,
-          paid: isCash, // link stays unpaid until they pay; free = unpaid/comp
+          paid: isCash,
           checked_in: false,
           selected_round_ids,
           round_checkins: {},
           amount_paid: isCash ? chargeAmount : null,
-          payment_method: isCash ? 'cash' : isFree ? 'comp' : null,
+          payment_method: isCash
+            ? 'cash'
+            : isFree
+              ? 'comp'
+              : isLink
+                ? 'payment_link'
+                : 'comp',
         })
         .select()
         .single();
