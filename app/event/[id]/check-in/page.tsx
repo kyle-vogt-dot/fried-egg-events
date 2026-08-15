@@ -676,6 +676,45 @@ export default function EventCheckInPage() {
     fetchRegistrations();
   };
 
+    const toggleSkins = async (reg: any, on: boolean) => {
+    const skinsAddon = addons.find(
+      (a) => String(a.name || '').toLowerCase() === 'skins'
+    );
+    const existingQty = {
+      ...(selectedQuantities[reg.id] || reg.addon_quantities || {}),
+    };
+
+    if (skinsAddon) {
+      if (on) existingQty[skinsAddon.id] = 1;
+      else delete existingQty[skinsAddon.id];
+    }
+
+    const nextAddons = { ...(reg.addons_selected || {}) };
+    if (on) nextAddons['Skins'] = 1;
+    else delete nextAddons['Skins'];
+
+    const { error } = await supabase
+      .from('event_registrations')
+      .update({
+        playing_skins: on,
+        addons_selected: nextAddons,
+        addon_quantities: existingQty,
+        ...(on && Number(event?.skins_fee) > 0 ? { paid_addons: false } : {}),
+      })
+      .eq('id', reg.id);
+
+    if (error) {
+      alert(error.message);
+      return;
+    }
+
+    setSelectedQuantities((prev) => ({
+      ...prev,
+      [reg.id]: existingQty,
+    }));
+    await fetchRegistrations();
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 flex items-center justify-center">
@@ -840,15 +879,27 @@ export default function EventCheckInPage() {
                   <th className="text-left py-3 px-3 sm:px-6 font-medium">Team</th>
                   <th className="text-center py-3 px-3 sm:px-6 font-medium">HCP</th>
                   <th className="text-center py-3 px-3 sm:px-6 font-medium">Hole</th>
+
+                  {event?.enable_skins && (
+                    <th className="text-center py-3 px-3 sm:px-6 font-medium">
+                      Skins
+                    </th>
+                  )}
+
                   {showAddons &&
-                    addons.map((addon: any) => (
-                      <th
-                        key={addon.id}
-                        className="text-center py-3 px-3 sm:px-6 font-medium"
-                      >
-                        {addon.name}
-                      </th>
-                    ))}
+                    addons
+                      .filter(
+                        (a) => String(a.name || '').toLowerCase() !== 'skins'
+                      )
+                      .map((addon: any) => (
+                        <th
+                          key={addon.id}
+                          className="text-center py-3 px-3 sm:px-6 font-medium"
+                        >
+                          {addon.name}
+                        </th>
+                      ))}
+
                   {showAddons && (
                     <th className="text-center py-3 px-3 sm:px-6 font-medium">
                       Add-on
@@ -878,6 +929,7 @@ export default function EventCheckInPage() {
                       className="border-b border-gray-700 hover:bg-gray-800/50"
                     >
                       <td className="py-3 px-3 sm:px-6 font-medium">
+                        
                         <div>{reg.player_name || 'Unknown'}</div>
                         {reg.payment_method === 'cash' && (
                           <div className="text-xs text-emerald-400">Paid cash</div>
@@ -917,9 +969,36 @@ export default function EventCheckInPage() {
                       <td className="py-3 px-3 sm:px-6 text-center text-teal-300 font-medium">
                         {startingHole}
                       </td>
+                      {event?.enable_skins && (
+  <td className="py-3 px-3 sm:px-6 text-center">
+    <input
+      type="checkbox"
+      checked={
+        !!reg.playing_skins ||
+        !!reg.addons_selected?.['Skins'] ||
+        (() => {
+          const skinsAddon = addons.find(
+            (a) => String(a.name || '').toLowerCase() === 'skins'
+          );
+          if (!skinsAddon) return false;
+          const qty =
+            (selectedQuantities[reg.id] || reg.addon_quantities || {})[
+              skinsAddon.id
+            ] || 0;
+          return qty > 0;
+        })()
+      }
+      onChange={(e) => toggleSkins(reg, e.target.checked)}
+      className="w-5 h-5 accent-emerald-600"
+      title="Playing skins"
+    />
+  </td>
+)}
 
-                      {showAddons &&
-                        addons.map((addon: any) => {
+{showAddons &&
+  addons
+    .filter((a) => String(a.name || '').toLowerCase() !== 'skins')
+    .map((addon: any) => {
                           const qty = addonTotals[addon.id] || 0;
                           const isLocked =
                             !!reg.paid_addons && editingAddonRegId !== reg.id;

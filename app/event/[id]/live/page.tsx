@@ -16,6 +16,56 @@ function formatRoundTime(startTime: string | null | undefined) {
   return `${h}:${m} ${ampm}`;
 }
 
+type SkinRow = {
+  key: string; // team name or player name
+  skins: number;
+  holes: number[]; // hole numbers won
+  amount: number;
+};
+
+function computeBirdieSkins(opts: {
+  participants: { key: string; scores: Record<number, number> }[];
+  parMap: Record<number, number>;
+  holes: number[];
+  entryFee: number;
+}): { rows: SkinRow[]; pot: number; skinValue: number } {
+  const { participants, parMap, holes, entryFee } = opts;
+  const pot = participants.length * Math.max(0, entryFee);
+  const wins: Record<string, number[]> = {};
+  participants.forEach((p) => (wins[p.key] = []));
+
+  for (const hole of holes) {
+    const par = parMap[hole] || 4;
+    // birdie or better among skins players who have a score
+    const entries = participants
+      .map((p) => ({ key: p.key, score: p.scores[hole] }))
+      .filter((e) => e.score != null && e.score > 0 && e.score <= par - 1);
+
+    if (entries.length === 0) continue;
+
+    const best = Math.min(...entries.map((e) => e.score));
+    const winners = entries.filter((e) => e.score === best);
+    // unique winner only
+    if (winners.length === 1) {
+      wins[winners[0].key].push(hole);
+    }
+  }
+
+  const totalSkins = Object.values(wins).reduce((s, h) => s + h.length, 0);
+  const skinValue = totalSkins > 0 ? pot / totalSkins : 0;
+
+  const rows: SkinRow[] = participants
+    .map((p) => ({
+      key: p.key,
+      skins: wins[p.key].length,
+      holes: wins[p.key],
+      amount: wins[p.key].length * skinValue,
+    }))
+    .sort((a, b) => b.skins - a.skins || b.amount - a.amount);
+
+  return { rows, pot, skinValue };
+}
+
 function defaultHoles(numHoles: number) {
   return Array.from({ length: numHoles }, (_, i) => ({
     hole: i + 1,
@@ -235,6 +285,15 @@ export default function LiveEventPage() {
 
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submittingFinal, setSubmittingFinal] = useState(false);
+
+    const [boardView, setBoardView] = useState<'stroke' | 'skins'>('stroke');
+  const [skinsBoard, setSkinsBoard] = useState<{
+    rows: SkinRow[];
+    pot: number;
+    skinValue: number;
+    playerCount: number;
+    teamCount: number;
+  } | null>(null);
 
   // After a local save, ignore remote reloads briefly so realtime doesn't wipe other holes
   const ignoreRemoteUntilRef = useRef(0);
@@ -484,6 +543,12 @@ export default function LiveEventPage() {
     };
   }, [registrationId, selectedRoundId, teamRegs]);
 
+    const isPlayingSkins = (reg: any) => {
+    if (reg.playing_skins === true) return true;
+    if (reg.addons_selected?.Skins || reg.addons_selected?.skins) return true;
+    return false;
+  };
+
   useEffect(() => {
     if (activeTab !== 'leaderboard' || registrations.length === 0) return;
 
@@ -563,7 +628,75 @@ export default function LiveEventPage() {
         });
 
       setLeaderboard(rows);
+
+            // Skins board (same score map)
+      if (event?.enable_skins) {
+        const skinsRegs = registrations.filter(isPlayingSkins);
+        if (skinsRegs.length === 0) {
+          setSkinsBoard({
+            rows: [],
+            pot: 0,
+            skinValue: 0,
+            playerCount: 0,
+            teamCount: 0,
+          });
+        } else {
+          const isTeamEvent = (event?.max_teammates || 1) > 1;
+          const grouped: Record<string, any[]> = {};
+          for (const reg of skinsRegs) {
+            const key =
+              isTeamEvent && reg.team_name
+                ? reg.team_name
+                : reg.player_name || 'Unknown';
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(reg);
+          }
+
+          const participants = Object.keys(grouped).map((key) => {
+            const members = grouped[key];
+            const scoresMap: Record<number, number> = {};
+            for (const reg of members) {
+              const holeMap = byReg[String(reg.id)] || {};
+              Object.entries(holeMap).forEach(([hStr, sc]) => {
+                const h = Number(hStr);
+                const s = Number(sc);
+                if (s > 0) {
+                  scoresMap[h] =
+                    scoresMap[h] !== undefined
+                      ? Math.min(scoresMap[h], s)
+                      : s;
+                }
+              });
+            }
+            return { key, scores: scoresMap };
+          });
+
+          const parMap: Record<number, number> = {};
+          const holeList: number[] = [];
+          for (let h = 1; h <= numHoles; h++) {
+            parMap[h] = Number(courseHoles.find((x) => x.hole === h)?.par) || 4;
+            holeList.push(h);
+          }
+
+          const result = computeBirdieSkins({
+            participants,
+            parMap,
+            holes: holeList,
+            entryFee: Number(event?.skins_fee) || 0,
+          });
+
+          setSkinsBoard({
+            ...result,
+            playerCount: skinsRegs.length,
+            teamCount: participants.length,
+          });
+        }
+      } else {
+        setSkinsBoard(null);
+      }
     };
+
+    
 
     loadLb();
 
@@ -582,7 +715,7 @@ export default function LiveEventPage() {
       clearInterval(poll);
       supabase.removeChannel(channel);
     };
-  }, [activeTab, registrations, event, eventId, selectedRoundId, holes]);
+    }, [activeTab, registrations, event, eventId, selectedRoundId, holes, numHoles]);
 
   useEffect(() => {
     const existing = scores[currentHole];
@@ -1032,7 +1165,7 @@ export default function LiveEventPage() {
 
         {activeTab === 'leaderboard' && (
           <div className="relative bg-gray-900 rounded-3xl overflow-hidden">
-            {showBlurred && (
+            {showBlurred && boardView === 'stroke' && (
               <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-950/80 backdrop-blur-md rounded-3xl">
                 <div className="text-center px-6">
                   <p className="text-xl font-semibold mb-2">
@@ -1049,11 +1182,97 @@ export default function LiveEventPage() {
             <div className="px-5 py-4 border-b border-gray-700">
               <h2 className="font-semibold">Live Leaderboard</h2>
               <p className="text-xs text-gray-500 mt-1">
-                vs par · tap a score for scorecard
+                {boardView === 'skins'
+                  ? 'Birdie or better, alone · gross'
+                  : 'vs par · tap a score for scorecard'}
               </p>
+
+              {event?.enable_skins && (
+                <div className="flex gap-2 mt-3">
+                  <button
+                    type="button"
+                    onClick={() => setBoardView('stroke')}
+                    className={`px-4 py-1.5 rounded-full text-xs font-medium ${
+                      boardView === 'stroke'
+                        ? 'bg-white text-black'
+                        : 'bg-gray-800 text-gray-400'
+                    }`}
+                  >
+                    Stroke
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBoardView('skins')}
+                    className={`px-4 py-1.5 rounded-full text-xs font-medium ${
+                      boardView === 'skins'
+                        ? 'bg-emerald-500 text-white'
+                        : 'bg-gray-800 text-gray-400'
+                    }`}
+                  >
+                    Skins
+                  </button>
+                </div>
+              )}
             </div>
 
-            {leaderboard.length === 0 ? (
+            {boardView === 'skins' && event?.enable_skins ? (
+              <div className="p-4">
+                <div className="flex flex-wrap gap-3 text-xs text-gray-400 mb-4">
+                  <span>
+                    Pot:{' '}
+                    <span className="text-emerald-400 font-semibold">
+                      ${(skinsBoard?.pot || 0).toFixed(2)}
+                    </span>
+                  </span>
+                  <span>
+                    {skinsBoard?.playerCount || 0} in
+                    {skinsBoard?.teamCount
+                      ? ` · ${skinsBoard.teamCount} teams`
+                      : ''}
+                  </span>
+                  <span>
+                    /skin ${(skinsBoard?.skinValue || 0).toFixed(2)}
+                  </span>
+                </div>
+
+                {(skinsBoard?.rows || []).length === 0 ? (
+                  <p className="text-gray-500 p-6 text-center text-sm">
+                    No skins players yet, or no unique birdies scored.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-gray-800">
+                    {(skinsBoard?.rows || []).map((row, i) => (
+                      <li
+                        key={row.key}
+                        className="flex items-center justify-between px-2 py-3"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <span className="w-7 h-7 shrink-0 rounded-full bg-gray-800 flex items-center justify-center text-xs font-bold">
+                            {i + 1}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{row.key}</p>
+                            <p className="text-xs text-gray-500">
+                              {row.holes.length
+                                ? row.holes.map((h) => `H${h}`).join(', ')
+                                : '—'}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right ml-3">
+                          <p className="text-emerald-400 font-bold">
+                            {row.skins} skin{row.skins === 1 ? '' : 's'}
+                          </p>
+                          <p className="text-sm text-gray-300">
+                            ${row.amount.toFixed(2)}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : leaderboard.length === 0 ? (
               <p className="text-gray-500 p-8 text-center">No scores yet.</p>
             ) : (
               <ul
@@ -1113,7 +1332,6 @@ export default function LiveEventPage() {
           </div>
         )}
       </div>
-
       {scorecardRow && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
           <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">

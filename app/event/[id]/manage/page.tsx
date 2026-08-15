@@ -450,21 +450,65 @@ if (!isCreator && !isEventAdmin) {
       setStripeConnecting(false);
     }
   };
-
-  const handleSaveEvent = async () => {
-    setSaving(true);
-    const payload = {
-      ...event,
-      max_teammates: teamSizeFromEventType(event.event_type || ''),
-    };
-    const { error } = await supabase
-      .from('tournaments')
-      .update(payload)
-      .eq('id', parseInt(eventId));
-    if (error) alert('Save failed: ' + error.message);
-    else alert('Event saved!');
-    setSaving(false);
+const handleSaveEvent = async () => {
+  setSaving(true);
+  const payload = {
+    ...event,
+    max_teammates: teamSizeFromEventType(event.event_type || ''),
   };
+
+  const { error } = await supabase
+    .from('tournaments')
+    .update(payload)
+    .eq('id', parseInt(eventId));
+
+  if (error) {
+    alert('Save failed: ' + error.message);
+    setSaving(false);
+    return;
+  }
+
+  // Sync Skins add-on so check-in / payments work like other add-ons
+  try {
+    if (event.enable_skins && Number(event.skins_fee) > 0) {
+      const { data: existing } = await supabase
+        .from('event_addons')
+        .select('id')
+        .eq('event_id', parseInt(eventId))
+        .eq('name', 'Skins')
+        .maybeSingle();
+
+      if (existing?.id) {
+        await supabase
+          .from('event_addons')
+          .update({
+            price_per_unit: Number(event.skins_fee),
+            quantity_available: 999,
+          })
+          .eq('id', existing.id);
+      } else {
+        await supabase.from('event_addons').insert({
+          event_id: parseInt(eventId),
+          name: 'Skins',
+          price_per_unit: Number(event.skins_fee),
+          quantity_available: 999,
+        });
+      }
+    } else {
+      await supabase
+        .from('event_addons')
+        .delete()
+        .eq('event_id', parseInt(eventId))
+        .eq('name', 'Skins');
+    }
+  } catch (e) {
+    console.error('Skins add-on sync failed', e);
+  }
+
+  alert('Event saved!');
+  setSaving(false);
+};
+  
 
   const handleAddAdmin = async () => {
   if (!newAdminEmail.trim()) return alert('Email is required');
@@ -1854,6 +1898,42 @@ const handleDeleteEvent = async () => {
               ${platformFee.toFixed(2)} platform fee is included in checkout totals
             </p>
           </div>
+          {/* Skins */}
+<div className="md:col-span-2 mt-4 pt-6 border-t border-gray-700">
+  <label className="flex items-center gap-3 text-lg cursor-pointer">
+    <input
+      type="checkbox"
+      checked={!!event?.enable_skins}
+      onChange={(e) => {
+        handleEventChange('enable_skins', e.target.checked);
+        if (!e.target.checked) handleEventChange('skins_fee', 0);
+      }}
+      className="w-6 h-6 accent-emerald-600"
+    />
+    <span className="font-medium">Skins game</span>
+  </label>
+  <p className="text-sm text-gray-500 mt-2 ml-9">
+    Players opt in at check-in. Birdie or better (alone) wins a share of the pot.
+  </p>
+
+  {event?.enable_skins && (
+    <div className="mt-4 ml-9 max-w-xs">
+      <label className="block text-sm text-gray-400 mb-2">
+        Cost to play skins (per player)
+      </label>
+      <input
+        type="number"
+        step="0.01"
+        min="0"
+        value={event?.skins_fee ?? 0}
+        onChange={(e) =>
+          handleEventChange('skins_fee', Number(e.target.value) || 0)
+        }
+        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+      />
+    </div>
+  )}
+</div>
 
           <div>
             <label className="block text-sm text-gray-400 mb-2">
@@ -1873,6 +1953,8 @@ const handleDeleteEvent = async () => {
               Used on Income and for “refund minus greens fees.”
             </p>
           </div>
+
+          
 
           <div>
             <label className="block text-sm text-gray-400 mb-2">

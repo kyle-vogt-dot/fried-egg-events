@@ -15,6 +15,55 @@ function formatRoundTime(startTime: string | null | undefined) {
   if (h === 0) h = 12;
   return `${h}:${m} ${ampm}`;
 }
+type SkinRow = {
+  key: string; // team name or player name
+  skins: number;
+  holes: number[]; // hole numbers won
+  amount: number;
+};
+
+function computeBirdieSkins(opts: {
+  participants: { key: string; scores: Record<number, number> }[];
+  parMap: Record<number, number>;
+  holes: number[];
+  entryFee: number;
+}): { rows: SkinRow[]; pot: number; skinValue: number } {
+  const { participants, parMap, holes, entryFee } = opts;
+  const pot = participants.length * Math.max(0, entryFee);
+  const wins: Record<string, number[]> = {};
+  participants.forEach((p) => (wins[p.key] = []));
+
+  for (const hole of holes) {
+    const par = parMap[hole] || 4;
+    // birdie or better among skins players who have a score
+    const entries = participants
+      .map((p) => ({ key: p.key, score: p.scores[hole] }))
+      .filter((e) => e.score != null && e.score > 0 && e.score <= par - 1);
+
+    if (entries.length === 0) continue;
+
+    const best = Math.min(...entries.map((e) => e.score));
+    const winners = entries.filter((e) => e.score === best);
+    // unique winner only
+    if (winners.length === 1) {
+      wins[winners[0].key].push(hole);
+    }
+  }
+
+  const totalSkins = Object.values(wins).reduce((s, h) => s + h.length, 0);
+  const skinValue = totalSkins > 0 ? pot / totalSkins : 0;
+
+  const rows: SkinRow[] = participants
+    .map((p) => ({
+      key: p.key,
+      skins: wins[p.key].length,
+      holes: wins[p.key],
+      amount: wins[p.key].length * skinValue,
+    }))
+    .sort((a, b) => b.skins - a.skins || b.amount - a.amount);
+
+  return { rows, pot, skinValue };
+}
 
 function isCheckedInForRound(reg: any, roundId: number | 'all') {
   if (roundId === 'all') return !!reg.checked_in;
@@ -170,6 +219,7 @@ export default function EventLeaderboardPage() {
   const [savingBlur, setSavingBlur] = useState(false);
   const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
   const [savingEvent, setSavingEvent] = useState(false);
+  const [boardView, setBoardView] = useState<'stroke' | 'skins'>('stroke');
 
   const numHoles = useMemo(() => {
     const n = Number(event?.number_of_holes || 18);
@@ -474,6 +524,77 @@ export default function EventLeaderboardPage() {
     return leaderboardRows.some((row) => row.holesPlayed >= blurHole);
   }, [blurHole, leaderboardRows]);
 
+const isPlayingSkins = (reg: any) => {
+    if (reg.playing_skins === true) return true;
+    if (reg.addons_selected?.Skins || reg.addons_selected?.skins) return true;
+    return false;
+  };
+
+  const skinsBoard = useMemo(() => {
+    if (!event?.enable_skins) return null;
+
+    const skinsRegs = checkedInRegs.filter(isPlayingSkins);
+
+    if (skinsRegs.length === 0) {
+      return {
+        rows: [] as SkinRow[],
+        pot: 0,
+        skinValue: 0,
+        playerCount: 0,
+        teamCount: 0,
+      };
+    }
+
+    const isTeamEvent = (event?.max_teammates || 1) > 1;
+    const grouped: Record<string, any[]> = {};
+    for (const reg of skinsRegs) {
+      const key =
+        isTeamEvent && reg.team_name
+          ? reg.team_name
+          : reg.player_name || 'Unknown';
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(reg);
+    }
+
+    const participants = Object.keys(grouped).map((key) => {
+      const members = grouped[key];
+      const scores: Record<number, number> = {};
+      for (const reg of members) {
+        const regScores = playerScores[String(reg.id)] || {};
+        for (const holeKey of Object.keys(regScores)) {
+          const hole = Number(holeKey);
+          const score = regScores[hole];
+          if (score == null || score <= 0) continue;
+          scores[hole] =
+            scores[hole] !== undefined
+              ? Math.min(scores[hole], score)
+              : score;
+        }
+      }
+      return { key, scores };
+    });
+
+    const parMap: Record<number, number> = {};
+    const holes: number[] = [];
+    for (let h = 1; h <= numHoles; h++) {
+      parMap[h] = getParForHole(event?.course_data, h);
+      holes.push(h);
+    }
+
+    const result = computeBirdieSkins({
+      participants,
+      parMap,
+      holes,
+      entryFee: Number(event?.skins_fee) || 0,
+    });
+
+    return {
+      ...result,
+      playerCount: skinsRegs.length,
+      teamCount: participants.length,
+    };
+  }, [event, checkedInRegs, playerScores, numHoles]);
+
   // Admin / TV board is never blurred — players see blur on Live only
   const showBlurred = false;
 
@@ -682,6 +803,33 @@ export default function EventLeaderboardPage() {
           )}
         </div>
 
+{event?.enable_skins && (
+  <div className="flex items-center gap-2 mb-6">
+    <button
+      type="button"
+      onClick={() => setBoardView('stroke')}
+      className={`px-5 py-2.5 rounded-3xl text-sm font-medium ${
+        boardView === 'stroke'
+          ? 'bg-white text-black'
+          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+      }`}
+    >
+      Stroke
+    </button>
+    <button
+      type="button"
+      onClick={() => setBoardView('skins')}
+      className={`px-5 py-2.5 rounded-3xl text-sm font-medium ${
+        boardView === 'skins'
+          ? 'bg-emerald-500 text-white'
+          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+      }`}
+    >
+      Skins
+    </button>
+  </div>
+)}
+
         {isAdmin && (
           <div className="bg-gray-800 border border-indigo-500/30 rounded-2xl p-5 mb-6 flex flex-col sm:flex-row sm:items-end gap-4">
             <div className="flex-1">
@@ -726,6 +874,73 @@ export default function EventLeaderboardPage() {
             {selectedRoundId !== 'all' ? ' for this round' : ''} yet.
             <br />
             Check players in, then enter scores on the Scoring page.
+          </div>
+        ) : boardView === 'skins' && event?.enable_skins ? (
+          <div className="bg-gray-800 rounded-3xl p-4 md:p-6">
+            <div className="flex flex-wrap gap-4 text-sm text-gray-400 mb-6">
+              <span>
+                Pot:{' '}
+                <span className="text-emerald-400 font-semibold">
+                  ${(skinsBoard?.pot || 0).toFixed(2)}
+                </span>
+              </span>
+              <span>
+                In skins: {skinsBoard?.playerCount || 0} players
+                {skinsBoard?.teamCount != null
+                  ? ` · ${skinsBoard.teamCount} teams`
+                  : ''}
+              </span>
+              <span>
+                Per skin:{' '}
+                <span className="text-white font-medium">
+                  ${(skinsBoard?.skinValue || 0).toFixed(2)}
+                </span>
+              </span>
+              <span className="text-gray-500">
+                Birdie or better, alone — gross
+              </span>
+            </div>
+
+            {(skinsBoard?.rows || []).length === 0 ? (
+              <p className="text-center text-gray-500 py-12">
+                No one opted into skins yet (Check-in → Skins column), or no
+                unique birdies have been scored.
+              </p>
+            ) : (
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr className="border-b border-gray-700 bg-gray-900">
+                    <th className="text-left py-4 px-6">Pos</th>
+                    <th className="text-left py-4 px-6">Team / Player</th>
+                    <th className="text-center py-4 px-6">Skins</th>
+                    <th className="text-left py-4 px-6">Holes</th>
+                    <th className="text-right py-4 px-6">$</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(skinsBoard?.rows || []).map((row, i) => (
+                    <tr
+                      key={row.key}
+                      className="border-b border-gray-700 hover:bg-gray-700/50"
+                    >
+                      <td className="py-4 px-6 font-bold">{i + 1}</td>
+                      <td className="py-4 px-6 font-medium">{row.key}</td>
+                      <td className="py-4 px-6 text-center text-emerald-400 font-semibold text-lg">
+                        {row.skins}
+                      </td>
+                      <td className="py-4 px-6 text-gray-400 text-sm">
+                        {row.holes.length
+                          ? row.holes.map((h) => `H${h}`).join(', ')
+                          : '—'}
+                      </td>
+                      <td className="py-4 px-6 text-right font-semibold">
+                        ${row.amount.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         ) : (
           <div className="relative bg-gray-800 rounded-3xl p-4 md:p-6 overflow-x-auto">
@@ -818,10 +1033,7 @@ export default function EventLeaderboardPage() {
                           const hole = i + 1;
                           const par = getParForHole(event?.course_data, hole);
                           return (
-                            <td
-                              key={hole}
-                              className="text-center py-3 px-1"
-                            >
+                            <td key={hole} className="text-center py-3 px-1">
                               <div className="flex justify-center">
                                 <ScoreMark
                                   score={row.scores[hole]}
@@ -873,7 +1085,6 @@ export default function EventLeaderboardPage() {
           view the scorecard.
         </p>
       </div>
-
       {scorecardRow && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
           <div className="bg-gray-800 rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 md:p-8">
