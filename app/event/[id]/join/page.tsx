@@ -31,9 +31,17 @@ const isValidEmail = (email: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || '').trim());
 
 const isListable = (r: any) => {
+  if (r.refunded === true) return false;
   if (r.paid === true) return true;
   const m = String(r.payment_method || '').toLowerCase();
-  return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
+  return [
+    'comp',
+    'complimentary',
+    'cash',
+    'manual',
+    'checkin',
+    'payment_link',
+  ].includes(m);
 };
 
 type JoinOption = {
@@ -58,6 +66,10 @@ export default function JoinFromInvitePage() {
   const [options, setOptions] = useState<JoinOption[]>([]);
   const [platformFee, setPlatformFee] = useState(3);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [inviter, setInviter] = useState<{
+    name: string;
+    email: string;
+  } | null>(null);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -104,29 +116,29 @@ export default function JoinFromInvitePage() {
       if (feeData?.platform_fee != null) {
         setPlatformFee(Number(feeData.platform_fee));
       }
-const {
-  data: { user },
-} = await supabase.auth.getUser();
 
-if (!user) {
-  const redirect = encodeURIComponent(
-    `/event/${eventId}/join?regs=${searchParams.get('regs') || ''}`
-  );
-  router.replace(`/login?redirect=${redirect}`);
-  return;
-}
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
 
-setCurrentUser(user); // add this state if you don't have it
-// optional prefill:
-setName(
-  user.user_metadata?.full_name ||
-    user.user_metadata?.name ||
-    user.email?.split('@')[0] ||
-    ''
-);
-setEmail(user.email || '');
+      if (!user) {
+        const redirect = encodeURIComponent(
+          `/event/${eventId}/join?regs=${searchParams.get('regs') || ''}`
+        );
+        router.replace(`/login?redirect=${redirect}`);
+        return;
+      }
 
-      // Inviter's registrations
+      setCurrentUser(user);
+      setName(
+        user.user_metadata?.full_name ||
+          user.user_metadata?.name ||
+          user.email?.split('@')[0] ||
+          ''
+      );
+      setEmail(user.email || '');
+
+      // Inviter's registrations (from QR regs=)
       let inviterRegs: any[] = [];
       if (regIds.length > 0) {
         const { data } = await supabase
@@ -135,6 +147,17 @@ setEmail(user.email || '');
           .in('id', regIds);
         inviterRegs = (data || []).filter(isListable);
       }
+
+      const inv =
+        inviterRegs.find((r) => r.player_email) || inviterRegs[0] || null;
+      setInviter(
+        inv
+          ? {
+              name: inv.player_name || '',
+              email: (inv.player_email || '').trim().toLowerCase(),
+            }
+          : null
+      );
 
       // Full roster for spot counts
       const { data: allRegs } = await supabase
@@ -146,6 +169,7 @@ setEmail(user.email || '');
       const maxTeam = eventData?.max_teammates || 4;
       const isPerRound =
         (eventData?.pricing_mode || 'event') === 'per_round';
+      const roundsList = roundsData || [];
 
       const built: JoinOption[] = [];
       const seen = new Set<string>();
@@ -153,48 +177,58 @@ setEmail(user.email || '');
       for (const reg of inviterRegs) {
         const teamName = reg.team_name || 'Individual';
         const rids: number[] = Array.isArray(reg.selected_round_ids)
-          ? reg.selected_round_ids.map(Number)
+          ? reg.selected_round_ids.map(Number).filter(Boolean)
           : reg.round_id
             ? [Number(reg.round_id)]
             : [];
 
-        const targets =
+        // Multi-round: inviter rounds, else all event rounds
+        // Single-round / no rounds table: synthetic option (roundId 0)
+        let targets: number[] =
           rids.length > 0
             ? rids
-            : (roundsData || []).map((r: any) => Number(r.id));
+            : roundsList.map((r: any) => Number(r.id));
+
+        if (targets.length === 0) {
+          targets = [0];
+        }
 
         for (const rid of targets) {
           const key = `${teamName}::${rid}`;
           if (seen.has(key)) continue;
           seen.add(key);
 
-          const round = (roundsData || []).find(
-            (r: any) => Number(r.id) === Number(rid)
-          );
-          if (!round && rids.length > 0) continue;
+          const round =
+            rid === 0
+              ? null
+              : roundsList.find((r: any) => Number(r.id) === Number(rid));
+
+          // Only skip if we expected a real round and couldn't find it
+          if (rid !== 0 && !round && rids.length > 0) continue;
 
           const onThis = roster.filter((r) => {
             if ((r.team_name || 'Individual') !== teamName) return false;
+            if (rid === 0) return true; // whole-event roster for this team
             const ids: number[] = Array.isArray(r.selected_round_ids)
               ? r.selected_round_ids.map(Number)
               : r.round_id
                 ? [Number(r.round_id)]
                 : [];
-            if (!rid) return true;
-            if (ids.length === 0) return false;
+            if (ids.length === 0) return true; // treat as on the single event
             return ids.includes(Number(rid));
           });
 
-          const price = isPerRound
-            ? Number(round?.price || 0)
-            : Number(eventData?.price || 0);
+          const price =
+            isPerRound && rid !== 0
+              ? Number(round?.price || 0)
+              : Number(eventData?.price || 0);
 
           built.push({
             key,
             teamName,
             roundId: Number(rid),
-            roundName: round?.name || 'Round',
-            startTime: round?.start_time || null,
+            roundName: round?.name || (rid === 0 ? 'Event' : 'Round'),
+            startTime: round?.start_time || eventData?.start_time || null,
             price,
             spotsLeft: Math.max(0, maxTeam - onThis.length),
           });
@@ -202,8 +236,9 @@ setEmail(user.email || '');
       }
 
       setOptions(built);
-      // Pre-select options that still have spots
-      setSelected(new Set(built.filter((o) => o.spotsLeft > 0).map((o) => o.key)));
+      setSelected(
+        new Set(built.filter((o) => o.spotsLeft > 0).map((o) => o.key))
+      );
       setLoading(false);
     };
 
@@ -223,7 +258,6 @@ setEmail(user.email || '');
     const discount = appliedDiscount
       ? Number(appliedDiscount.amount_saved) || 0
       : 0;
-    // discount is per-player total for this simple flow (one player)
     return Math.max(0, base - discount);
   }, [selectedOptions, platformFee, appliedDiscount]);
 
@@ -267,6 +301,7 @@ setEmail(user.email || '');
 
   const handleCheckout = async () => {
     if (!event) return;
+    if (!currentUser) return alert('Please sign in to register');
     if (!name.trim()) return alert('Enter your name');
     if (!isValidEmail(email)) return alert('Enter a valid email');
     if (selectedOptions.length === 0) {
@@ -275,34 +310,32 @@ setEmail(user.email || '');
 
     setSubmitting(true);
     try {
-      // One registration row per selected team+round
-      // (keeps roster filtering correct)
       const rows = selectedOptions.map((o) => ({
-  event_id: event.id,
-  user_id: currentUser.id, // ← link to their account
-  player_name: name.trim(),
-  player_email: email.trim().toLowerCase(),
-  team_name: o.teamName === 'Individual' ? null : o.teamName,
-  paid: false,
-  checked_in: false,
-  addons_selected: {},
-  selected_round_ids: o.roundId ? [o.roundId] : [],
-  discount_code: appliedDiscount?.code || null,
-  discount_amount: appliedDiscount?.amount_saved || 0,
-}));
+        event_id: event.id,
+        user_id: currentUser.id,
+        player_name: name.trim(),
+        player_email: email.trim().toLowerCase(),
+        team_name: o.teamName === 'Individual' ? null : o.teamName,
+        paid: false,
+        payment_method: 'pending_checkout',
+        checked_in: false,
+        addons_selected: {},
+        // roundId 0 (single-event) → empty selected_round_ids
+        selected_round_ids: o.roundId ? [o.roundId] : [],
+        discount_code: appliedDiscount?.code || null,
+        discount_amount: appliedDiscount?.amount_saved || 0,
+      }));
 
-const { data: inserted, error } = await supabase
-  .from('event_registrations')
-  .insert(rows)
-  .select('id');
+      const { data: inserted, error } = await supabase
+        .from('event_registrations')
+        .insert(rows)
+        .select('id');
 
-if (error || !inserted?.length) {
-  throw new Error(error?.message || 'Could not create registration');
-}
+      if (error || !inserted?.length) {
+        throw new Error(error?.message || 'Could not create registration');
+      }
 
-const registrationIds = inserted.map((r: any) => r.id);
-
-
+      const registrationIds = inserted.map((r: any) => r.id);
 
       const draftKey = `registration_draft_${event.id}`;
 
@@ -314,12 +347,15 @@ const registrationIds = inserted.map((r: any) => r.id);
           isIndividual: false,
           isOrganizerOnly: true,
           teamName: selectedOptions[0]?.teamName || null,
-          selected_round_ids: selectedOptions.map((o) => o.roundId),
+          payment_method: 'pending_checkout',
+          selected_round_ids: selectedOptions
+            .map((o) => o.roundId)
+            .filter((id) => id !== 0),
           players: [
             {
               player_name: name.trim(),
               player_email: email.trim().toLowerCase(),
-              user_id: null,
+              user_id: currentUser.id,
             },
           ],
           totalCost: total,
@@ -334,6 +370,8 @@ const registrationIds = inserted.map((r: any) => r.id);
           sendReceipt: true,
           receiptName: name.trim(),
           receiptEmail: email.trim().toLowerCase(),
+          inviter_email: inviter?.email || null,
+          inviter_name: inviter?.name || null,
         })
       );
 
@@ -341,7 +379,6 @@ const registrationIds = inserted.map((r: any) => r.id);
         process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
 
       if (total <= 0) {
-        // Free / fully discounted — mark paid immediately
         await supabase
           .from('event_registrations')
           .update({ paid: true, payment_method: 'comp' })
@@ -423,6 +460,7 @@ const registrationIds = inserted.map((r: any) => r.id);
         </p>
         <p className="text-sm text-teal-400 mt-3">
           Join a team from this invite
+          {inviter?.name ? ` · invited by ${inviter.name}` : ''}
         </p>
 
         {options.length === 0 ? (
@@ -484,13 +522,9 @@ const registrationIds = inserted.map((r: any) => r.id);
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="Email (used if you create an account later)"
+            placeholder="Email"
             className="w-full bg-gray-800 border border-gray-600 rounded-xl px-4 py-3"
           />
-          <p className="text-xs text-gray-500">
-            Use the email you’ll sign up with later so this registration links
-            to your account.
-          </p>
         </div>
 
         <div className="mt-6 bg-gray-800 rounded-2xl p-4">
