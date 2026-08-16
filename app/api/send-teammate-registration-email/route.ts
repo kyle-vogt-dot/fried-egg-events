@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
       course,
       teamName,
       teammates, // string[] of names
+      notice, // 'teammate_added' | undefined
     } = body;
 
     if (!to || !eventName) {
@@ -26,7 +27,36 @@ export async function POST(req: NextRequest) {
         ? teammates.map((n: string) => `• ${n}`).join('<br/>')
         : '• (team roster TBD)';
 
-    const html = `
+    const isInviterNotice = notice === 'teammate_added';
+
+    const subject = isInviterNotice
+      ? `Teammate added – ${eventName}`
+      : `You're registered for ${eventName}`;
+
+    const html = isInviterNotice
+      ? `
+      <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; color: #111;">
+        <h2 style="margin-bottom: 8px;">Teammate added</h2>
+        <p>Hi ${name || 'Golfer'},</p>
+        <p>
+          Someone joined your team on <strong>${eventName}</strong>
+          ${teamName ? ` (<strong>${teamName}</strong>)` : ''}.
+        </p>
+        <p style="margin: 16px 0;">
+          <strong>Date:</strong> ${eventDate || 'TBD'}<br/>
+          <strong>Course:</strong> ${course || 'TBD'}<br/>
+          <strong>Location:</strong> ${location || 'TBD'}
+        </p>
+        <p style="margin: 16px 0;">
+          <strong>Players on this registration:</strong><br/>
+          ${teammateList}
+        </p>
+        <p style="margin-top: 24px; color: #888; font-size: 13px;">
+          Fried Egg Events
+        </p>
+      </div>
+    `
+      : `
       <div style="font-family: sans-serif; max-width: 560px; margin: 0 auto; color: #111;">
         <h2 style="margin-bottom: 8px;">You're registered!</h2>
         <p>Hi ${name || 'Golfer'},</p>
@@ -54,9 +84,9 @@ export async function POST(req: NextRequest) {
     `;
 
     const { error } = await resend.emails.send({
-      from: 'Fried Egg Events <onboarding@resend.dev>', // swap to your verified domain when ready
+      from: 'Fried Egg Events <noreply@friedeggevents.app>',
       to: [to],
-      subject: `You're registered for ${eventName}`,
+      subject,
       html,
     });
 

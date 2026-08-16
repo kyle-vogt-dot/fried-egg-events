@@ -429,7 +429,7 @@ export default function EventCheckInPage() {
             event_id: event?.id || parseInt(eventId),
             type: 'registration',
             registration_id: inserted.id,
-            success_url: `${baseUrl}/api/confirm-registration-payment?registration_id=${inserted.id}&event_id=${eventId}`,
+           success_url: `${baseUrl}/api/confirm-registration-payment?registration_id=${inserted.id}&event_id=${eventId}&session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${baseUrl}/event/${eventId}/check-in`,
           }),
         });
@@ -583,7 +583,7 @@ export default function EventCheckInPage() {
           event_id: event?.id || parseInt(eventId),
           type: 'addon',
           registration_id: currentPayReg.id,
-          success_url: `${baseUrl}/api/confirm-addon-payment?registration_id=${currentPayReg.id}&event_id=${eventId}`,
+         success_url: `${baseUrl}/api/confirm-addon-payment?registration_id=${currentPayReg.id}&event_id=${eventId}&session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${baseUrl}/event/${eventId}/check-in`,
         }),
       });
