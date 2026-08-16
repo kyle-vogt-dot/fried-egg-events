@@ -567,20 +567,39 @@ const handleAddTeammatesCheckout = async () => {
             }
           : null,
         sendReceipt: true,
-        receiptName:
-          getPlayerName?.(currentUser) ||
-          currentUser?.user_metadata?.full_name ||
-          currentUser?.email ||
-          '',
-        receiptEmail: (currentUser?.email || '').trim().toLowerCase(),
-        // inviter = person using My Events (same as payer here)
-        inviter_email: (currentUser?.email || '').trim().toLowerCase(),
-        inviter_name:
-          getPlayerName?.(currentUser) ||
-          currentUser?.user_metadata?.full_name ||
-          '',
+receiptName:
+  currentUser?.user_metadata?.full_name ||
+  currentUser?.user_metadata?.name ||
+  currentUser?.email ||
+  '',
+inviter_name:
+  currentUser?.user_metadata?.full_name ||
+  currentUser?.user_metadata?.name ||
+  currentUser?.email ||
+  '',
       })
     );
+
+    const baseUrl =
+      process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+
+    const res = await fetch('/api/create-checkout-session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: totalCost,
+        player_name: complete[0].name.trim(),
+        email: currentUser.email,
+        description: `Add teammates – ${selectedItem.event.name}`,
+        event_name: selectedItem.event.name,
+        event_id: selectedItem.event.id,
+        type: 'registration',
+        registration_id: registrationIds[0],
+        registration_ids: registrationIds.join(','),
+        success_url: `${baseUrl}/event/${selectedItem.event.id}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}&registration_ids=${registrationIds.join(',')}`,
+        cancel_url: `${baseUrl}/dashboard/play?payment=cancelled`,
+      }),
+    });
 
     const data = await res.json();
     if (!res.ok || !data.url) {
