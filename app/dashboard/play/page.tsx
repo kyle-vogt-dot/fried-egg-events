@@ -542,43 +542,45 @@ const handleAddTeammatesCheckout = async () => {
     const registrationIds = inserted.map((r: any) => r.id);
     const draftKey = `registration_draft_${selectedItem.event.id}`;
 
-    sessionStorage.setItem(
-      draftKey,
-      JSON.stringify({
-        eventId: selectedItem.event.id,
-        mode: 'add_teammates',
-        isIndividual: false,
-        isOrganizerOnly: true,
-        teamName,
-        payment_method: 'pending_checkout',
-        selected_round_ids: selectedRoundIds,
-        players: complete.map((p) => ({
-          player_name: p.name.trim(),
-          player_email: p.email.trim().toLowerCase(),
-          user_id: null,
-        })),
-        totalCost,
-        registration_ids: registrationIds,
-        discount: appliedDiscount
-          ? {
-              code: appliedDiscount.code,
-              discount_code_id: appliedDiscount.discount_code_id,
-              amount_saved: appliedDiscount.amount_saved,
-            }
-          : null,
-        sendReceipt: true,
-receiptName:
-  currentUser?.user_metadata?.full_name ||
-  currentUser?.user_metadata?.name ||
-  currentUser?.email ||
-  '',
-inviter_name:
-  currentUser?.user_metadata?.full_name ||
-  currentUser?.user_metadata?.name ||
-  currentUser?.email ||
-  '',
-      })
-    );
+sessionStorage.setItem(
+  draftKey,
+  JSON.stringify({
+    eventId: selectedItem.event.id,
+    mode: 'add_teammates',
+    isIndividual: false,
+    isOrganizerOnly: true,
+    teamName: addPlayersContext?.teamName || null,
+    payment_method: 'pending_checkout',
+    selected_round_ids: addPlayersContext?.selectedRoundIds || [],
+    players: complete.map((p) => ({
+      player_name: (p.name || '').trim(),
+      player_email: (p.email || '').trim().toLowerCase(),
+      user_id: null,
+    })),
+    totalCost: totalCost, // or whatever you compute
+    registration_ids: registrationIds,
+    discount: appliedDiscount
+      ? {
+          code: appliedDiscount.code,
+          discount_code_id: appliedDiscount.discount_code_id,
+          amount_saved: appliedDiscount.amount_saved,
+        }
+      : null,
+    sendReceipt: true,
+    receiptName:
+      currentUser?.user_metadata?.full_name ||
+      currentUser?.user_metadata?.name ||
+      currentUser?.email ||
+      '',
+    receiptEmail: (currentUser?.email || '').toLowerCase(),
+    inviter_email: (currentUser?.email || '').toLowerCase(),
+    inviter_name:
+      currentUser?.user_metadata?.full_name ||
+      currentUser?.user_metadata?.name ||
+      currentUser?.email ||
+      '',
+  })
+);
 
     const baseUrl =
       process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
