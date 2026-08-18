@@ -107,6 +107,14 @@ export default function EventCheckInPage() {
   const [customRefundAmount, setCustomRefundAmount] = useState('');
   const [refunding, setRefunding] = useState(false);
 
+    const [showEditModal, setShowEditModal] = useState(false);
+  const [editReg, setEditReg] = useState<any>(null);
+  const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editTeam, setEditTeam] = useState('');
+  const [editRoundIds, setEditRoundIds] = useState<number[]>([]);
+  const [savingEdit, setSavingEdit] = useState(false);
+
   const showAddons = addons.length > 0;
   const showHandicaps = !!event?.use_handicaps;
 
@@ -156,6 +164,59 @@ export default function EventCheckInPage() {
       (a.player_name || '').localeCompare(b.player_name || '')
     );
   }, [registrations, selectedRoundId, rounds.length, searchTerm]);
+
+    const existingTeams = useMemo(() => {
+    const names = new Set<string>();
+    for (const r of registrations) {
+      const t = (r.team_name || '').trim();
+      if (t && t.toLowerCase() !== 'individual') names.add(t);
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [registrations]);
+
+  const openEditPlayer = (reg: any) => {
+    setEditReg(reg);
+    setEditName(reg.player_name || '');
+    setEditEmail(reg.player_email || '');
+    setEditTeam(reg.team_name || '');
+    const ids: number[] = Array.isArray(reg.selected_round_ids)
+      ? reg.selected_round_ids.map(Number)
+      : reg.round_id
+        ? [Number(reg.round_id)]
+        : [];
+    setEditRoundIds(ids);
+    setShowEditModal(true);
+  };
+
+  const handleSaveEditPlayer = async () => {
+    if (!editReg) return;
+    if (!editName.trim()) {
+      alert('Player name is required');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const { error } = await supabase
+        .from('event_registrations')
+        .update({
+          player_name: editName.trim(),
+          player_email: editEmail.trim() || null,
+          team_name: editTeam.trim() || null,
+          selected_round_ids: editRoundIds,
+        })
+        .eq('id', editReg.id);
+
+      if (error) throw error;
+
+      setShowEditModal(false);
+      setEditReg(null);
+      await fetchRegistrations();
+    } catch (e: any) {
+      alert(e.message || 'Failed to update player');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   useEffect(() => {
     const fetchData = async () => {
@@ -929,8 +990,14 @@ export default function EventCheckInPage() {
                       className="border-b border-gray-700 hover:bg-gray-800/50"
                     >
                       <td className="py-3 px-3 sm:px-6 font-medium">
-                        
-                        <div>{reg.player_name || 'Unknown'}</div>
+                        <button
+                          type="button"
+                          onClick={() => openEditPlayer(reg)}
+                          className="text-left hover:text-emerald-400 hover:underline"
+                          title="Edit player / team"
+                        >
+                          {reg.player_name || 'Unknown'}
+                        </button>
                         {reg.payment_method === 'cash' && (
                           <div className="text-xs text-emerald-400">Paid cash</div>
                         )}
@@ -1459,6 +1526,119 @@ export default function EventCheckInPage() {
                   Cancel
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+            {showEditModal && editReg && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 rounded-3xl p-6 sm:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto space-y-4">
+            <h3 className="text-2xl font-semibold">Edit player</h3>
+            <p className="text-sm text-gray-400">
+              Move them to another team or change name / rounds.
+            </p>
+
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              placeholder="Player name"
+              className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+            />
+            <input
+              type="email"
+              value={editEmail}
+              onChange={(e) => setEditEmail(e.target.value)}
+              placeholder="Email"
+              className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+            />
+
+            <div>
+              <label className="text-sm text-gray-400 block mb-2">Team</label>
+              <select
+                value={
+                  existingTeams.includes(editTeam) ? editTeam : editTeam ? '__custom__' : ''
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === '__custom__') {
+                    setEditTeam('');
+                  } else {
+                    setEditTeam(v);
+                  }
+                }}
+                className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4 mb-2"
+              >
+                <option value="">Individual / no team</option>
+                {existingTeams.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+                <option value="__custom__">New team name…</option>
+              </select>
+              {(!existingTeams.includes(editTeam) || editTeam === '') && (
+                <input
+                  type="text"
+                  value={existingTeams.includes(editTeam) ? '' : editTeam}
+                  onChange={(e) => setEditTeam(e.target.value)}
+                  placeholder="Type team name"
+                  className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+                />
+              )}
+            </div>
+
+            {rounds.length > 0 && (
+              <div>
+                <label className="text-sm text-gray-400 block mb-2">Rounds</label>
+                <div className="space-y-2">
+                  {rounds.map((r) => {
+                    const id = Number(r.id);
+                    const on = editRoundIds.includes(id);
+                    return (
+                      <label
+                        key={r.id}
+                        className="flex items-center gap-3 p-3 rounded-2xl border border-gray-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          onChange={() =>
+                            setEditRoundIds((prev) =>
+                              on ? prev.filter((x) => x !== id) : [...prev, id]
+                            )
+                          }
+                        />
+                        <span>
+                          {r.name}
+                          {r.start_time
+                            ? ` · ${formatRoundTime(r.start_time)}`
+                            : ''}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={handleSaveEditPlayer}
+                disabled={savingEdit}
+                className="flex-1 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
+              >
+                {savingEdit ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditReg(null);
+                }}
+                className="flex-1 bg-gray-700 hover:bg-gray-600 py-4 rounded-2xl font-semibold"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>
