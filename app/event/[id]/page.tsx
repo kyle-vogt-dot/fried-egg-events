@@ -395,6 +395,57 @@ const [waitlistDone, setWaitlistDone] = useState(false);
       'payment_link',
     ].includes(m);
   };
+    const normalizeName = (name: string) =>
+    String(name || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+
+  const normalizeEmail = (email: string) =>
+    String(email || '')
+      .trim()
+      .toLowerCase();
+
+  const roundIdsOf = (r: any): number[] => {
+    const ids: number[] = Array.isArray(r.selected_round_ids)
+      ? r.selected_round_ids.map(Number)
+      : [];
+    if (r.round_id) ids.push(Number(r.round_id));
+    return Array.from(new Set(ids));
+  };
+
+  const roundsOverlap = (a: number[], b: number[]) =>
+    a.some((id) => b.map(Number).includes(Number(id)));
+
+  /** Same human on a roster row — name + email or name + user_id. */
+  const isSamePlayerIdentity = (
+    r: any,
+    name: string,
+    email?: string | null,
+    userId?: string | null
+  ) => {
+    if (normalizeName(r.player_name) !== normalizeName(name)) return false;
+    if (userId && r.user_id && r.user_id === userId) return true;
+    if (
+      email &&
+      r.player_email &&
+      normalizeEmail(r.player_email) === normalizeEmail(email)
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  /** Logged-in account’s own player row — not kids using the same email. */
+  const isSelfPlayerRow = (r: any, user: any) => {
+    if (!user || !isListableReg(r)) return false;
+    return isSamePlayerIdentity(
+      r,
+      getPlayerName(user),
+      user.email,
+      user.id
+    );
+  };
 
       const getPlayerName = (user: any) => {
     return (
@@ -588,134 +639,72 @@ useEffect(() => {
     const perRound = (event?.pricing_mode || 'event') === 'per_round';
     if (perRound) return;
 
-const already = registrations.some(
-  (r) =>
-    isListableReg(r) &&
-    (r.user_id === currentUser.id ||
-      (r.player_email &&
-        currentUser.email &&
-        String(r.player_email).toLowerCase() ===
-          String(currentUser.email).toLowerCase()))
-);
+    const already = registrations.some((r) =>
+      isSelfPlayerRow(r, currentUser)
+    );
     if (already) setIsOrganizerOnly(true);
   }, [selectedTeam, mode, currentUser, registrations, event?.pricing_mode]);
 
   // Browser back from Stripe (no cancel_url) — clean up unpaid draft regs
+  // Only clean abandoned Stripe drafts on explicit cancel — not on
+  // visibility/back. Visibility cleanup was deleting in-flight rows
+  // so Stripe succeeded with nothing to mark paid.
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const paymentStatus = searchParams.get('payment');
-    if (paymentStatus === 'success') return;
+    if (paymentStatus !== 'cancelled') return;
 
-const cleanupAbandonedCheckout = async () => {
-  try {
-    const raw = sessionStorage.getItem(draftKey);
-    let ids: (string | number)[] = [];
+    const cleanupAbandonedCheckout = async () => {
+      try {
+        const raw = sessionStorage.getItem(draftKey);
+        if (!raw) return;
 
-    if (raw) {
-      const draft = JSON.parse(raw);
-      ids = draft.registration_ids || [];
-    }
+        const draft = JSON.parse(raw);
+        const ids: (string | number)[] = draft.registration_ids || [];
+        if (ids.length === 0) return;
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+        const protectedMethods = new Set([
+          'comp',
+          'complimentary',
+          'cash',
+          'manual',
+          'checkin',
+          'payment_link',
+        ]);
 
-    // Methods we never auto-delete (created from check-in / comp / cash / etc.)
-const protectedMethods = new Set([
-      'comp',
-      'complimentary',
-      'cash',
-      'manual',
-      'checkin',
-      'payment_link',
-    ]);
+        const { data: rows } = await supabase
+          .from('event_registrations')
+          .select('id, payment_method')
+          .in('id', ids)
+          .eq('paid', false);
 
-    const isProtected = (paymentMethod: any) => {
-      const m = String(paymentMethod || '').toLowerCase();
-      if (!m || m === 'pending_checkout' || m === 'draft') return false;
-      return protectedMethods.has(m);
+        const idsToDelete = (rows || [])
+          .filter((r) => {
+            const m = String(r.payment_method || '').toLowerCase();
+            return !protectedMethods.has(m);
+          })
+          .map((r) => r.id);
+
+        if (idsToDelete.length > 0) {
+          await supabase.from('event_registrations').delete().in('id', idsToDelete);
+        }
+
+        draft.registration_ids = [];
+        sessionStorage.setItem(draftKey, JSON.stringify(draft));
+        await fetchData();
+      } catch (e) {
+        console.error(e);
+      }
     };
-
-    if (ids.length > 0) {
-      // Only delete the specific draft rows that are unpaid AND not protected
-      const { data: rows } = await supabase
-        .from('event_registrations')
-        .select('id, payment_method')
-        .in('id', ids)
-        .eq('paid', false);
-        
-
-      const idsToDelete = (rows || [])
-        .filter((r) => !isProtected(r.payment_method))
-        .map((r) => r.id);
-
-      if (idsToDelete.length > 0) {
-        await supabase
-          .from('event_registrations')
-          .delete()
-          .in('id', idsToDelete);
-      }
-    } else if (user) {
-      // Fallback: only wipe true abandoned Stripe drafts for this user
-      const { data: rows } = await supabase
-        .from('event_registrations')
-        .select('id, payment_method')
-        .eq('event_id', parseInt(eventId))
-        .eq('paid', false)
-  .or(`user_id.eq.${user.id},player_email.eq.${user.email}`);
-
-      const idsToDelete = (rows || [])
-        .filter((r) => !isProtected(r.payment_method))
-        .map((r) => r.id);
-
-      if (idsToDelete.length > 0) {
-        await supabase
-          .from('event_registrations')
-          .delete()
-          .in('id', idsToDelete);
-      }
-    }
-
-    if (raw) {
-      const draft = JSON.parse(raw);
-      draft.registration_ids = [];
-      sessionStorage.setItem(draftKey, JSON.stringify(draft));
-    }
-
-    await fetchData();
-  } catch (e) {
-    console.error(e);
-  }
-};
 
     cleanupAbandonedCheckout();
-
-
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        cleanupAbandonedCheckout();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisible);
-
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible);
-    };
   }, [eventId, searchParams, draftKey]);
 
 
 const myRegistrations = useMemo(() => {
   if (!currentUser) return [];
-  return registrations.filter(
-    (r) =>
-      isListableReg(r) &&
-      (r.user_id === currentUser.id ||
-        (r.player_email &&
-          currentUser.email &&
-          String(r.player_email).toLowerCase() ===
-            String(currentUser.email).toLowerCase()))
-  );
+  return registrations.filter((r) => isSelfPlayerRow(r, currentUser));
 }, [registrations, currentUser]);
 
 const alreadyRegistered = myRegistrations.length > 0;
@@ -1280,23 +1269,33 @@ const myRegisteredRoundNames = useMemo(() => {
             .filter(Boolean);
 
           const payer =
-            paidThisCheckout.find((p) => p.id === myReg.id) ||
+            paidThisCheckout.find((p) => p.id === myReg?.id) ||
             paidThisCheckout.find((p) => p.user_id === user.id) ||
             myReg;
 
-                    // draft was already parsed earlier in handleRegistrationSuccess
+          // draft was already parsed earlier in handleRegistrationSuccess
 
           const sendToReceipt =
             receiptSend && isValidEmail(String(receiptTo));
 
+          // Prefer explicit receipt email, then logged-in payer (Stripe customer),
+          // then registration row email
+          const accountEmail = (user.email || '').trim().toLowerCase();
           const emailTo = sendToReceipt
             ? String(receiptTo).trim().toLowerCase()
-            : payer?.player_email;
+            : accountEmail ||
+              (payer?.player_email || '').trim().toLowerCase() ||
+              null;
 
           const emailName = sendToReceipt
-            ? String(receiptToName || '').trim() || payer?.player_name
-            : payer?.player_name;
+            ? String(receiptToName || '').trim() ||
+              payer?.player_name ||
+              'Golfer'
+            : payer?.player_name ||
+              user.user_metadata?.full_name ||
+              'Golfer';
 
+          // 1) Receipt / "you're registered" → person who paid (or receipt prefs)
           if (emailTo) {
             await fetch('/api/send-registration-email', {
               method: 'POST',
@@ -1309,8 +1308,8 @@ const myRegisteredRoundNames = useMemo(() => {
                 location: eventData.location,
                 course: eventData.course,
                 eventId: eventData.id,
-                teamName: payer.team_name || null,
-                isTeam: !!payer.team_name,
+                teamName: payer?.team_name || null,
+                isTeam: !!payer?.team_name,
                 pricingMode: isPerRoundMode ? 'per_round' : 'event',
                 eventPrice: isPerRoundMode ? 0 : netAmount,
                 platformFee: 0,
@@ -1323,11 +1322,13 @@ const myRegisteredRoundNames = useMemo(() => {
               }),
             });
           }
+
+          // 2) Each other person on this checkout → "you're registered"
           const emailedTeammates = new Set<string>();
+          if (emailTo) emailedTeammates.add(emailTo);
+
           for (const person of paidThisCheckout) {
             if (!person) continue;
-            if (person.id === payer?.id) continue;
-            if (person.user_id && person.user_id === user.id) continue;
 
             const to = (person.player_email || '').trim().toLowerCase();
             if (!to || emailedTeammates.has(to)) continue;
@@ -1337,7 +1338,7 @@ const myRegisteredRoundNames = useMemo(() => {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                to: person.player_email,
+                to,
                 name: person.player_name,
                 eventName: eventData.name,
                 eventDate: eventDateStr,
@@ -1349,13 +1350,51 @@ const myRegisteredRoundNames = useMemo(() => {
             });
           }
 
+          // 3) Inviter FYI (QR / join) — not the payer, not organizer contact
+          const inviterEmail = (
+            draft?.inviter_email ||
+            draft?.inviterEmail ||
+            ''
+          )
+            .trim()
+            .toLowerCase();
+          if (
+            inviterEmail &&
+            isValidEmail(inviterEmail) &&
+            inviterEmail !== emailTo &&
+            inviterEmail !==
+              String(eventData.contact_email || '')
+                .trim()
+                .toLowerCase()
+          ) {
+            await fetch('/api/send-teammate-registration-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                to: inviterEmail,
+                name: draft?.inviter_name || 'Team captain',
+                eventName: eventData.name,
+                eventDate: eventDateStr,
+                location: eventData.location,
+                course: eventData.course,
+                teamName: payer?.team_name || draft?.teamName || null,
+                teammates: rosterNames,
+                // optional: teammate route can ignore unknown fields
+                notice: 'teammate_added',
+              }),
+            });
+          }
+
           const roundsLabel = signedUpRounds
             .map((r) => {
-              const time = r.start_time ? String(r.start_time).slice(0, 5) : '';
+              const time = r.start_time
+                ? String(r.start_time).slice(0, 5)
+                : '';
               return `${r.name}${time ? ` (${time})` : ''}`;
             })
             .join(', ');
 
+          // 4) Organizer always
           await fetch('/api/send-organizer-registration-notice', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1364,14 +1403,14 @@ const myRegisteredRoundNames = useMemo(() => {
               eventName: eventData.name,
               createdBy: eventData.created_by,
               contactEmail: eventData.contact_email,
-              playerName: myReg.player_name,
-              playerEmail: myReg.player_email,
-              teamName: myReg.team_name || null,
+              playerName: myReg?.player_name || emailName,
+              playerEmail: myReg?.player_email || emailTo,
+              teamName: myReg?.team_name || null,
               rounds: roundsLabel || null,
               eventFee: netAmount,
               totalPaid,
               teammates: paidThisCheckout
-                .filter((t) => t.id !== myReg.id)
+                .filter((t) => t.id !== myReg?.id)
                 .map((t: any) => ({
                   name: t.player_name,
                   email: t.player_email,
@@ -1414,14 +1453,30 @@ const myRegisteredRoundNames = useMemo(() => {
   const isIndividual = event?.max_teammates === 1 || !event?.max_teammates;
   const maxTeamSize = event?.max_teammates || 1;
 
-  const registrationOpen = event?.registration_open_date
-    ? new Date() >=
-      new Date(
-        event.registration_open_date +
-          'T' +
-          (event.registration_open_time || '00:00:00')
+  const now = new Date();
+
+  const registrationOpensAt = event?.registration_open_date
+    ? new Date(
+        `${event.registration_open_date}T${event.registration_open_time || '00:00:00'}`
       )
-    : false;
+    : null;
+
+  const registrationClosesAt = event?.registration_close_date
+    ? new Date(
+        `${event.registration_close_date}T${event.registration_close_time || '23:59:59'}`
+      )
+    : null;
+
+  const registrationNotYetOpen = !!(
+    registrationOpensAt && now < registrationOpensAt
+  );
+  const registrationClosed = !!(
+    registrationClosesAt && now > registrationClosesAt
+  );
+
+  // Open if: not before open (or no open date) AND not after close
+  const registrationOpen =
+    !registrationNotYetOpen && !registrationClosed;
 
   const isPerRound = (event?.pricing_mode || 'event') === 'per_round';
 const maxPlayers =
@@ -1779,13 +1834,8 @@ setWaitlistPhone('');
         setShowRegisterModal(true);
 
     // If they're already on this event, default to adding others only
-    const alreadyOnEvent = registrations.some(
-      (r) =>
-        r.user_id === user.id ||
-        (r.player_email &&
-          user.email &&
-          String(r.player_email).toLowerCase() ===
-            String(user.email).toLowerCase())
+    const alreadyOnEvent = registrations.some((r) =>
+      isSelfPlayerRow(r, user)
     );
     setIsOrganizerOnly(alreadyOnEvent);
 
@@ -1874,15 +1924,17 @@ const completeAdditional = additionalPlayers.filter(
         }
 
         for (const p of completeAdditional) {
-          // Skip if they typed themselves again in an extra slot
-          const sameEmail =
-            user.email &&
-            p.email.trim().toLowerCase() === user.email.toLowerCase();
-          if (sameEmail && includeSelf) continue;
+          const extraName = p.name.trim();
+          const extraEmail = p.email.trim().toLowerCase();
+          const samePersonAsSelf =
+            includeSelf &&
+            normalizeName(extraName) === normalizeName(playerName) &&
+            extraEmail === String(user.email || '').toLowerCase();
+          if (samePersonAsSelf) continue;
 
           players.push({
-            player_name: p.name.trim(),
-            player_email: p.email.trim().toLowerCase(),
+            player_name: extraName,
+            player_email: extraEmail,
             user_id: null,
           });
         }
@@ -1892,6 +1944,53 @@ const completeAdditional = additionalPlayers.filter(
             alreadyRegistered
               ? 'Add at least one teammate, or select a new round to register yourself.'
               : 'Add at least one player to the team'
+          );
+          setSubmitting(false);
+          return;
+        }
+      }
+            const selectedRoundIdsForDup = getSelectedRoundIds();
+
+      // Same checkout: two identical name+email rows
+      const seen = new Set<string>();
+      for (const p of players) {
+        const key = `${normalizeName(p.player_name)}|${normalizeEmail(p.player_email)}`;
+        if (seen.has(key)) {
+          alert(
+            `${p.player_name} is listed twice. Remove the duplicate player.`
+          );
+          setSubmitting(false);
+          return;
+        }
+        seen.add(key);
+      }
+
+      // Existing listable row: same person + overlapping rounds
+      for (const p of players) {
+        const hit = registrations.find((r) => {
+          if (!isListableReg(r)) return false;
+          if (
+            !isSamePlayerIdentity(
+              r,
+              p.player_name,
+              p.player_email,
+              p.user_id
+            )
+          ) {
+            return false;
+          }
+          return roundsOverlap(roundIdsOf(r), selectedRoundIdsForDup);
+        });
+        if (hit) {
+          const roundNames = rounds
+            .filter((rnd) =>
+              roundIdsOf(hit).includes(Number(rnd.id))
+            )
+            .map((rnd) => rnd.name);
+          alert(
+            `${p.player_name} is already registered${
+              roundNames.length ? ` for ${roundNames.join(', ')}` : ''
+            }. You can’t register the same player twice on the same round. Add a different person (same email is OK) or pick other rounds.`
           );
           setSubmitting(false);
           return;
@@ -1974,7 +2073,7 @@ paid: false,
           type: 'registration',
           registration_id: primaryRegistrationId,
           registration_ids: registrationIds.join(','),
-          success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}`,
+          success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}&registration_ids=${registrationIds.join(',')}`,
           cancel_url: `${baseUrl}/event/${eventId}?payment=cancelled&type=registration`,
         }),
       });
@@ -2247,7 +2346,7 @@ paid: false,
           )}
 
           <div className="p-10 space-y-4">
-            {maxPlayers != null && (
+            {maxPlayers != null && registrationOpen && (
               <p className="text-sm text-gray-400 text-center">
                 {isSoldOut
                   ? 'Sold out'
@@ -2255,7 +2354,34 @@ paid: false,
               </p>
             )}
 
-            {isSoldOut ? (
+            {!registrationOpen ? (
+              <div className="bg-gray-800 border border-gray-600 rounded-3xl p-6 space-y-3 max-w-md w-full text-center">
+                <h3 className="text-xl font-semibold">
+                  {registrationClosed
+                    ? 'Registration closed'
+                    : 'Registration not open'}
+                </h3>
+                <p className="text-sm text-gray-400">
+                  {registrationClosed
+                    ? event?.registration_close_date
+                      ? `Closed ${new Date(
+                          event.registration_close_date + 'T12:00:00'
+                        ).toLocaleDateString()}${
+                          event.registration_close_time
+                            ? ` at ${event.registration_close_time}`
+                            : ''
+                        }.`
+                      : 'Registration is closed for this event.'
+                    : event?.registration_open_date
+                      ? `Opens ${new Date(
+                          event.registration_open_date + 'T12:00:00'
+                        ).toLocaleDateString()} at ${
+                          event.registration_open_time || '00:00'
+                        }.`
+                      : 'Registration is not open yet.'}
+                </p>
+              </div>
+            ) : isSoldOut ? (
               <div className="bg-gray-800 border border-amber-500/40 rounded-3xl p-6 space-y-4 max-w-md w-full">
                 <div>
                   <h3 className="text-xl font-semibold text-amber-300">
@@ -2532,7 +2658,7 @@ paid: false,
 )}
 
 {/* Only show the “go to My Events” message when they have nothing left to register for */}
-{alreadyRegistered && myRegisteredRoundIds.length >= rounds.length ? (
+{false && alreadyRegistered && myRegisteredRoundIds.length >= rounds.length ? (
   <div className="space-y-6">
     <p className="text-gray-400 text-sm text-center">
       You’re registered for every round. To add players to your team, go to{' '}

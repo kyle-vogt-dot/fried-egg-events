@@ -44,6 +44,14 @@ const isListable = (r: any) => {
   ].includes(m);
 };
 
+const roundIdsOf = (r: any): number[] => {
+  const ids: number[] = Array.isArray(r.selected_round_ids)
+    ? r.selected_round_ids.map(Number).filter(Boolean)
+    : [];
+  if (r.round_id) ids.push(Number(r.round_id));
+  return Array.from(new Set(ids));
+};
+
 type JoinOption = {
   key: string;
   teamName: string;
@@ -85,6 +93,16 @@ export default function JoinFromInvitePage() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
+  const joinQuery = () => {
+    const q = new URLSearchParams();
+    const regs = searchParams.get('regs') || '';
+    const team = searchParams.get('team') || '';
+    if (regs) q.set('regs', regs);
+    if (team) q.set('team', team);
+    const s = q.toString();
+    return s ? `?${s}` : '';
+  };
+
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -93,6 +111,7 @@ export default function JoinFromInvitePage() {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
+      const teamParam = (searchParams.get('team') || '').trim();
 
       const { data: eventData } = await supabase
         .from('tournaments')
@@ -123,7 +142,7 @@ export default function JoinFromInvitePage() {
 
       if (!user) {
         const redirect = encodeURIComponent(
-          `/event/${eventId}/join?regs=${searchParams.get('regs') || ''}`
+          `/event/${eventId}/join${joinQuery()}`
         );
         router.replace(`/login?redirect=${redirect}`);
         return;
@@ -138,7 +157,6 @@ export default function JoinFromInvitePage() {
       );
       setEmail(user.email || '');
 
-      // Inviter's registrations (from QR regs=)
       let inviterRegs: any[] = [];
       if (regIds.length > 0) {
         const { data } = await supabase
@@ -159,7 +177,6 @@ export default function JoinFromInvitePage() {
           : null
       );
 
-      // Full roster for spot counts
       const { data: allRegs } = await supabase
         .from('event_registrations')
         .select('*')
@@ -174,22 +191,23 @@ export default function JoinFromInvitePage() {
       const built: JoinOption[] = [];
       const seen = new Set<string>();
 
-      for (const reg of inviterRegs) {
-        const teamName = reg.team_name || 'Individual';
-        const rids: number[] = Array.isArray(reg.selected_round_ids)
-          ? reg.selected_round_ids.map(Number).filter(Boolean)
-          : reg.round_id
-            ? [Number(reg.round_id)]
-            : [];
-
-        // Multi-round: inviter rounds, else all event rounds
-        // Single-round / no rounds table: synthetic option (roundId 0)
+      const addOptionsForTeam = (teamName: string, preferredRids: number[]) => {
         let targets: number[] =
-          rids.length > 0
-            ? rids
+          preferredRids.length > 0
+            ? preferredRids
             : roundsList.map((r: any) => Number(r.id));
 
+        // Event with no rounds table: one "Event" option
         if (targets.length === 0) {
+          targets = [0];
+        }
+
+        // No stored round ids + not per-round → whole event
+        if (
+          preferredRids.length === 0 &&
+          !isPerRound &&
+          roundsList.length > 0
+        ) {
           targets = [0];
         }
 
@@ -203,18 +221,13 @@ export default function JoinFromInvitePage() {
               ? null
               : roundsList.find((r: any) => Number(r.id) === Number(rid));
 
-          // Only skip if we expected a real round and couldn't find it
-          if (rid !== 0 && !round && rids.length > 0) continue;
+          if (rid !== 0 && !round && preferredRids.length > 0) continue;
 
           const onThis = roster.filter((r) => {
             if ((r.team_name || 'Individual') !== teamName) return false;
-            if (rid === 0) return true; // whole-event roster for this team
-            const ids: number[] = Array.isArray(r.selected_round_ids)
-              ? r.selected_round_ids.map(Number)
-              : r.round_id
-                ? [Number(r.round_id)]
-                : [];
-            if (ids.length === 0) return true; // treat as on the single event
+            if (rid === 0) return true;
+            const ids = roundIdsOf(r);
+            if (ids.length === 0) return true;
             return ids.includes(Number(rid));
           });
 
@@ -233,6 +246,23 @@ export default function JoinFromInvitePage() {
             spotsLeft: Math.max(0, maxTeam - onThis.length),
           });
         }
+      };
+
+      for (const reg of inviterRegs) {
+        const teamName = reg.team_name || 'Individual';
+        addOptionsForTeam(teamName, roundIdsOf(reg));
+      }
+
+      if (teamParam) {
+        const teamName = decodeURIComponent(teamParam);
+        const teamRegs = roster.filter(
+          (r) => (r.team_name || '') === teamName
+        );
+        const ridSet = new Set<number>();
+        for (const r of teamRegs) {
+          roundIdsOf(r).forEach((n) => ridSet.add(n));
+        }
+        addOptionsForTeam(teamName, Array.from(ridSet));
       }
 
       setOptions(built);
@@ -320,7 +350,6 @@ export default function JoinFromInvitePage() {
         payment_method: 'pending_checkout',
         checked_in: false,
         addons_selected: {},
-        // roundId 0 (single-event) → empty selected_round_ids
         selected_round_ids: o.roundId ? [o.roundId] : [],
         discount_code: appliedDiscount?.code || null,
         discount_amount: appliedDiscount?.amount_saved || 0,
@@ -350,7 +379,7 @@ export default function JoinFromInvitePage() {
           payment_method: 'pending_checkout',
           selected_round_ids: selectedOptions
             .map((o) => o.roundId)
-            .filter((id) => id !== 0),
+            .filter((rid) => rid !== 0),
           players: [
             {
               player_name: name.trim(),
@@ -403,9 +432,10 @@ export default function JoinFromInvitePage() {
           registration_id: registrationIds[0],
           registration_ids: registrationIds.join(','),
           success_url: `${baseUrl}/event/${event.id}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}&registration_ids=${registrationIds.join(',')}`,
-          cancel_url: `${baseUrl}/event/${event.id}/join?regs=${encodeURIComponent(
-            searchParams.get('regs') || ''
-          )}&payment=cancelled`,
+          cancel_url: `${baseUrl}/event/${event.id}/join${joinQuery()}&payment=cancelled`.replace(
+            'join&',
+            'join?'
+          ),
         }),
       });
 

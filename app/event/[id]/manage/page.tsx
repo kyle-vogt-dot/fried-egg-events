@@ -4,6 +4,8 @@ import { useState, useEffect, useRef } from 'react';
 
 import { createBrowserClient } from '@supabase/ssr';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import EventEmailsPanel from '@/app/components/EventEmailsPanel';
+
 
 
 const teamSizeFromEventType = (type: string) => {
@@ -1080,6 +1082,8 @@ const handleDeleteEvent = async () => {
           )}
         </div>
 
+        
+
         {/* Pricing Mode */}
 <div className="bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 mt-8 mb-2">
   <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
@@ -1136,8 +1140,15 @@ const handleDeleteEvent = async () => {
   </div>
 </div>
 
-        {/* Four Buttons */}
+        {/* Five Buttons */}
         <div className="flex flex-wrap gap-3 mt-8">
+          <button
+  type="button"
+  onClick={() => router.push(`/event/${eventId}/emails`)}
+  className="bg-gray-700 hover:bg-gray-600 px-5 py-3 rounded-2xl font-medium"
+>
+  Email Players
+</button>
           <button
             onClick={() => setShowRounds(!showRounds)}
             className="flex-1 sm:flex-none bg-teal-600 hover:bg-teal-700 px-6 py-4 rounded-3xl font-medium transition-colors"
@@ -1308,6 +1319,7 @@ const handleDeleteEvent = async () => {
                   </>
                 )}
               </div>
+              
 
               <div className="md:col-span-2">
                 <button

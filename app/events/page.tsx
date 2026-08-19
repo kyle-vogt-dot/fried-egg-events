@@ -178,6 +178,12 @@ export default function CreatedEventsPage() {
                   Pairings →
                 </Link>
               )}
+              <a
+  href={`/event/${event.id}/emails`}
+  className="block text-blue-400 hover:text-blue-300"
+>
+  Emails →
+</a>
               {canIncome && (
                 <Link
                   href={`/event/${event.id}/income`}
