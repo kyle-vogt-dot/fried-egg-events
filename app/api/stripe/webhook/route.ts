@@ -11,6 +11,26 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+function parseIds(session: Stripe.Checkout.Session): number[] {
+  const meta = session.metadata || {};
+  const raw = [
+    meta.registration_ids || '',
+    meta.registration_id || '',
+  ]
+    .join(',')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  return Array.from(
+    new Set(
+      raw
+        .map((s) => parseInt(s, 10))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    )
+  );
+}
+
 export async function POST(request: NextRequest) {
   const sig = request.headers.get('stripe-signature');
   if (!sig) {
@@ -32,7 +52,6 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // --- Connect: organizer account flags ---
     if (event.type === 'account.updated') {
       const account = event.data.object as Stripe.Account;
 
@@ -50,60 +69,104 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // --- Checkout: mark registration paid + save PaymentIntent ---
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as Stripe.Checkout.Session;
-
-      const registrationId = session.metadata?.registration_id?.trim();
-      const type = (session.metadata?.type || '').toLowerCase();
-      const netFromMeta = session.metadata?.net_amount
-        ? Number(session.metadata.net_amount)
-        : null;
+      const meta = session.metadata || {};
+      const type = (meta.type || '').toLowerCase();
+      const eventId = meta.event_id ? parseInt(meta.event_id, 10) : null;
+      const ids = parseIds(session);
 
       const paymentIntentId =
         typeof session.payment_intent === 'string'
           ? session.payment_intent
           : session.payment_intent?.id ?? null;
 
+      const netFromMeta = meta.net_amount ? Number(meta.net_amount) : null;
       const amountPaidTotal =
         session.amount_total != null ? session.amount_total / 100 : null;
+      const amountPaid = netFromMeta ?? amountPaidTotal;
 
-      if (registrationId) {
-        if (type === 'addon' || type === 'addon_payment') {
+      if (type === 'sponsorship') {
+        return NextResponse.json({ received: true });
+      }
+
+      if (type === 'addon' || type === 'addon_payment') {
+        if (ids.length > 0) {
           const { error } = await supabaseAdmin
             .from('event_registrations')
             .update({
               paid_addons: true,
               stripe_payment_intent_id: paymentIntentId,
             })
-            .eq('id', registrationId);
-
+            .in('id', ids);
           if (error) {
             console.error('Addon payment update failed:', error);
             return NextResponse.json({ error: error.message }, { status: 500 });
           }
-        } else {
-          // registration (or empty type)
-          const { error } = await supabaseAdmin
+        }
+        return NextResponse.json({ received: true });
+      }
+
+      if (ids.length > 0) {
+        const { data: updated, error } = await supabaseAdmin
+          .from('event_registrations')
+          .update({
+            paid: true,
+            payment_method: 'card',
+            stripe_payment_intent_id: paymentIntentId,
+            amount_paid: amountPaid,
+          })
+          .in('id', ids)
+          .select('id');
+
+        if (error) {
+          console.error('Registration payment update failed:', error);
+          return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+
+        const updatedIds = new Set((updated || []).map((r) => Number(r.id)));
+        const missing = ids.filter((id) => !updatedIds.has(id));
+
+        // Drafts were deleted — recreate paid rows with the same ids
+        for (const id of missing) {
+          if (!eventId) continue;
+          const { error: insErr } = await supabaseAdmin
             .from('event_registrations')
-            .update({
+            .insert({
+              id,
+              event_id: eventId,
+              player_name: meta.player_name || 'Player',
+              player_email: (meta.email || '').toLowerCase() || null,
               paid: true,
               payment_method: 'card',
               stripe_payment_intent_id: paymentIntentId,
-              amount_paid: netFromMeta ?? amountPaidTotal,
-            })
-            .eq('id', registrationId);
-
-          if (error) {
-            console.error('Registration payment update failed:', error);
-            return NextResponse.json({ error: error.message }, { status: 500 });
+              amount_paid: amountPaid,
+              selected_round_ids: [],
+            });
+          if (insErr) {
+            console.error('Registration upsert failed', id, insErr);
           }
         }
-      } else {
+      } else if (eventId) {
         console.warn(
-          'checkout.session.completed without registration_id metadata',
+          'checkout.session.completed with no registration ids',
           session.id
         );
+        const { error: insErr } = await supabaseAdmin
+          .from('event_registrations')
+          .insert({
+            event_id: eventId,
+            player_name: meta.player_name || 'Player',
+            player_email: (meta.email || '').toLowerCase() || null,
+            paid: true,
+            payment_method: 'card',
+            stripe_payment_intent_id: paymentIntentId,
+            amount_paid: amountPaid,
+            selected_round_ids: [],
+          });
+        if (insErr) {
+          console.error('Registration create-from-session failed', insErr);
+        }
       }
     }
 

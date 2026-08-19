@@ -1,6 +1,8 @@
+import { createElement } from 'react';
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
+import { renderToBuffer } from '@react-pdf/renderer';
 import {
   TEMPLATES,
   isListableReg,
@@ -10,8 +12,12 @@ import {
   buildCaptainMap,
   EmailAudience,
 } from '@/app/libs/event-emails';
+import { PairingsPDFDoc } from '@/app/libs/pairings-pdf';
+
+export const runtime = 'nodejs';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function adminClient() {
   return createClient(
@@ -91,7 +97,7 @@ async function assertOrganizer(req: NextRequest, eventId: number) {
   const { data: event } = await sb
     .from('tournaments')
     .select(
-      'id, name, date, course, location, created_by, contact_email, contact_name, max_teammates'
+      'id, name, date, course, location, created_by, contact_email, contact_name, max_teammates, event_type, number_of_holes, start_format'
     )
     .eq('id', eventId)
     .single();
@@ -107,6 +113,28 @@ async function assertOrganizer(req: NextRequest, eventId: number) {
 
   if (!isCreator && !adminRow) return { error: 'Forbidden', user };
   return { error: null, user, event, sb };
+}
+
+async function buildPairingsAttachment(event: any, rounds: any[], regs: any[]) {
+  try {
+    const doc = createElement(PairingsPDFDoc as any, {
+      event,
+      rounds: rounds || [],
+      regs,
+    });
+    const content = await renderToBuffer(doc as any);
+    const safeName = String(event.name || 'event')
+      .replace(/[^a-z0-9]+/gi, '-')
+      .replace(/^-|-$/g, '');
+    console.log('pairings pdf bytes', content?.length);
+    return {
+      filename: `${safeName}-pairings.pdf`,
+      content,
+    };
+  } catch (e) {
+    console.error('Pairings PDF failed', e);
+    return null;
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -232,6 +260,19 @@ export async function POST(req: NextRequest) {
       'Fried Egg Events <noreply@friedeggevents.app>';
     const replyTo = event.contact_email || undefined;
 
+    const pairingsAttachment =
+      templateKey === 'pairings'
+        ? await buildPairingsAttachment(event, rounds || [], listable)
+        : null;
+
+    console.log(
+      'pairings attach',
+      templateKey,
+      pairingsAttachment
+        ? `${pairingsAttachment.filename} ${pairingsAttachment.content.length} bytes`
+        : 'NONE'
+    );
+
     let sent = 0;
     const errors: string[] = [];
     const results: {
@@ -241,45 +282,119 @@ export async function POST(req: NextRequest) {
       error: string | null;
     }[] = [];
 
-    for (const r of recipients) {
+    const sendOne = async (r: Recip) => {
       const vars = { ...shared, ...r.vars };
       const subject = applyVars(subjectTemplate, vars);
       const text = applyVars(bodyTemplate, vars);
-      try {
-        const { error } = await resend.emails.send({
-          from,
-          to: r.email,
-          subject,
-          text,
-          html: buildHtml(text, vars, templateKey),
-          ...(replyTo ? { replyTo } : {}),
-        });
-        if (error) {
-          errors.push(`${r.email}: ${error.message}`);
-          results.push({
-            email: r.email,
-            name: r.name,
-            status: 'failed',
-            error: error.message,
-          });
-        } else {
-          sent += 1;
-          results.push({
-            email: r.email,
-            name: r.name,
-            status: 'sent',
-            error: null,
-          });
-        }
-      } catch (e: any) {
-        const msg = e.message || 'send failed';
-        errors.push(`${r.email}: ${msg}`);
+      const { error } = await resend.emails.send({
+        from,
+        to: r.email,
+        subject,
+        text,
+        html: buildHtml(text, vars, templateKey),
+        ...(replyTo ? { replyTo } : {}),
+        ...(pairingsAttachment
+          ? {
+              attachments: [
+                {
+                  filename: pairingsAttachment.filename,
+                  content: pairingsAttachment.content,
+                },
+              ],
+            }
+          : {}),
+      } as any);
+
+      if (error) {
+        errors.push(`${r.email}: ${error.message}`);
         results.push({
           email: r.email,
           name: r.name,
           status: 'failed',
-          error: msg,
+          error: error.message,
         });
+      } else {
+        sent += 1;
+        results.push({
+          email: r.email,
+          name: r.name,
+          status: 'sent',
+          error: null,
+        });
+      }
+    };
+
+    if (pairingsAttachment || recipients.length <= 10) {
+      for (const r of recipients) {
+        try {
+          await sendOne(r);
+        } catch (e: any) {
+          const msg = e.message || 'send failed';
+          errors.push(`${r.email}: ${msg}`);
+          results.push({
+            email: r.email,
+            name: r.name,
+            status: 'failed',
+            error: msg,
+          });
+        }
+        await sleep(150);
+      }
+    } else {
+      const CHUNK = 100;
+      for (let i = 0; i < recipients.length; i += CHUNK) {
+        const chunk = recipients.slice(i, i + CHUNK);
+        const payloads = chunk.map((r) => {
+          const vars = { ...shared, ...r.vars };
+          return {
+            from,
+            to: [r.email],
+            subject: applyVars(subjectTemplate, vars),
+            text: applyVars(bodyTemplate, vars),
+            html: buildHtml(
+              applyVars(bodyTemplate, vars),
+              vars,
+              templateKey
+            ),
+            ...(replyTo ? { replyTo } : {}),
+          };
+        });
+        try {
+          const { error } = await resend.batch.send(payloads as any);
+          if (error) {
+            for (const r of chunk) {
+              errors.push(`${r.email}: ${error.message}`);
+              results.push({
+                email: r.email,
+                name: r.name,
+                status: 'failed',
+                error: error.message,
+              });
+            }
+          } else {
+            for (const r of chunk) {
+              sent += 1;
+              results.push({
+                email: r.email,
+                name: r.name,
+                status: 'sent',
+                error: null,
+              });
+            }
+          }
+        } catch (e: any) {
+          const msg = e.message || 'batch failed';
+          for (const r of chunk) {
+            errors.push(`${r.email}: ${msg}`);
+            results.push({
+              email: r.email,
+              name: r.name,
+              status: 'failed',
+              error: msg,
+            });
+          }
+        }
+        if (i + CHUNK < recipients.length) await sleep(500);
       }
     }
 
@@ -311,6 +426,7 @@ export async function POST(req: NextRequest) {
       attempted: recipients.length,
       errors,
       send_id: sendRow?.id || null,
+      attached_pdf: !!pairingsAttachment,
     });
   } catch (e: any) {
     console.error(e);
