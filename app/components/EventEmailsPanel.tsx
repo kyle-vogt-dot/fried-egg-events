@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { createBrowserClient } from '@supabase/ssr';
 import { TEMPLATES, EmailAudience } from '@/app/libs/event-emails';
 
@@ -16,6 +17,7 @@ export default function EventEmailsPanel({ eventId }: { eventId: number }) {
   const [body, setBody] = useState(TEMPLATES.fill_team.body);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState('');
+  const [sendId, setSendId] = useState<number | null>(null);
   const [history, setHistory] = useState<any[]>([]);
 
   useEffect(() => {
@@ -37,9 +39,12 @@ export default function EventEmailsPanel({ eventId }: { eventId: number }) {
   }, [eventId, result]);
 
   const send = async () => {
-    if (!confirm(`Send this email now? Recipients will not see each other.`)) return;
+    if (!confirm(`Send this email now? Recipients will not see each other.`)) {
+      return;
+    }
     setSending(true);
     setResult('');
+    setSendId(null);
     try {
       const {
         data: { session },
@@ -60,6 +65,7 @@ export default function EventEmailsPanel({ eventId }: { eventId: number }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Send failed');
+      setSendId(data.send_id || null);
       setResult(
         `Sent ${data.sent} of ${data.attempted}` +
           (data.errors?.length ? ` · ${data.errors.length} failed` : '')
@@ -115,7 +121,9 @@ export default function EventEmailsPanel({ eventId }: { eventId: number }) {
         className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 font-mono text-sm"
       />
       <p className="text-xs text-gray-500">
-        {'{{first_name}} {{event_name}} {{date}} {{course}} {{team_name}} {{spots_left}} {{join_link}} {{live_link}} {{leaderboard_link}}'}
+        {
+          '{{first_name}} {{event_name}} {{date}} {{course}} {{team_name}} {{spots_left}} {{join_link}} {{live_link}} {{leaderboard_link}}'
+        }
       </p>
 
       <button
@@ -126,16 +134,32 @@ export default function EventEmailsPanel({ eventId }: { eventId: number }) {
       >
         {sending ? 'Sending…' : 'Send emails'}
       </button>
-      {result ? <p className="text-sm text-gray-300">{result}</p> : null}
+
+      {result ? (
+        sendId ? (
+          <Link
+            href={`/event/${eventId}/emails/log/${sendId}`}
+            className="block text-sm text-emerald-400 hover:underline"
+          >
+            {result} →
+          </Link>
+        ) : (
+          <p className="text-sm text-gray-300">{result}</p>
+        )
+      ) : null}
 
       {history.length > 0 && (
         <div className="pt-4 border-t border-gray-700 space-y-2">
           <p className="text-xs text-gray-500 uppercase">Recent sends</p>
           {history.map((h) => (
-            <p key={h.id} className="text-sm text-gray-400">
+            <Link
+              key={h.id}
+              href={`/event/${eventId}/emails/log/${h.id}`}
+              className="block text-sm text-gray-400 hover:text-white"
+            >
               {new Date(h.created_at).toLocaleString()} · {h.template_key} ·{' '}
               {h.audience} · {h.recipient_count} sent
-            </p>
+            </Link>
           ))}
         </div>
       )}

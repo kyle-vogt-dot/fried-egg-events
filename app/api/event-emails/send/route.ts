@@ -44,7 +44,11 @@ function btn(href: string, label: string) {
   </p>`;
 }
 
-function buildHtml(text: string, vars: Record<string, string>, templateKey: string) {
+function buildHtml(
+  text: string,
+  vars: Record<string, string>,
+  templateKey: string
+) {
   const paragraphs = escapeHtml(text)
     .split(/\n{2,}/)
     .map(
@@ -55,11 +59,11 @@ function buildHtml(text: string, vars: Record<string, string>, templateKey: stri
 
   const buttons =
     templateKey === 'fill_team'
-      ? btn(vars.join_link, 'Add players')
+      ? btn(vars.join_link, 'Join this team')
       : templateKey === 'pairings'
         ? btn(vars.live_link, 'Live scoring') +
           btn(vars.leaderboard_link, 'Leaderboard')
-        : btn(vars.join_link, 'Add players') +
+        : btn(vars.join_link, 'Join this team') +
           btn(vars.live_link, 'View event');
 
   return `<div style="font-family:Helvetica,Arial,sans-serif;font-size:15px;color:#111827;max-width:560px">
@@ -230,6 +234,12 @@ export async function POST(req: NextRequest) {
 
     let sent = 0;
     const errors: string[] = [];
+    const results: {
+      email: string;
+      name: string;
+      status: 'sent' | 'failed';
+      error: string | null;
+    }[] = [];
 
     for (const r of recipients) {
       const vars = { ...shared, ...r.vars };
@@ -244,32 +254,64 @@ export async function POST(req: NextRequest) {
           html: buildHtml(text, vars, templateKey),
           ...(replyTo ? { replyTo } : {}),
         });
-        if (error) errors.push(`${r.email}: ${error.message}`);
-        else sent += 1;
+        if (error) {
+          errors.push(`${r.email}: ${error.message}`);
+          results.push({
+            email: r.email,
+            name: r.name,
+            status: 'failed',
+            error: error.message,
+          });
+        } else {
+          sent += 1;
+          results.push({
+            email: r.email,
+            name: r.name,
+            status: 'sent',
+            error: null,
+          });
+        }
       } catch (e: any) {
-        errors.push(`${r.email}: ${e.message || 'send failed'}`);
+        const msg = e.message || 'send failed';
+        errors.push(`${r.email}: ${msg}`);
+        results.push({
+          email: r.email,
+          name: r.name,
+          status: 'failed',
+          error: msg,
+        });
       }
     }
 
-    await sb.from('event_email_sends').insert({
-      event_id: eventId,
-      sent_by: user.id,
-      template_key: templateKey,
-      audience,
-      subject: applyVars(subjectTemplate, {
-        ...shared,
-        first_name: '',
-        team_name: '',
-        spots_left: '',
-        join_link: '',
-        round_line: '',
-        tee_line: '',
-      }),
-      body_text: bodyTemplate,
-      recipient_count: sent,
-    });
+    const { data: sendRow } = await sb
+      .from('event_email_sends')
+      .insert({
+        event_id: eventId,
+        sent_by: user.id,
+        template_key: templateKey,
+        audience,
+        subject: applyVars(subjectTemplate, {
+          ...shared,
+          first_name: '',
+          team_name: '',
+          spots_left: '',
+          join_link: '',
+          round_line: '',
+          tee_line: '',
+        }),
+        body_text: bodyTemplate,
+        recipient_count: sent,
+        results,
+      })
+      .select('id')
+      .single();
 
-    return NextResponse.json({ sent, attempted: recipients.length, errors });
+    return NextResponse.json({
+      sent,
+      attempted: recipients.length,
+      errors,
+      send_id: sendRow?.id || null,
+    });
   } catch (e: any) {
     console.error(e);
     return NextResponse.json(
