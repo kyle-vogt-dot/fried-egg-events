@@ -505,10 +505,23 @@ const handleCheckout = async () => {
 const [showAdmins, setShowAdmins] = useState(false);
 
   const handleRemovePlayer = async (reg: any) => {
-    if (!confirm(`Remove ${reg.player_name}?`)) return;
-    const { error } = await supabase.from('event_registrations').delete().eq('id', reg.id);
-    if (error) alert("Failed to remove: " + error.message);
-    else fetchRegistrations();
+    if (!confirm(`Remove ${reg.player_name} from the active roster?`)) return;
+
+    const { error } = await supabase
+      .from('event_registrations')
+      .update({
+        paid: false,
+        refunded: true,
+        refunded_at: new Date().toISOString(),
+      })
+      .eq('id', reg.id);
+
+    if (error) {
+      alert('Failed to remove: ' + error.message);
+      return;
+    }
+
+    fetchRegistrations();
   };
   //Add Admin Handler
   const handleAddAdmin = async () => {

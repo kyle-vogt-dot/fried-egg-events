@@ -50,7 +50,6 @@ Team: {{team_name}}
 
 What to expect:
 - Arrive a bit early for check-in
-- Bring a photo ID if the course asks
 - Live scoring: {{live_link}}
 - Leaderboard: {{leaderboard_link}}
 
@@ -108,7 +107,7 @@ export function buildCaptainMap(
   >();
 
   for (const [key, members] of byKey) {
-    const captain = members[0];
+    const captain = members.find((m) => m.is_captain === true) || members[0];
     const email = normalizeEmail(captain.player_email);
     if (!email) continue;
     const [team, ridStr] = key.split('::');

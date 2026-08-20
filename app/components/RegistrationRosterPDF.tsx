@@ -167,9 +167,12 @@ export function RegistrationRosterPDF({
     : '';
 
   const listable = (registrations || []).filter((r) => {
+    if (r.refunded === true) return false;
     if (r.paid === true) return true;
     const m = String(r.payment_method || '').toLowerCase();
-    return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(m);
+    return ['comp', 'complimentary', 'cash', 'manual', 'checkin', 'payment_link'].includes(
+      m
+    );
   });
 
   const byRound: Record<
@@ -179,11 +182,13 @@ export function RegistrationRosterPDF({
 
   for (const reg of listable) {
     const team = reg.team_name || 'Individual';
-    const rids: number[] = Array.isArray(reg.selected_round_ids)
-      ? reg.selected_round_ids.map(Number)
-      : reg.round_id
-        ? [Number(reg.round_id)]
-        : [0];
+    const ids: number[] = Array.isArray(reg.selected_round_ids)
+      ? (reg.selected_round_ids as any[])
+          .map(Number)
+          .filter((n: number) => Number.isFinite(n))
+      : [];
+    if (reg.round_id) ids.push(Number(reg.round_id));
+    const rids = ids.length > 0 ? Array.from(new Set(ids)) : [0];
 
     for (const rid of rids) {
       const key = String(rid);

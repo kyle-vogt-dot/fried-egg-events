@@ -436,10 +436,23 @@ export default function EventPairingsPage() {
       .from('event_registrations')
       .select('*')
       .eq('event_id', id)
-      .eq('paid', true)
       .order('created_at', { ascending: true });
 
-    setAllRegs(regs || []);
+    const listable = (regs || []).filter((r: any) => {
+      if (r.refunded === true) return false;
+      if (r.paid === true) return true;
+      const m = String(r.payment_method || '').toLowerCase();
+      return [
+        'comp',
+        'complimentary',
+        'cash',
+        'manual',
+        'checkin',
+        'payment_link',
+      ].includes(m);
+    });
+
+    setAllRegs(listable);
 
     let roundId = selectedRoundId;
     if (roundId == null && roundList.length > 0) {
@@ -876,10 +889,7 @@ export default function EventPairingsPage() {
                       ? formatRoundTime(selectedRound.start_time)
                       : undefined
                   }
-                  showTime={
-                    startFormat !== 'shotgun' ||
-                    pdfRows.some((r) => !!r.time)
-                  }
+                  showTime={!isTeamEvent}
                   rows={pdfRows}
                 />
               }

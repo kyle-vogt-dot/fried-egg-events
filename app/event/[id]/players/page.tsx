@@ -119,6 +119,7 @@ export default function RegisteredPlayersPage() {
         .order('created_at', { ascending: true });
 
       const isListableReg = (r: any) => {
+        if (r.refunded === true) return false;
         if (r.paid === true) return true;
         const m = String(r.payment_method || '').toLowerCase();
         return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(

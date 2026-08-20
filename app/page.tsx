@@ -18,6 +18,39 @@ export default function EventsPage() {
 
   const router = useRouter();
 
+  function isListableReg(r: any) {
+  if (r.refunded === true) return false;
+  if (r.paid === true) return true;
+  const m = String(r.payment_method || '').toLowerCase();
+  return ['comp', 'complimentary', 'cash', 'manual', 'checkin', 'payment_link'].includes(
+    m
+  );
+}
+
+function getEventRegWindow(event: any) {
+  const now = new Date();
+
+  const open =
+    event.registration_open_date
+      ? new Date(
+          `${event.registration_open_date}T${event.registration_open_time || '00:00:00'}`
+        )
+      : null;
+
+  const close =
+    event.registration_close_date
+      ? new Date(
+          `${event.registration_close_date}T${event.registration_close_time || '23:59:59'}`
+        )
+      : null;
+
+  const notYetOpen = !!(open && now < open);
+  const closed = !!(close && now > close);
+  const isOpen = !notYetOpen && !closed && (!!open || !close);
+
+  return { notYetOpen, closed, isOpen };
+}
+
   useEffect(() => {
     const fetchEvents = async () => {
       const { data } = await supabase
@@ -40,12 +73,41 @@ export default function EventsPage() {
     event.course?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const isRegistrationOpen = (event: any) => {
-    if (!event.registration_open_date) return false;
-    const now = new Date();
-    const openDate = new Date(event.registration_open_date + 'T' + (event.registration_open_time || '00:00:00'));
-    return now >= openDate;
-  };
+  const [regCounts, setRegCounts] = useState<Record<number, number>>({});
+
+  useEffect(() => {
+    const fetchEvents = async () => {
+      const { data } = await supabase
+        .from('tournaments')
+        .select('*')
+        .eq('is_active', true)
+        .eq('is_locked', false)
+        .order('date', { ascending: true });
+
+      const list = data || [];
+      setEvents(list);
+
+      const ids = list.map((e: any) => e.id);
+      if (ids.length) {
+        const { data: regs } = await supabase
+          .from('event_registrations')
+          .select('id, event_id, paid, payment_method, refunded')
+          .in('event_id', ids);
+
+        const counts: Record<number, number> = {};
+        for (const r of regs || []) {
+          if (!isListableReg(r)) continue;
+          const eid = Number(r.event_id);
+          counts[eid] = (counts[eid] || 0) + 1;
+        }
+        setRegCounts(counts);
+      }
+
+      setLoading(false);
+    };
+
+    fetchEvents();
+  }, []);
 
   const handleCreateEvent = async () => {
     setCreating(true);
@@ -121,7 +183,28 @@ export default function EventsPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {filteredEvents.map((event) => {
-              const registrationIsOpen = isRegistrationOpen(event);
+              const { isOpen, closed, notYetOpen } = getEventRegWindow(event);
+              const maxPlayers = Number(event.max_players) || 0;
+              const taken = regCounts[event.id] || 0;
+              const spotsLeft =
+                maxPlayers > 0 ? Math.max(0, maxPlayers - taken) : null;
+              const soldOut = spotsLeft === 0;
+
+              let badgeText = 'Registration closed';
+              let badgeClass = 'bg-gray-600 text-white';
+              if (soldOut) {
+                badgeText = 'Sold out';
+                badgeClass = 'bg-red-600 text-white';
+              } else if (isOpen) {
+                badgeText = 'Registration open';
+                badgeClass = 'bg-green-600 text-white';
+              } else if (notYetOpen) {
+                badgeText = 'Registration opens soon';
+                badgeClass = 'bg-amber-600 text-white';
+              } else if (closed) {
+                badgeText = 'Registration closed';
+                badgeClass = 'bg-gray-600 text-white';
+              }
 
               return (
                 <Link
@@ -144,11 +227,11 @@ export default function EventsPage() {
                     )}
 
                     {/* Registration Open Badge */}
-                    {registrationIsOpen && (
-                      <div className="absolute top-4 right-4 bg-green-600 text-white text-xs font-semibold px-4 py-1.5 rounded-full">
-                        Registration Open
-                      </div>
-                    )}
+                    <div
+                      className={`absolute top-4 right-4 text-xs font-semibold px-4 py-1.5 rounded-full ${badgeClass}`}
+                    >
+                      {badgeText}
+                    </div>
                   </div>
 
                   {/* Event Info */}
@@ -170,6 +253,13 @@ export default function EventsPage() {
   })}
 </p>
                       </div>
+                                          {spotsLeft != null && (
+                      <p className="mt-3 text-sm text-gray-400">
+                        {soldOut
+                          ? 'No spots remaining'
+                          : `${spotsLeft} spot${spotsLeft === 1 ? '' : 's'} remaining`}
+                      </p>
+                    )}
                       <div className="text-right">
                         <p className="text-xs text-gray-500">MAX PLAYERS</p>
                         <p className="font-medium">

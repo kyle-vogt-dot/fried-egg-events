@@ -3,10 +3,8 @@ import Stripe from 'stripe';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-// Calculate the total the customer must pay so you receive the desired net amount
 function calculateAmountWithStripeFee(desiredNetDollars: number) {
   const desiredNetCents = Math.round(desiredNetDollars * 100);
-  // Stripe fee ≈ 2.9% + $0.30
   const totalCents = Math.ceil((desiredNetCents + 30) / (1 - 0.029));
   const feeCents = totalCents - desiredNetCents;
 
@@ -17,12 +15,18 @@ function calculateAmountWithStripeFee(desiredNetDollars: number) {
   };
 }
 
+function appendQuery(url: string, key: string, value: string) {
+  if (!value) return url;
+  if (url.includes(`${key}=`)) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}${key}=${value}`;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
       registration_id,
-      registration_ids, // comma-separated list for team checkouts
+      registration_ids,
       amount,
       player_name,
       email,
@@ -41,22 +45,43 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const baseUrl =
+    const baseUrl = (
       process.env.NEXT_PUBLIC_APP_URL ||
       process.env.NEXT_PUBLIC_SITE_URL ||
-      'http://localhost:3000';
+      'http://localhost:3000'
+    ).replace(/\/$/, '');
 
-    const defaultSuccessUrl = `${baseUrl}/event/${event_id}?payment=success&type=${type}`;
-    const defaultCancelUrl = `${baseUrl}/event/${event_id}?payment=cancelled`;
+    const ids = registration_ids
+      ? String(registration_ids)
+      : registration_id
+        ? String(registration_id)
+        : '';
+
+    let finalSuccess =
+      success_url ||
+      `${baseUrl}/event/${event_id}?payment=success&type=${type}`;
+    finalSuccess = appendQuery(
+      finalSuccess,
+      'session_id',
+      '{CHECKOUT_SESSION_ID}'
+    );
+    if (ids) {
+      finalSuccess = appendQuery(finalSuccess, 'registration_ids', ids);
+    }
+
+    const finalCancel =
+      cancel_url || `${baseUrl}/event/${event_id}?payment=cancelled`;
 
     const { feeCents, netCents } = calculateAmountWithStripeFee(Number(amount));
 
-    const meta = {
+    const meta: Record<string, string> = {
       registration_id: registration_id ? String(registration_id) : '',
-      registration_ids: registration_ids ? String(registration_ids) : '',
+      registration_ids: ids,
       event_id: String(event_id),
       type: String(type),
       net_amount: String(amount),
+      player_name: player_name ? String(player_name) : '',
+      email: String(email),
     };
 
     const session = await stripe.checkout.sessions.create({
@@ -90,8 +115,8 @@ export async function POST(request: NextRequest) {
           quantity: 1,
         },
       ],
-      success_url: success_url || defaultSuccessUrl,
-      cancel_url: cancel_url || defaultCancelUrl,
+      success_url: finalSuccess,
+      cancel_url: finalCancel,
       metadata: meta,
       payment_intent_data: {
         metadata: meta,
@@ -99,7 +124,7 @@ export async function POST(request: NextRequest) {
       customer_email: email,
     });
 
-    return NextResponse.json({ url: session.url });
+    return NextResponse.json({ url: session.url, session_id: session.id });
   } catch (error: any) {
     console.error('Stripe Checkout Error:', error);
     return NextResponse.json(

@@ -51,21 +51,64 @@ function formatRoundTime(startTime: string | null | undefined) {
 }
 
 /** Pars from event.course_data; fallback par 4 */
+function extractHoles(courseData: any): {
+  hole: number;
+  par: number;
+  yardage: number;
+}[] {
+  if (!courseData) return [];
+  const root = courseData.course || courseData.data || courseData;
+
+  const fromArr = (arr: any[]) =>
+    arr.map((h: any, i: number) => ({
+      hole: Number(h.hole ?? h.Hole ?? i + 1),
+      par: Number(h.par ?? h.Par ?? 0),
+      yardage: Number(h.yardage ?? h.Yardage ?? h.yards ?? h.Yards ?? 0),
+    }));
+
+  if (Array.isArray(root.scorecard) && root.scorecard.length) {
+    return fromArr(root.scorecard);
+  }
+  if (Array.isArray(courseData.scorecard) && courseData.scorecard.length) {
+    return fromArr(courseData.scorecard);
+  }
+  if (Array.isArray(root.holes) && root.holes.length) {
+    return fromArr(root.holes);
+  }
+
+  const tees = root.tees || courseData.tees;
+  if (tees) {
+    const list: any[] = [];
+    if (Array.isArray(tees)) list.push(...tees);
+    else {
+      Object.values(tees).forEach((v) => {
+        if (Array.isArray(v)) list.push(...v);
+      });
+    }
+    for (const tee of list) {
+      const holes = tee.holes || tee.scorecard;
+      if (Array.isArray(holes) && holes.length) return fromArr(holes);
+    }
+  }
+
+  return [];
+}
+
 function getParMap(courseData: any, numHoles: number): Record<number, number> {
   const map: Record<number, number> = {};
   for (let i = 1; i <= numHoles; i++) map[i] = 4;
-  if (!courseData) return map;
+  extractHoles(courseData).forEach((h) => {
+    if (h.hole >= 1 && h.hole <= numHoles && h.par > 0) map[h.hole] = h.par;
+  });
+  return map;
+}
 
-  const root = courseData.course || courseData.data || courseData;
-  let raw: any[] = [];
-  if (Array.isArray(root.scorecard) && root.scorecard.length) raw = root.scorecard;
-  else if (Array.isArray(root.holes) && root.holes.length) raw = root.holes;
-  else if (Array.isArray(courseData.scorecard)) raw = courseData.scorecard;
-
-  raw.forEach((h: any, i: number) => {
-    const hole = Number(h.hole ?? h.Hole ?? i + 1);
-    const par = Number(h.par ?? h.Par ?? 0);
-    if (hole >= 1 && hole <= numHoles && par > 0) map[hole] = par;
+function getYardMap(courseData: any, numHoles: number): Record<number, number> {
+  const map: Record<number, number> = {};
+  extractHoles(courseData).forEach((h) => {
+    if (h.hole >= 1 && h.hole <= numHoles && h.yardage > 0) {
+      map[h.hole] = h.yardage;
+    }
   });
   return map;
 }
@@ -1057,13 +1100,18 @@ const openDetail = async (id: number) => {
                 return (
                   <li
                     key={m.id}
-                    className="flex justify-between text-sm bg-gray-800 rounded-xl px-3 py-2"
+                    className={`flex justify-between text-sm bg-gray-800 rounded-xl px-3 py-2 ${
+                      m.is_captain ? 'ring-1 ring-amber-400/40' : ''
+                    }`}
                   >
-                    <span>
+                    <span className="flex items-center flex-wrap gap-x-2">
                       {m.player_name || 'Player'}
                       {isYou && (
-                        <span className="text-emerald-400 text-xs ml-2">
-                          (you)
+                        <span className="text-emerald-400 text-xs">(you)</span>
+                      )}
+                      {m.is_captain && (
+                        <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-400/50 rounded-full px-2 py-0.5">
+                          Captain
                         </span>
                       )}
                     </span>
@@ -1074,7 +1122,6 @@ const openDetail = async (id: number) => {
                 );
               })}
             </ul>
-
             <p className="text-xs text-gray-500 mt-3">
               {teammates.length}/{maxTeam}
               {spotsLeft > 0 ? ` · ${spotsLeft} open` : ' · Full'}
@@ -1098,7 +1145,55 @@ const openDetail = async (id: number) => {
                 + Add teammates ({spotsLeft} open)
               </button>
             )}
+
+            {(() => {
+              const myReg =
+                teamRoster.find((r) => Number(r.id) === Number(card.regId)) ||
+                selectedItem.regs.find(
+                  (r) => Number(r.id) === Number(card.regId)
+                );
+              if (myReg?.is_captain) {
+                return (
+                  <p className="text-xs text-emerald-400 mt-2">
+                    You are team captain
+                  </p>
+                );
+              }
+              return (
+                <button
+                  type="button"
+                  className="w-full mt-2 py-2 text-xs text-emerald-400 hover:underline"
+                  onClick={async () => {
+                    const {
+                      data: { session },
+                    } = await supabase.auth.getSession();
+                    const res = await fetch('/api/set-team-captain', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${session?.access_token || ''}`,
+                      },
+                      body: JSON.stringify({
+                        event_id: selectedItem.event.id,
+                        team_name: card.teamName,
+                        registration_id: card.regId,
+                        round_id: card.roundId || 0,
+                      }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok) {
+                      alert(data.error || 'Could not update captain');
+                      return;
+                    }
+                    await openDetail(selectedItem.event.id);
+                  }}
+                >
+                  Make me team captain
+                </button>
+              );
+            })()}
           </div>
+          
         );
       });
     })()}
@@ -1319,6 +1414,8 @@ const openDetail = async (id: number) => {
               const numHoles =
                 Number(lbEvent.number_of_holes) === 9 ? 9 : 18;
               const parMap = getParMap(lbEvent.course_data, numHoles);
+              const yardMap = getYardMap(lbEvent.course_data, numHoles);
+              const hasYards = Object.keys(yardMap).length > 0;
               const front = Array.from(
                 { length: Math.min(9, numHoles) },
                 (_, i) => i + 1
@@ -1413,6 +1510,32 @@ const openDetail = async (id: number) => {
                             {totalPar}
                           </td>
                         </tr>
+                        {hasYards && (
+                          <tr className="border-t border-gray-700">
+                            <td className="py-2 px-2 font-semibold text-gray-500 sticky left-0 bg-gray-800 z-10">
+                              YDS
+                            </td>
+                            {front.map((h) => (
+                              <td
+                                key={`y-${h}`}
+                                className="text-center py-2 px-1.5 text-gray-500 text-xs"
+                              >
+                                {yardMap[h] || '—'}
+                              </td>
+                            ))}
+                            <td className="bg-gray-900/40" />
+                            {back.map((h) => (
+                              <td
+                                key={`y-${h}`}
+                                className="text-center py-2 px-1.5 text-gray-500 text-xs"
+                              >
+                                {yardMap[h] || '—'}
+                              </td>
+                            ))}
+                            {numHoles > 9 && <td className="bg-gray-900/40" />}
+                            <td className="bg-gray-900/60" />
+                          </tr>
+                        )}
                         <tr className="border-t border-gray-700">
                           <td className="py-2.5 px-2 font-semibold text-white sticky left-0 bg-gray-800 z-10">
                             SCORE

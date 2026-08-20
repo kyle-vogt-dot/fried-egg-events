@@ -967,16 +967,36 @@ const myRegisteredRoundNames = useMemo(() => {
     // ---------- Registration payment success ----------
     if (paymentStatus === 'success' && type === 'registration') {
       if (typeof window !== 'undefined') {
-  const sessionId = searchParams.get('session_id') || 'unknown';
-  const handledKey = `payment_handled_${eventId}_${sessionId}`;
+        const sessionId = searchParams.get('session_id') || 'unknown';
+        const handledKey = `payment_handled_${eventId}_${sessionId}`;
 
-  if (sessionStorage.getItem(handledKey) === '1') {
-    return;
-  }
-  sessionStorage.setItem(handledKey, '1');
-}
+        if (sessionStorage.getItem(handledKey) === '1') {
+          return;
+        }
+        sessionStorage.setItem(handledKey, '1');
+      }
 
       const handleRegistrationSuccess = async () => {
+        const sessionId = searchParams.get('session_id');
+        const idsFromUrl = (searchParams.get('registration_ids') || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+
+        if (sessionId) {
+          try {
+            await fetch('/api/confirm-registration-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                session_id: sessionId,
+                registration_ids: idsFromUrl,
+              }),
+            });
+          } catch (e) {
+            console.error('confirm-registration-payment failed', e);
+          }
+        }
         const {
           data: { user },
         } = await supabase.auth.getUser();
@@ -1070,22 +1090,6 @@ const myRegisteredRoundNames = useMemo(() => {
 
           paidThisCheckout = updated || [];
 
-          // Save Stripe payment_intent + amount_paid
-          const sessionId = searchParams.get('session_id');
-          if (sessionId) {
-            try {
-              await fetch('/api/confirm-registration-payment', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  session_id: sessionId,
-                  registration_ids: ids,
-                }),
-              });
-            } catch (e) {
-              console.error('confirm-registration-payment failed', e);
-            }
-          }
 
           // Redeem discount if present
           if (draftDiscount && paidThisCheckout.length > 0) {
