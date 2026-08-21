@@ -1465,11 +1465,13 @@ const myRegisteredRoundNames = useMemo(() => {
       )
     : null;
 
-  const registrationClosesAt = event?.registration_close_date
-    ? new Date(
-        `${event.registration_close_date}T${event.registration_close_time || '23:59:59'}`
-      )
-    : null;
+  const registrationClosesAt = event?.registration_close_at
+    ? new Date(event.registration_close_at)
+    : event?.registration_close_date
+      ? new Date(
+          `${event.registration_close_date}T${event.registration_close_time || '23:59:59'}`
+        )
+      : null;
 
   const registrationNotYetOpen = !!(
     registrationOpensAt && now < registrationOpensAt
@@ -1633,18 +1635,18 @@ const spotsLeft =
     return [...autoIds, ...selectedPaidRoundIds];
   };
 
-    // Rounds the player is about to join (for capacity checks)
-  const capacityRoundIds: number[] = isPerRound
-    ? selectedPaidRoundIds
-    : rounds.map((r) => r.id);
 
   const regsForCapacity = (roundId?: number) => {
-    if (roundId == null) return registrations;
-    return registrations.filter((r) => {
-      const ids: number[] = r.selected_round_ids || [];
-      // No round list stored → treat as on all rounds
-      if (!ids.length) return true;
-      return ids.includes(roundId);
+    const list = registrations.filter(isListableReg);
+    if (roundId == null) return list;
+    return list.filter((r) => {
+      const ids: number[] = Array.isArray(r.selected_round_ids)
+        ? r.selected_round_ids.map(Number)
+        : r.round_id
+          ? [Number(r.round_id)]
+          : [];
+      if (!ids.length) return !isPerRound;
+      return ids.includes(Number(roundId));
     });
   };
 
@@ -1670,11 +1672,20 @@ const spotsLeft =
   };
 
     // True if ANY selected round is at max teams (can't create a new team)
-  const teamsFull = capacityRoundIds.some((rid) => {
-    const maxT = maxTeamsForRound(rid);
-    if (maxT == null) return false;
-    return teamCountForRound(rid) >= maxT;
-  });
+  const teamsFull = (() => {
+    const ids =
+      isPerRound && selectedPaidRoundIds.length > 0
+        ? selectedPaidRoundIds
+        : isPerRound
+          ? []
+          : rounds.map((r) => r.id);
+    if (ids.length === 0) return false;
+    return ids.some((rid) => {
+      const maxT = maxTeamsForRound(rid);
+      if (maxT == null) return false;
+      return teamCountForRound(rid) >= maxT;
+    });
+  })();
 
    const existingTeams = useMemo(() => {
     if (isPerRound && selectedPaidRoundIds.length === 0) return [] as string[];
@@ -1822,6 +1833,10 @@ setWaitlistPhone('');
 };
 
   const handleRegisterClick = async () => {
+      if (registrationClosed) {
+    alert('Registration is closed for this event.');
+    return;
+  }
   if (isSoldOut) {
     alert('This event is sold out. You can join the waitlist instead.');
     return;
@@ -1862,6 +1877,11 @@ setWaitlistPhone('');
     } = await supabase.auth.getUser();
     if (!user) {
       alert('Please log in to register');
+      return;
+    }
+        if (registrationClosed) {
+      alert('Registration is closed for this event.');
+      setSubmitting(false);
       return;
     }
 
@@ -2725,6 +2745,9 @@ paid: false,
                       {selectableRounds.map((round) => {
   const alreadyOn = myRegisteredRoundIds.includes(Number(round.id));
   const checked = selectedPaidRoundIds.includes(round.id);
+  const maxT = maxTeamsForRound(round.id);
+  const usedT = teamCountForRound(round.id);
+  const roundTeamsFull = maxT != null && usedT >= maxT;
 
   return (
     <label
@@ -2755,12 +2778,16 @@ paid: false,
                 Already registered
               </span>
             )}
+            {roundTeamsFull && !alreadyOn && (
+              <span className="ml-2 text-xs text-orange-400">
+                Full · join an existing team
+              </span>
+            )}
           </div>
-          {round.start_time && (
-            <div className="text-xs text-gray-400">
-              {String(round.start_time).slice(0, 5)}
-            </div>
-          )}
+          <div className="text-xs text-gray-400">
+            {round.start_time ? `${String(round.start_time).slice(0, 5)} · ` : ''}
+            {maxT != null ? `${usedT}/${maxT} teams` : `${usedT} teams`}
+          </div>
         </div>
       </div>
       <div className="text-sm font-medium text-teal-300">
@@ -2896,10 +2923,9 @@ paid: false,
 
                     {teamsFull && (
                       <p className="text-amber-400 text-sm mt-3">
-                        Max teams reached for the selected round(s). Join a team
-                        that still has open spots.
+                        A selected round is full on teams. Uncheck that round or
+                        join an existing team.
                       </p>
-                      
                     )}
                   </div>
                                     {mode === 'join' && (
@@ -2987,12 +3013,46 @@ paid: false,
 
                   
 <div>
-                                      <div className="flex justify-between items-center mb-3">
-                      <label className="text-sm text-gray-400">
-                        {mode === 'join' && selectedTeam
-                          ? 'Add players to this team'
-                          : 'Additional Players'}
-                      </label>
+  {currentUser && !alreadyRegistered && (
+    <button
+      type="button"
+      onClick={() => setIsOrganizerOnly(!isOrganizerOnly)}
+      className={`w-full mb-4 rounded-2xl px-5 py-4 text-left border transition-colors ${
+        !isOrganizerOnly
+          ? 'border-emerald-500 bg-emerald-950/40'
+          : 'border-gray-600 bg-gray-900 opacity-60'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className={`font-medium ${!isOrganizerOnly ? 'text-white' : 'text-gray-400 line-through'}`}>
+            {getPlayerName(currentUser)}
+          </p>
+          <p
+            className={`text-xs mt-0.5 ${
+              !isOrganizerOnly ? 'text-emerald-400' : 'text-gray-500'
+            }`}
+          >
+            {!isOrganizerOnly ? 'Captain · on this team' : 'Removed · not on this team'}
+          </p>
+        </div>
+        <input
+          type="checkbox"
+          checked={!isOrganizerOnly}
+          onChange={(e) => setIsOrganizerOnly(!e.target.checked)}
+          className="w-5 h-5 accent-emerald-500 shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    </button>
+  )}
+
+  <div className="flex justify-between items-center mb-3">
+    <label className="text-sm text-gray-400">
+      {mode === 'join' && selectedTeam
+        ? 'Add players to this team'
+        : 'Additional Players'}
+    </label>
                       <span className="text-xs text-gray-500">
                         {completeAdditionalPlayers.length} complete /{' '}
                         {additionalPlayers.length} added
