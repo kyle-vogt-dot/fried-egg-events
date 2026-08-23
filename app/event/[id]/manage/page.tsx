@@ -183,12 +183,16 @@ const { data: adminData } = await supabase
   .or(`user_id.eq.${user.id},email.eq."${email}"`)
   .maybeSingle();
 
-const isEventAdmin = !!adminData;
-setIsAdmin(isCreator || isEventAdmin);
+      const isEventAdmin = !!adminData;
+      const ALLOWED_PLATFORM = ['kyle-vogt@hotmail.com'];
+      const isPlatformAdmin = ALLOWED_PLATFORM.includes(user.email || '');
 
-if (!isCreator && !isEventAdmin) {
-  setError("You don't have permission to manage this event.");
-}
+      setIsAdmin(isCreator || isEventAdmin || isPlatformAdmin);
+
+      if (!isCreator && !isEventAdmin && !isPlatformAdmin) {
+        router.push(`/event/${eventId}`);
+        return;
+      }
 
       const { data: addonData } = await supabase
         .from('event_addons')
@@ -1966,6 +1970,16 @@ const handleDeleteEvent = async () => {
             </p>
           </div>
 
+                    <div>
+            <label className="block text-sm text-gray-400 mb-2">Date of Event</label>
+            <input
+              type="date"
+              value={event.date || ''}
+              onChange={(e) => handleEventChange('date', e.target.value)}
+              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+            />
+          </div>
+
           
 
           <div>
@@ -2020,15 +2034,7 @@ const handleDeleteEvent = async () => {
             />
           </div>
 
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Event Date</label>
-            <input
-              type="date"
-              value={event.date || ''}
-              onChange={(e) => handleEventChange('date', e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            />
-          </div>
+
 
           {/* Number of Holes */}
           <div className="md:col-span-2">

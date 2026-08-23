@@ -1539,11 +1539,10 @@ const spotsLeft =
 
   // Charge yourself only if: event-priced and not registered, OR per-round with at least one NEW round
   const countingSelf = isPerRound
-    ? newlySelectedRoundIds.length > 0
+    ? !isOrganizerOnly && newlySelectedRoundIds.length > 0
     : !isOrganizerOnly && !alreadyRegistered;
-    
 
-      const regsForTeamOnSelectedRounds = (team: string) => {
+  const regsForTeamOnSelectedRounds = (team: string) => {
     const teamRegs = registrations.filter(
       (r) => r.team_name === team && isListableReg(r)
     );
@@ -1557,6 +1556,8 @@ const spotsLeft =
         : r.round_id
           ? [Number(r.round_id)]
           : [];
+      // Cash/comp/manual often have no round ids — still count them on the team
+      if (!ids.length) return true;
       return selectedPaidRoundIds.some((id) => ids.includes(Number(id)));
     });
   };
@@ -1936,7 +1937,7 @@ const completeAdditional = additionalPlayers.filter(
       } else {
         // Self only when we're actually charging/counting them for NEW rounds
         const includeSelf = isPerRound
-          ? newlySelectedRoundIds.length > 0
+          ? !isOrganizerOnly && newlySelectedRoundIds.length > 0
           : !isOrganizerOnly && !alreadyRegistered;
 
         if (includeSelf) {

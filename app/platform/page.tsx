@@ -43,6 +43,9 @@ export default function PlatformAdminPage() {
   const [newExpiresAt, setNewExpiresAt] = useState('');
   const [savingCode, setSavingCode] = useState(false);
   const [codeMessage, setCodeMessage] = useState('');
+    const [demoPw, setDemoPw] = useState('');
+  const [demoPwMsg, setDemoPwMsg] = useState('');
+  const [savingDemoPw, setSavingDemoPw] = useState(false);
 
   const ALLOWED_EMAILS = ['kyle-vogt@hotmail.com'];
 
@@ -149,6 +152,35 @@ export default function PlatformAdminPage() {
     }
 
     setSaving(false);
+  };
+
+    const handleSaveDemoPassword = async () => {
+    setSavingDemoPw(true);
+    setDemoPwMsg('');
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const res = await fetch('/api/platform/demo-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token || ''}`,
+        },
+        body: JSON.stringify({ password: demoPw }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setDemoPwMsg(data.error || 'Failed to save');
+      } else {
+        setDemoPw('');
+        setDemoPwMsg('Demo passcode updated');
+      }
+    } catch (e: any) {
+      setDemoPwMsg(e.message || 'Failed');
+    } finally {
+      setSavingDemoPw(false);
+    }
   };
 
   // ---------- Add Player ----------
@@ -397,6 +429,67 @@ export default function PlatformAdminPage() {
           {message && (
             <p className="text-center text-emerald-400">{message}</p>
           )}
+        </div>
+
+                {/* ==================== DEMO PASSCODE ==================== */}
+        <div className="bg-gray-800 rounded-3xl p-8 space-y-4">
+          <h2 className="text-xl font-semibold">Demo event passcode</h2>
+          <p className="text-sm text-gray-400">
+            Required when someone checks “Demo / training event” on Create.
+            Stored in platform settings (overrides env if set).
+          </p>
+          <input
+            type="password"
+            value={demoPw}
+            onChange={(e) => setDemoPw(e.target.value)}
+            placeholder="New passcode"
+            className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            onClick={handleSaveDemoPassword}
+            disabled={savingDemoPw || demoPw.trim().length < 6}
+            className="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
+          >
+            {savingDemoPw ? 'Saving…' : 'Save demo passcode'}
+          </button>
+          {demoPwMsg && (
+            <p className="text-center text-sm text-emerald-400">{demoPwMsg}</p>
+          )}
+        </div>
+
+        {/* ==================== ALL EVENTS (MANAGE) ==================== */}
+        <div className="bg-gray-800 rounded-3xl p-8 space-y-4">
+          <h2 className="text-xl font-semibold">All events</h2>
+          <p className="text-sm text-gray-400">
+            Open Manage for any event (platform admin).
+          </p>
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {events.length === 0 && (
+              <p className="text-gray-500 text-sm">No active events.</p>
+            )}
+            {events.map((ev) => (
+              <div
+                key={ev.id}
+                className="flex items-center justify-between gap-3 bg-gray-900 rounded-xl px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{ev.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {ev.date ? String(ev.date).slice(0, 10) : 'TBD'}
+                    {ev.course ? ` · ${ev.course}` : ''}
+                  </p>
+                </div>
+                <a
+                  href={`/event/${ev.id}/manage`}
+                  className="shrink-0 text-sm bg-teal-700 hover:bg-teal-600 px-3 py-2 rounded-xl"
+                >
+                  Manage
+                </a>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* ==================== ADD PLAYER ==================== */}
