@@ -1,7 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+import { createClient } from '@supabase/supabase-js';
+
+function getStripe(isDemo: boolean) {
+  const key = isDemo
+    ? process.env.STRIPE_TEST_SECRET_KEY
+    : process.env.STRIPE_SECRET_KEY;
+  if (!key) {
+    throw new Error(
+      isDemo ? 'Missing STRIPE_TEST_SECRET_KEY' : 'Missing STRIPE_SECRET_KEY'
+    );
+  }
+  return new Stripe(key);
+}
 
 function calculateAmountWithStripeFee(desiredNetDollars: number) {
   const desiredNetCents = Math.round(desiredNetDollars * 100);
@@ -83,6 +95,17 @@ export async function POST(request: NextRequest) {
       player_name: player_name ? String(player_name) : '',
       email: String(email),
     };
+        const sb = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const { data: ev } = await sb
+      .from('tournaments')
+      .select('is_demo')
+      .eq('id', event_id)
+      .single();
+    const isDemo = !!ev?.is_demo;
+    const stripe = getStripe(isDemo);
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],

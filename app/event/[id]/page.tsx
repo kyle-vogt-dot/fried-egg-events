@@ -2142,6 +2142,11 @@ paid: false,
 
   return (
     <div className="min-h-screen bg-gray-900 text-white pb-20">
+      {event?.is_demo && (
+        <div className="bg-amber-500 text-black text-center text-sm font-semibold py-2 px-4">
+          DEMO EVENT — Stripe test mode. No real charges.
+        </div>
+      )}
       <div className="max-w-4xl mx-auto px-6 pt-8">
         <button
           onClick={() => router.push('/')}
@@ -3025,7 +3030,11 @@ paid: false,
     >
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className={`font-medium ${!isOrganizerOnly ? 'text-white' : 'text-gray-400 line-through'}`}>
+          <p
+            className={`font-medium ${
+              !isOrganizerOnly ? 'text-white' : 'text-gray-400 line-through'
+            }`}
+          >
             {getPlayerName(currentUser)}
           </p>
           <p
@@ -3033,7 +3042,13 @@ paid: false,
               !isOrganizerOnly ? 'text-emerald-400' : 'text-gray-500'
             }`}
           >
-            {!isOrganizerOnly ? 'Captain · on this team' : 'Removed · not on this team'}
+            {!isOrganizerOnly
+              ? mode === 'join' && selectedTeam
+                ? `Joining ${selectedTeam}`
+                : 'Captain · on this team'
+              : mode === 'join'
+                ? 'Removed · not joining this team'
+                : 'Removed · not on this team'}
           </p>
         </div>
         <input
