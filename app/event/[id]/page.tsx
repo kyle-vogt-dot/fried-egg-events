@@ -1454,7 +1454,7 @@ const myRegisteredRoundNames = useMemo(() => {
   }, [searchParams, eventId]);
 
   // ==================== CALCULATIONS ====================
-  const isIndividual = event?.max_teammates === 1 || !event?.max_teammates;
+  const isIndividual = Number(event?.max_teammates) === 1;
   const maxTeamSize = event?.max_teammates || 1;
 
   const now = new Date();

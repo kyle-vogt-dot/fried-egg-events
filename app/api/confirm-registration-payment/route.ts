@@ -24,7 +24,7 @@ function getStripe(isDemo: boolean) {
 function parseIds(
   session: Stripe.Checkout.Session,
   extra?: string[] | string
-): number[] {
+): string[] {
   const meta = session.metadata || {};
   const extraStr = Array.isArray(extra) ? extra.join(',') : extra || '';
   const raw = [meta.registration_ids || '', meta.registration_id || '', extraStr]
@@ -33,13 +33,17 @@ function parseIds(
     .map((s) => s.trim())
     .filter(Boolean);
 
-  return Array.from(
-    new Set(
-      raw
-        .map((s) => parseInt(s, 10))
-        .filter((n) => Number.isFinite(n) && n > 0)
-    )
-  );
+  // Support numeric ids and UUID ids
+  return Array.from(new Set(raw));
+}
+
+function parseRoundIds(meta: Record<string, string>): number[] | undefined {
+  if (!meta.selected_round_ids) return undefined;
+  const ids = String(meta.selected_round_ids)
+    .split(',')
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return ids.length ? ids : undefined;
 }
 
 async function confirmRegistrationPayment(opts: {
@@ -65,9 +69,8 @@ async function confirmRegistrationPayment(opts: {
     );
   }
 
-  const meta = session.metadata || {};
+  const meta = (session.metadata || {}) as Record<string, string>;
   const type = String(meta.type || '').toLowerCase();
-  const eventId = meta.event_id ? parseInt(meta.event_id, 10) : null;
   const ids = parseIds(session, opts.registration_ids);
 
   const paymentIntentId =
@@ -102,58 +105,40 @@ async function confirmRegistrationPayment(opts: {
     return NextResponse.json({ success: true, paymentIntentId, ids, type });
   }
 
-  if (ids.length > 0) {
-    const { data: updated, error } = await supabaseAdmin
-      .from('event_registrations')
-      .update({
-        paid: true,
-        payment_method,
-        stripe_payment_intent_id: paymentIntentId,
-        amount_paid: amountPaid,
-      })
-      .in('id', ids)
-      .select('id');
+  if (ids.length === 0) {
+    console.error('confirm: no registration_ids on session', session_id, meta);
+    return NextResponse.json(
+      { error: 'Missing registration_ids on payment' },
+      { status: 400 }
+    );
+  }
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+  const roundIds = parseRoundIds(meta);
+  const updatePayload: Record<string, any> = {
+    paid: true,
+    payment_method,
+    stripe_payment_intent_id: paymentIntentId,
+    amount_paid: amountPaid,
+  };
+  if (meta.team_name) updatePayload.team_name = meta.team_name;
+  if (roundIds) updatePayload.selected_round_ids = roundIds;
 
-    const updatedIds = new Set((updated || []).map((r) => Number(r.id)));
-    const missing = ids.filter((id) => !updatedIds.has(id));
+  const { data: updated, error } = await supabaseAdmin
+    .from('event_registrations')
+    .update(updatePayload)
+    .in('id', ids)
+    .select('id');
 
-    for (const id of missing) {
-      if (!eventId) continue;
-      const { error: insErr } = await supabaseAdmin
-        .from('event_registrations')
-        .insert({
-          id,
-          event_id: eventId,
-          player_name: meta.player_name || 'Player',
-          player_email: (meta.email || '').toLowerCase() || null,
-          paid: true,
-          payment_method,
-          stripe_payment_intent_id: paymentIntentId,
-          amount_paid: amountPaid,
-          selected_round_ids: [],
-        });
-      if (insErr) console.error('confirm upsert failed', id, insErr);
-    }
-  } else if (eventId) {
-    const { error: insErr } = await supabaseAdmin
-      .from('event_registrations')
-      .insert({
-        event_id: eventId,
-        player_name: meta.player_name || 'Player',
-        player_email: (meta.email || '').toLowerCase() || null,
-        paid: true,
-        payment_method,
-        stripe_payment_intent_id: paymentIntentId,
-        amount_paid: amountPaid,
-        selected_round_ids: [],
-      });
-    if (insErr) {
-      return NextResponse.json({ error: insErr.message }, { status: 500 });
-    }
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  if (!updated?.length) {
+    console.error('confirm: no rows updated for ids', ids, session_id);
+    return NextResponse.json(
+      { error: 'No registration rows found to mark paid', ids },
+      { status: 404 }
+    );
   }
 
   return NextResponse.json({
@@ -161,6 +146,7 @@ async function confirmRegistrationPayment(opts: {
     paymentIntentId,
     amountPaid,
     ids,
+    updated: updated.map((r) => r.id),
   });
 }
 

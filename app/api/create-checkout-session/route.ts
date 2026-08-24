@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-
 import { createClient } from '@supabase/supabase-js';
 
 function getStripe(isDemo: boolean) {
@@ -48,14 +47,28 @@ export async function POST(request: NextRequest) {
       type = 'addon_payment',
       success_url,
       cancel_url,
+      team_name,
+      selected_round_ids,
     } = body;
 
-    if (!amount || !email || !event_id) {
+    if (amount == null || amount === '' || !email || !event_id) {
       return NextResponse.json(
         { error: 'Missing required fields' },
         { status: 400 }
       );
     }
+
+    const sb = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+    const { data: ev } = await sb
+      .from('tournaments')
+      .select('is_demo')
+      .eq('id', event_id)
+      .single();
+    const isDemo = !!ev?.is_demo;
+    const stripe = getStripe(isDemo);
 
     const baseUrl = (
       process.env.NEXT_PUBLIC_APP_URL ||
@@ -67,6 +80,12 @@ export async function POST(request: NextRequest) {
       ? String(registration_ids)
       : registration_id
         ? String(registration_id)
+        : '';
+
+    const roundIds = Array.isArray(selected_round_ids)
+      ? selected_round_ids.map(String).join(',')
+      : selected_round_ids
+        ? String(selected_round_ids)
         : '';
 
     let finalSuccess =
@@ -94,18 +113,10 @@ export async function POST(request: NextRequest) {
       net_amount: String(amount),
       player_name: player_name ? String(player_name) : '',
       email: String(email),
+      is_demo: isDemo ? 'true' : 'false',
+      team_name: team_name ? String(team_name) : '',
+      selected_round_ids: roundIds,
     };
-        const sb = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    const { data: ev } = await sb
-      .from('tournaments')
-      .select('is_demo')
-      .eq('id', event_id)
-      .single();
-    const isDemo = !!ev?.is_demo;
-    const stripe = getStripe(isDemo);
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -147,7 +158,11 @@ export async function POST(request: NextRequest) {
       customer_email: email,
     });
 
-    return NextResponse.json({ url: session.url, session_id: session.id });
+    return NextResponse.json({
+      url: session.url,
+      session_id: session.id,
+      is_demo: isDemo,
+    });
   } catch (error: any) {
     console.error('Stripe Checkout Error:', error);
     return NextResponse.json(

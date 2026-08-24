@@ -539,6 +539,13 @@ const handleAddTeammatesCheckout = async () => {
   const isPerRound =
     (selectedItem.event.pricing_mode || 'event') === 'per_round';
 
+  if (isPerRound && selectedRoundIds.length === 0) {
+    alert(
+      'No round on this team card. Close and use Add teammates on a card that shows a flight/round.'
+    );
+    return;
+  }
+
   let basePerPlayer = 0;
   if (isPerRound) {
     basePerPlayer = selectedRoundIds.reduce((sum, id) => {
@@ -625,8 +632,7 @@ sessionStorage.setItem(
   })
 );
 
-    const baseUrl =
-      process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
+    const baseUrl = window.location.origin;
 
     const res = await fetch('/api/create-checkout-session', {
       method: 'POST',
@@ -641,6 +647,8 @@ sessionStorage.setItem(
         type: 'registration',
         registration_id: registrationIds[0],
         registration_ids: registrationIds.join(','),
+        team_name: teamName || '',
+        selected_round_ids: selectedRoundIds,
         success_url: `${baseUrl}/event/${selectedItem.event.id}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}&registration_ids=${registrationIds.join(',')}`,
         cancel_url: `${baseUrl}/dashboard/play?payment=cancelled`,
       }),
@@ -1131,11 +1139,11 @@ const openDetail = async (id: number) => {
               <button
                 type="button"
                 onClick={() => {
-                  setAddPlayersContext({
-                    teamName: card.teamName,
-                    selectedRoundIds: card.roundId ? [card.roundId] : [],
-                    regId: card.regId,
-                  });
+setAddPlayersContext({
+  teamName: card.teamName,
+  selectedRoundIds: card.roundId ? [Number(card.roundId)] : [],
+  regId: card.regId,
+});
                   setAddPlayersOpen(true);
                   setNewPlayers([{ name: '', email: '' }]);
                   clearDiscount();
