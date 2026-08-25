@@ -414,6 +414,17 @@ const [waitlistDone, setWaitlistDone] = useState(false);
     return Array.from(new Set(ids));
   };
 
+    const personKey = (r: any) => {
+    const email = normalizeEmail(r.player_email);
+    if (email.includes('@')) return `e:${email}`;
+    return `n:${normalizeName(r.player_name)}`;
+  };
+
+  const roundNameById = (id: number | string) => {
+    const rd = rounds.find((x: any) => String(x.id) === String(id));
+    return rd?.name || `Round ${rd?.sort_order ?? id}`;
+  };
+
   const roundsOverlap = (a: number[], b: number[]) =>
     a.some((id) => b.map(Number).includes(Number(id)));
 
@@ -610,6 +621,7 @@ useEffect(() => {
     .then(setFlyerQrDataUrl)
     .catch((e) => console.error('Flyer QR failed', e));
 }, [eventId]);
+
 
   
   // Force single player when a discount is applied
@@ -831,6 +843,8 @@ const myRegisteredRoundNames = useMemo(() => {
     }
   };
 
+
+  
   // Handle payment success / cancel
   useEffect(() => {
     const paymentStatus = searchParams.get('payment');
@@ -1547,33 +1561,97 @@ const spotsLeft =
       (r) => r.team_name === team && isListableReg(r)
     );
     if (!isPerRound) return teamRegs;
-
     if (selectedPaidRoundIds.length === 0) return [];
 
     return teamRegs.filter((r) => {
-      const ids: number[] = Array.isArray(r.selected_round_ids)
-        ? r.selected_round_ids.map(Number)
-        : r.round_id
-          ? [Number(r.round_id)]
-          : [];
-      // Cash/comp/manual often have no round ids — still count them on the team
+      const ids = roundIdsOf(r);
       if (!ids.length) return true;
       return selectedPaidRoundIds.some((id) => ids.includes(Number(id)));
     });
   };
 
+  const groupTeamPeople = (regs: any[]) => {
+    const map = new Map<
+      string,
+      { name: string; email: string; user_id: any; roundIds: Set<number> }
+    >();
+
+    for (const r of regs) {
+      const key = personKey(r);
+      const ids = roundIdsOf(r);
+      const fallback = ids.length ? ids : selectedPaidRoundIds.map(Number);
+      const cur = map.get(key) || {
+        name: r.player_name || 'Player',
+        email: r.player_email || '',
+        user_id: r.user_id,
+        roundIds: new Set<number>(),
+      };
+      fallback.forEach((id) => cur.roundIds.add(Number(id)));
+      if (r.player_name) cur.name = r.player_name;
+      if (r.player_email) cur.email = r.player_email;
+      if (r.user_id) cur.user_id = r.user_id;
+      map.set(key, cur);
+    }
+
+    const order = [...rounds].sort(
+      (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+    );
+
+    return [...map.entries()].map(([key, p]) => {
+      const roundIds = order
+        .map((rd: any) => Number(rd.id))
+        .filter((id) => p.roundIds.has(id));
+      const extra = [...p.roundIds].filter((id) => !roundIds.includes(id));
+      const all = [...roundIds, ...extra];
+      return {
+        key,
+        name: p.name,
+        email: p.email,
+        user_id: p.user_id,
+        roundIds: all,
+        roundLabels: all.map(roundNameById),
+      };
+    });
+  };
+
   const selectedTeamMembers = useMemo(() => {
     if (!selectedTeam) return [];
-    return regsForTeamOnSelectedRounds(selectedTeam);
-  }, [selectedTeam, registrations, isPerRound, selectedPaidRoundIds]);
+    return groupTeamPeople(regsForTeamOnSelectedRounds(selectedTeam));
+  }, [selectedTeam, registrations, isPerRound, selectedPaidRoundIds, rounds]);
 
-    const getSpotsLeft = (team: string) => {
-    const count = regsForTeamOnSelectedRounds(team).length;
-    return Math.max(0, maxTeamSize - count);
+  const peopleOnTeamRound = (team: string, roundId: number) => {
+    const teamRegs = registrations.filter(
+      (r) => r.team_name === team && isListableReg(r)
+    );
+
+
+    const keys = new Set<string>();
+    for (const r of teamRegs) {
+      const ids = roundIdsOf(r);
+      if (!ids.length || ids.includes(Number(roundId))) keys.add(personKey(r));
+    }
+    return keys.size;
+  };
+
+  const getSpotsLeft = (team: string) => {
+    if (!isPerRound) {
+      return Math.max(
+        0,
+        maxTeamSize - groupTeamPeople(regsForTeamOnSelectedRounds(team)).length
+      );
+    }
+    if (selectedPaidRoundIds.length === 0) return 0;
+    const leftover = selectedPaidRoundIds.map((id) =>
+      Math.max(0, maxTeamSize - peopleOnTeamRound(team, Number(id)))
+    );
+    return leftover.length ? Math.min(...leftover) : 0;
   };
 
   const openSlotsForJoin = selectedTeam ? getSpotsLeft(selectedTeam) : 0;
 
+
+  const isTeamFullOnRound = (team: string, roundId: number) =>
+    peopleOnTeamRound(team, Number(roundId)) >= maxTeamSize;
    
   // If already registered for this event, never charge them again as player 1
   
@@ -1725,11 +1803,17 @@ const spotsLeft =
   };
 
   const togglePaidRound = (roundId: number) => {
-    setSelectedPaidRoundIds((prev) =>
-      prev.includes(roundId)
-        ? prev.filter((id) => id !== roundId)
-        : [...prev, roundId]
-    );
+    setSelectedPaidRoundIds((prev) => {
+      if (prev.includes(roundId)) return prev.filter((id) => id !== roundId);
+      if (
+        mode === 'join' &&
+        selectedTeam &&
+        isTeamFullOnRound(selectedTeam, roundId)
+      ) {
+        return prev;
+      }
+      return [...prev, roundId];
+    });
   };
 
 
@@ -1740,6 +1824,14 @@ const spotsLeft =
       setSelectedTeam('');
     }
   }, [existingTeams, selectedTeam]);
+
+    useEffect(() => {
+    if (mode !== 'join' || !selectedTeam || !isPerRound) return;
+    setSelectedPaidRoundIds((prev) =>
+      prev.filter((id) => !isTeamFullOnRound(selectedTeam, Number(id)))
+    );
+  }, [mode, selectedTeam, registrations, maxTeamSize, isPerRound]);
+  
 
   // ---------- Discount helpers ----------
   const applyDiscountCode = async () => {
@@ -1932,6 +2024,7 @@ const completeAdditional = additionalPlayers.filter(
         players.push({
           player_name: playerName,
           player_email: user.email || '',
+            team_name: isIndividual ? null : finalTeamName,
           user_id: user.id,
         });
       } else {
@@ -2754,6 +2847,11 @@ paid: false,
   const maxT = maxTeamsForRound(round.id);
   const usedT = teamCountForRound(round.id);
   const roundTeamsFull = maxT != null && usedT >= maxT;
+  const teamFullOnThisRound =
+    mode === 'join' &&
+    !!selectedTeam &&
+    isTeamFullOnRound(selectedTeam, Number(round.id));
+  const locked = alreadyOn || teamFullOnThisRound;
 
   return (
     <label
@@ -2761,18 +2859,20 @@ paid: false,
       className={`flex items-center justify-between gap-4 p-4 rounded-2xl border transition-colors ${
         alreadyOn
           ? 'border-amber-500 bg-amber-950/40 cursor-not-allowed opacity-80'
-          : checked
-            ? 'border-teal-500 bg-teal-950/40 cursor-pointer'
-            : 'border-gray-700 hover:border-gray-600 cursor-pointer'
+          : teamFullOnThisRound
+            ? 'border-gray-700 bg-gray-800/60 cursor-not-allowed opacity-50'
+            : checked
+              ? 'border-teal-500 bg-teal-950/40 cursor-pointer'
+              : 'border-gray-700 hover:border-gray-600 cursor-pointer'
       }`}
     >
       <div className="flex items-center gap-3">
         <input
           type="checkbox"
           checked={alreadyOn || checked}
-          disabled={alreadyOn}
+          disabled={locked}
           onChange={() => {
-            if (!alreadyOn) togglePaidRound(round.id);
+            if (!locked) togglePaidRound(round.id);
           }}
           className="w-5 h-5 accent-teal-600"
         />
@@ -2784,7 +2884,12 @@ paid: false,
                 Already registered
               </span>
             )}
-            {roundTeamsFull && !alreadyOn && (
+            {teamFullOnThisRound && !alreadyOn && (
+              <span className="ml-2 text-xs text-amber-400">
+                {selectedTeam} is full
+              </span>
+            )}
+            {roundTeamsFull && !alreadyOn && !teamFullOnThisRound && (
               <span className="ml-2 text-xs text-orange-400">
                 Full · join an existing team
               </span>
@@ -2797,7 +2902,7 @@ paid: false,
         </div>
       </div>
       <div className="text-sm font-medium text-teal-300">
-        {alreadyOn
+        {alreadyOn || teamFullOnThisRound
           ? '—'
           : `$${(Number(round.price || 0) + platformFee).toFixed(2)}`}
       </div>
@@ -2968,34 +3073,48 @@ paid: false,
                           On this team
                         </p>
                         <p className="text-xs text-gray-500">
-                          {selectedTeamMembers.length}/{maxTeamSize} ·{' '}
-                          {openSlotsForJoin} open
+                          {openSlotsForJoin} open on selected rounds
                         </p>
                       </div>
+                      {isPerRound && selectedPaidRoundIds.length > 0 && (
+                        <p className="text-xs text-gray-500">
+                          {selectedPaidRoundIds.map((id) => (
+                            <span key={id} className="mr-3">
+                              {roundNameById(id)}{' '}
+                              {peopleOnTeamRound(selectedTeam, Number(id))}/
+                              {maxTeamSize}
+                            </span>
+                          ))}
+                        </p>
+                      )}
                       {selectedTeamMembers.length === 0 ? (
                         <p className="text-sm text-gray-500">No players yet</p>
                       ) : (
                         <ul className="space-y-2">
                           {selectedTeamMembers.map((m) => (
                             <li
-                              key={m.id}
-                              className="flex justify-between text-sm bg-gray-800 rounded-xl px-4 py-3"
+                              key={m.key}
+                              className="flex justify-between items-start text-sm bg-gray-800 rounded-xl px-4 py-3"
                             >
-                              <span className="font-medium">
-                                {m.player_name || 'Player'}
-                                {(m.user_id === currentUser?.id ||
-                                  (m.player_email &&
-                                    currentUser?.email &&
-                                    String(m.player_email).toLowerCase() ===
-                                      String(currentUser.email).toLowerCase())) && (
-                                  <span className="text-emerald-400 text-xs ml-2">
-                                    (you)
-                                  </span>
+                              <div>
+                                <p className="font-medium">
+                                  {m.name}
+                                  {(m.user_id === currentUser?.id ||
+                                    (m.email &&
+                                      currentUser?.email &&
+                                      normalizeEmail(m.email) ===
+                                        normalizeEmail(currentUser.email))) && (
+                                    <span className="text-emerald-400 text-xs ml-2">
+                                      (you)
+                                    </span>
+                                  )}
+                                </p>
+                                {isPerRound && m.roundLabels.length > 0 && (
+                                  <p className="text-xs text-gray-400 mt-1">
+                                    {m.roundLabels.join(' · ')}
+                                  </p>
                                 )}
-                              </span>
-                              <span className="text-gray-500 text-xs">
-                                {m.paid ? 'Paid' : 'Unpaid'}
-                              </span>
+                              </div>
                             </li>
                           ))}
                         </ul>

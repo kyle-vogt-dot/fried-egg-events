@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -262,15 +263,10 @@ export default function EventLeaderboardPage() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (user && eventData) {
-        const isCreator = eventData.created_by === user.id;
-        const { data: adminRow } = await supabase
-          .from('event_admins')
-          .select('id')
-          .eq('event_id', id)
-          .or(`user_id.eq.${user.id},email.eq.${user.email}`)
-          .maybeSingle();
-        setIsAdmin(isCreator || !!adminRow);
+
+      if (user) {
+        const access = await loadEventAccess(supabase, id, user);
+        setIsAdmin(access.allowed && canUse(access.perms, 'leaderboard'));
       } else {
         setIsAdmin(false);
       }

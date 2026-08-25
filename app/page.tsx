@@ -253,13 +253,7 @@ function getEventRegWindow(event: any) {
   })}
 </p>
                       </div>
-                                          {spotsLeft != null && (
-                      <p className="mt-3 text-sm text-gray-400">
-                        {soldOut
-                          ? 'No spots remaining'
-                          : `${spotsLeft} spot${spotsLeft === 1 ? '' : 's'} remaining`}
-                      </p>
-                    )}
+
                       <div className="text-right">
                         <p className="text-xs text-gray-500">MAX PLAYERS</p>
                         <p className="font-medium">
