@@ -2342,7 +2342,7 @@ paid: false,
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 p-10 border-b border-gray-700">
             <div>
               <p className="text-gray-500 text-sm mb-1">DATE</p>
-              <p className="text-2xl font-semibold">
+              <p className="text-xl font-medium">
                 {(() => {
                   if (!event.date) return 'TBD';
                   const dateOnly = String(event.date).split('T')[0];
@@ -2367,7 +2367,7 @@ paid: false,
             <div>
               <p className="text-gray-500 text-sm mb-1">
                 {(event.pricing_mode || 'event') === 'per_round'
-                  ? 'From (per player)'
+                  ? ' PER PLAYER'
                   : 'Price per Player'}
               </p>
               <p className="text-xl font-medium">
@@ -2384,7 +2384,7 @@ paid: false,
               </p>
             </div>
             <div>
-              <p className="text-gray-500 text-sm mb-1">MAX PLAYERS</p>
+              <p className="text-gray-500 text-sm mb-1">TEAM SIZE</p>
               <p className="text-xl font-medium">
                 {event.max_teammates || event.max_players || 'N/A'}
               </p>
