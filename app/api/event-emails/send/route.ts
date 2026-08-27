@@ -19,6 +19,28 @@ export const runtime = 'nodejs';
 const resend = new Resend(process.env.RESEND_API_KEY);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+function extractEmail(value: unknown): string | null {
+  const s = String(value ?? '')
+    .replace(/mailto:/gi, '')
+    .replace(/[\u00A0\u00B7\u2022•]/g, ' ')
+    .replace(/[<>]/g, ' ')
+    .trim();
+  const m = s.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return m ? m[0].toLowerCase() : null;
+}
+
+/** Pull a single RFC-style address out of messy DB / UI strings. */
+function extractEmail(value: unknown): string | null {
+  const s = String(value ?? '')
+    .replace(/mailto:/gi, '')
+    .replace(/[\u00A0\u00B7\u2022•]/g, ' ')
+    .replace(/[<>]/g, ' ')
+    .trim();
+  const m = s.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  if (!m) return null;
+  return m[0].toLowerCase();
+}
+
 function adminClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -189,7 +211,9 @@ export async function POST(req: NextRequest) {
     if (audience === 'everyone') {
       const seen = new Set<string>();
       for (const r of listable) {
-        const email = normalizeEmail(r.player_email);
+        const email =
+          extractEmail(r.player_email) || extractEmail(normalizeEmail(r.player_email));
+        if (!email || seen.has(email)) continue;
         if (!email || seen.has(email)) continue;
         seen.add(email);
         recipients.push({
@@ -217,10 +241,12 @@ export async function POST(req: NextRequest) {
             ? c.teams.filter((t) => t.spotsLeft > 0)
             : c.teams;
         if (!teams.length) continue;
+        const email = extractEmail(c.email);
+        if (!email) continue;
         const spots = teams.reduce((s, t) => s + t.spotsLeft, 0);
         const teamName = teams[0].team;
         recipients.push({
-          email: c.email,
+          email,
           name: c.name,
           vars: {
             first_name: firstName(c.name),
@@ -258,7 +284,7 @@ export async function POST(req: NextRequest) {
     const from =
       process.env.RESEND_FROM ||
       'Fried Egg Events <noreply@friedeggevents.app>';
-    const replyTo = event.contact_email || undefined;
+    const replyTo = extractEmail(event.contact_email) || undefined;
 
     const pairingsAttachment =
       templateKey === 'pairings'
@@ -283,12 +309,20 @@ export async function POST(req: NextRequest) {
     }[] = [];
 
     const sendOne = async (r: Recip) => {
+      const to = extractEmail(r.email);
+      if (!to) {
+        const msg = 'Invalid email address';
+        errors.push(`${r.email}: ${msg}`);
+        results.push({ email: r.email, name: r.name, status: 'failed', error: msg });
+        return;
+      }
+
       const vars = { ...shared, ...r.vars };
       const subject = applyVars(subjectTemplate, vars);
       const text = applyVars(bodyTemplate, vars);
       const { error } = await resend.emails.send({
         from,
-        to: r.email,
+        to, // bare email only — never "Name · email"
         subject,
         text,
         html: buildHtml(text, vars, templateKey),
@@ -306,9 +340,9 @@ export async function POST(req: NextRequest) {
       } as any);
 
       if (error) {
-        errors.push(`${r.email}: ${error.message}`);
+        errors.push(`${to}: ${error.message}`);
         results.push({
-          email: r.email,
+          email: to,
           name: r.name,
           status: 'failed',
           error: error.message,
@@ -316,7 +350,7 @@ export async function POST(req: NextRequest) {
       } else {
         sent += 1;
         results.push({
-          email: r.email,
+          email: to,
           name: r.name,
           status: 'sent',
           error: null,
@@ -324,78 +358,23 @@ export async function POST(req: NextRequest) {
       }
     };
 
-    if (pairingsAttachment || recipients.length <= 10) {
-      for (const r of recipients) {
-        try {
-          await sendOne(r);
-        } catch (e: any) {
-          const msg = e.message || 'send failed';
-          errors.push(`${r.email}: ${msg}`);
-          results.push({
-            email: r.email,
-            name: r.name,
-            status: 'failed',
-            error: msg,
-          });
-        }
-        await sleep(150);
-      }
-    } else {
-      const CHUNK = 100;
-      for (let i = 0; i < recipients.length; i += CHUNK) {
-        const chunk = recipients.slice(i, i + CHUNK);
-        const payloads = chunk.map((r) => {
-          const vars = { ...shared, ...r.vars };
-          return {
-            from,
-            to: [r.email],
-            subject: applyVars(subjectTemplate, vars),
-            text: applyVars(bodyTemplate, vars),
-            html: buildHtml(
-              applyVars(bodyTemplate, vars),
-              vars,
-              templateKey
-            ),
-            ...(replyTo ? { replyTo } : {}),
-          };
+    // Pairings PDF or small lists: one-by-one.
+    // Large lists without PDF: still one-by-one (batch was marking the whole
+    // chunk failed on a single bad `to`).
+    for (const r of recipients) {
+      try {
+        await sendOne(r);
+      } catch (e: any) {
+        const msg = e.message || 'send failed';
+        errors.push(`${r.email}: ${msg}`);
+        results.push({
+          email: r.email,
+          name: r.name,
+          status: 'failed',
+          error: msg,
         });
-        try {
-          const { error } = await resend.batch.send(payloads as any);
-          if (error) {
-            for (const r of chunk) {
-              errors.push(`${r.email}: ${error.message}`);
-              results.push({
-                email: r.email,
-                name: r.name,
-                status: 'failed',
-                error: error.message,
-              });
-            }
-          } else {
-            for (const r of chunk) {
-              sent += 1;
-              results.push({
-                email: r.email,
-                name: r.name,
-                status: 'sent',
-                error: null,
-              });
-            }
-          }
-        } catch (e: any) {
-          const msg = e.message || 'batch failed';
-          for (const r of chunk) {
-            errors.push(`${r.email}: ${msg}`);
-            results.push({
-              email: r.email,
-              name: r.name,
-              status: 'failed',
-              error: msg,
-            });
-          }
-        }
-        if (i + CHUNK < recipients.length) await sleep(500);
       }
+      await sleep(150);
     }
 
     const { data: sendRow } = await sb
