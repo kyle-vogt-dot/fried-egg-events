@@ -29,18 +29,6 @@ function extractEmail(value: unknown): string | null {
   return m ? m[0].toLowerCase() : null;
 }
 
-/** Pull a single RFC-style address out of messy DB / UI strings. */
-function extractEmail(value: unknown): string | null {
-  const s = String(value ?? '')
-    .replace(/mailto:/gi, '')
-    .replace(/[\u00A0\u00B7\u2022•]/g, ' ')
-    .replace(/[<>]/g, ' ')
-    .trim();
-  const m = s.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  if (!m) return null;
-  return m[0].toLowerCase();
-}
-
 function adminClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -126,11 +114,12 @@ async function assertOrganizer(req: NextRequest, eventId: number) {
   if (!event) return { error: 'Event not found', user };
 
   const isCreator = event.created_by === user.id;
+  const email = (user.email || '').toLowerCase();
   const { data: adminRow } = await sb
     .from('event_admins')
     .select('id')
     .eq('event_id', eventId)
-    .or(`user_id.eq.${user.id},email.eq.${user.email}`)
+    .or(`user_id.eq.${user.id},email.eq."${email}"`)
     .maybeSingle();
 
   if (!isCreator && !adminRow) return { error: 'Forbidden', user };
@@ -212,8 +201,8 @@ export async function POST(req: NextRequest) {
       const seen = new Set<string>();
       for (const r of listable) {
         const email =
-          extractEmail(r.player_email) || extractEmail(normalizeEmail(r.player_email));
-        if (!email || seen.has(email)) continue;
+          extractEmail(r.player_email) ||
+          extractEmail(normalizeEmail(r.player_email));
         if (!email || seen.has(email)) continue;
         seen.add(email);
         recipients.push({
@@ -313,7 +302,12 @@ export async function POST(req: NextRequest) {
       if (!to) {
         const msg = 'Invalid email address';
         errors.push(`${r.email}: ${msg}`);
-        results.push({ email: r.email, name: r.name, status: 'failed', error: msg });
+        results.push({
+          email: r.email,
+          name: r.name,
+          status: 'failed',
+          error: msg,
+        });
         return;
       }
 
@@ -322,7 +316,7 @@ export async function POST(req: NextRequest) {
       const text = applyVars(bodyTemplate, vars);
       const { error } = await resend.emails.send({
         from,
-        to, // bare email only — never "Name · email"
+        to,
         subject,
         text,
         html: buildHtml(text, vars, templateKey),
@@ -358,9 +352,6 @@ export async function POST(req: NextRequest) {
       }
     };
 
-    // Pairings PDF or small lists: one-by-one.
-    // Large lists without PDF: still one-by-one (batch was marking the whole
-    // chunk failed on a single bad `to`).
     for (const r of recipients) {
       try {
         await sendOne(r);
