@@ -3138,7 +3138,9 @@ paid: false,
 
                   
 <div>
-  {currentUser && !alreadyRegistered && (
+  {currentUser &&
+    (!alreadyRegistered ||
+      (isPerRound && newlySelectedRoundIds.length > 0)) && (
     <button
       type="button"
       onClick={() => setIsOrganizerOnly(!isOrganizerOnly)}
@@ -3294,7 +3296,7 @@ paid: false,
                         }
                       }}
                                             disabled={
-                        !!appliedDiscount ||
+                        !!appliedDiscount?.one_player_only ||
                         (mode === 'join' && !selectedTeam) ||
                         (mode === 'create' && !newTeamName) ||
                         additionalPlayers.length >=
