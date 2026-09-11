@@ -87,7 +87,7 @@ async function confirmRegistrationPayment(opts: {
   const payment_method =
     methodFromMeta === 'payment_link' || methodFromMeta === 'addon'
       ? methodFromMeta
-      : 'card';
+      : 'stripe';
 
   if (type === 'addon' || type === 'addon_payment') {
     if (ids.length) {

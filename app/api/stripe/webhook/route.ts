@@ -11,24 +11,15 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-function parseIds(session: Stripe.Checkout.Session): number[] {
+function parseIds(session: Stripe.Checkout.Session): string[] {
   const meta = session.metadata || {};
-  const raw = [
-    meta.registration_ids || '',
-    meta.registration_id || '',
-  ]
+  const raw = [meta.registration_ids || '', meta.registration_id || '']
     .join(',')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
 
-  return Array.from(
-    new Set(
-      raw
-        .map((s) => parseInt(s, 10))
-        .filter((n) => Number.isFinite(n) && n > 0)
-    )
-  );
+  return Array.from(new Set(raw));
 }
 
 export async function POST(request: NextRequest) {
@@ -41,11 +32,26 @@ export async function POST(request: NextRequest) {
 
   let event: Stripe.Event;
   try {
-    event = stripe.webhooks.constructEvent(
-      body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET!
-    );
+    const secrets = [
+      process.env.STRIPE_WEBHOOK_SECRET,
+      process.env.STRIPE_TEST_WEBHOOK_SECRET,
+    ].filter(Boolean) as string[];
+
+    let verified: Stripe.Event | null = null;
+    let verifyErr: any = null;
+    for (const secret of secrets) {
+      try {
+        verified = stripe.webhooks.constructEvent(body, sig, secret);
+        break;
+      } catch (e) {
+        verifyErr = e;
+      }
+    }
+    if (!verified) {
+      console.error('Webhook signature failed:', verifyErr?.message);
+      return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
+    }
+    event = verified;
   } catch (err: any) {
     console.error('Webhook signature failed:', err.message);
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
@@ -86,6 +92,13 @@ export async function POST(request: NextRequest) {
         session.amount_total != null ? session.amount_total / 100 : null;
       const amountPaid = netFromMeta ?? amountPaidTotal;
 
+      const paidPatch = {
+        paid: true,
+        payment_method: 'stripe',
+        stripe_payment_intent_id: paymentIntentId,
+        amount_paid: amountPaid,
+      };
+
       if (type === 'sponsorship') {
         return NextResponse.json({ received: true });
       }
@@ -110,12 +123,7 @@ export async function POST(request: NextRequest) {
       if (ids.length > 0) {
         const { data: updated, error } = await supabaseAdmin
           .from('event_registrations')
-          .update({
-            paid: true,
-            payment_method: 'card',
-            stripe_payment_intent_id: paymentIntentId,
-            amount_paid: amountPaid,
-          })
+          .update(paidPatch)
           .in('id', ids)
           .select('id');
 
@@ -124,49 +132,38 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ error: error.message }, { status: 500 });
         }
 
-        const updatedIds = new Set((updated || []).map((r) => Number(r.id)));
-        const missing = ids.filter((id) => !updatedIds.has(id));
-
-        // Drafts were deleted — recreate paid rows with the same ids
-        for (const id of missing) {
-          if (!eventId) continue;
-          const { error: insErr } = await supabaseAdmin
-            .from('event_registrations')
-            .insert({
-              id,
-              event_id: eventId,
-              player_name: meta.player_name || 'Player',
-              player_email: (meta.email || '').toLowerCase() || null,
-              paid: true,
-              payment_method: 'card',
-              stripe_payment_intent_id: paymentIntentId,
-              amount_paid: amountPaid,
-              selected_round_ids: [],
-            });
-          if (insErr) {
-            console.error('Registration upsert failed', id, insErr);
-          }
+        const updatedIds = new Set((updated || []).map((r) => String(r.id)));
+        const missing = ids.filter((id) => !updatedIds.has(String(id)));
+        if (missing.length) {
+          console.error(
+            'Webhook: paid session but rows gone',
+            session.id,
+            missing
+          );
         }
-      } else if (eventId) {
+        return NextResponse.json({ received: true });
+      }
+
+      // No IDs in metadata — recover unpaid drafts for this event + email
+      const email = (meta.email || session.customer_email || '')
+        .toLowerCase()
+        .trim();
+      if (eventId && email) {
+        const { error } = await supabaseAdmin
+          .from('event_registrations')
+          .update(paidPatch)
+          .eq('event_id', eventId)
+          .ilike('player_email', email)
+          .eq('paid', false);
+        if (error) {
+          console.error('Webhook email fallback failed:', error);
+          return NextResponse.json({ error: error.message }, { status: 500 });
+        }
+      } else {
         console.warn(
           'checkout.session.completed with no registration ids',
           session.id
         );
-        const { error: insErr } = await supabaseAdmin
-          .from('event_registrations')
-          .insert({
-            event_id: eventId,
-            player_name: meta.player_name || 'Player',
-            player_email: (meta.email || '').toLowerCase() || null,
-            paid: true,
-            payment_method: 'card',
-            stripe_payment_intent_id: paymentIntentId,
-            amount_paid: amountPaid,
-            selected_round_ids: [],
-          });
-        if (insErr) {
-          console.error('Registration create-from-session failed', insErr);
-        }
       }
     }
 
