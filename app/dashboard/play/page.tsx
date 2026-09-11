@@ -18,6 +18,8 @@ function isListable(r: any) {
     'manual',
     'checkin',
     'payment_link',
+    'stripe',
+    'team',
   ].includes(m);
 }
 
@@ -181,6 +183,9 @@ export default function MyEventsPage() {
   const [registrations, setRegistrations] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
   const [rounds, setRounds] = useState<any[]>([]);
+  const [editingMateId, setEditingMateId] = useState<string | null>(null);
+const [editName, setEditName] = useState('');
+const [editEmail, setEditEmail] = useState('');
 
   // Expanded upcoming/past detail
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -243,6 +248,8 @@ const isListable = (r: any) => {
     'manual',
     'checkin',
     'payment_link',
+    'stripe',
+    'team',
   ].includes(m);
 };
 
@@ -341,17 +348,22 @@ const eventIds = [
       return;
     }
 
-    const regIds = selectedItem.regs
-      .map((r: any) => r.id)
-      .filter(Boolean)
-      .join(',');
-
     const origin =
       typeof window !== 'undefined' ? window.location.origin : '';
 
-    const url = `${origin}/event/${selectedItem.event.id}/join${
-      regIds ? `?regs=${encodeURIComponent(regIds)}` : ''
-    }`;
+    const teamName =
+      selectedItem.regs.find((r: any) => r.team_name)?.team_name || '';
+    const roundIds = [
+      ...new Set(
+        selectedItem.regs.flatMap((r: any) =>
+          Array.isArray(r.selected_round_ids) ? r.selected_round_ids : []
+        )
+      ),
+    ].join(',');
+
+    const url = `${origin}/event/${selectedItem.event.id}/join?team=${encodeURIComponent(
+      teamName
+    )}&rounds=${encodeURIComponent(roundIds)}`;
 
     QRCode.toDataURL(url, { width: 280, margin: 1, errorCorrectionLevel: 'M' })
       .then(setInviteQr)
@@ -506,12 +518,13 @@ const clearDiscount = () => {
   setDiscountError('');
 };
 
-const handleAddTeammatesCheckout = async () => {
+const handleAddTeammates = async () => {
   if (!selectedItem || !currentUser) return;
-  
 
   if (!addPlayersContext) {
-    alert('No team/round selected — close and tap Add teammates on a specific round');
+    alert(
+      'No team/round selected — close and tap Add teammates on a specific flight.'
+    );
     return;
   }
 
@@ -533,140 +546,75 @@ const handleAddTeammatesCheckout = async () => {
     return;
   }
 
+  const saveRosterField = async (
+  id: string,
+  field: 'player_name' | 'player_email',
+  value: string
+) => {
+  const v =
+    field === 'player_email' ? value.trim().toLowerCase() : value.trim();
+  const { error } = await supabase
+    .from('event_registrations')
+    .update({ [field]: v || null })
+    .eq('id', id);
+  if (error) {
+    alert(error.message);
+    return;
+  }
+  setTeamRoster((prev) =>
+    prev.map((x) => (x.id === id ? { ...x, [field]: v } : x))
+  );
+};
+
   const teamName = addPlayersContext.teamName;
   const selectedRoundIds = addPlayersContext.selectedRoundIds;
+  const maxTeam = Number(selectedItem.event.max_teammates) || 4;
 
-  const isPerRound =
-    (selectedItem.event.pricing_mode || 'event') === 'per_round';
-
-  if (isPerRound && selectedRoundIds.length === 0) {
+  const alreadyOnTeam = teamRoster.filter(
+    (r) => r.team_name === teamName && isListable(r)
+  ).length;
+  if (alreadyOnTeam + complete.length > maxTeam) {
     alert(
-      'No round on this team card. Close and use Add teammates on a card that shows a flight/round.'
+      `Only ${Math.max(0, maxTeam - alreadyOnTeam)} spot(s) left on ${teamName}.`
     );
     return;
   }
 
-  let basePerPlayer = 0;
-  if (isPerRound) {
-    basePerPlayer = selectedRoundIds.reduce((sum, id) => {
-      const round = rounds.find((r) => Number(r.id) === Number(id));
-      return sum + (Number(round?.price) || 0) + platformFee;
-    }, 0);
-  } else {
-    basePerPlayer =
-      (Number(selectedItem.event.price) || 0) + platformFee;
-  }
-
-  const discountPer = appliedDiscount
-    ? Number(appliedDiscount.amount_saved) || 0
-    : 0;
-  const perPlayer = Math.max(0, basePerPlayer - discountPer);
-  const totalCost = perPlayer * complete.length;
-
   setSubmitting(true);
   try {
-    const regRows = complete.map((p) => ({
+    const captain = selectedItem.regs.find((r) => r.id === addPlayersContext.regId);
+    const roundIds =
+      selectedRoundIds.length > 0
+        ? selectedRoundIds
+        : Array.isArray(captain?.selected_round_ids)
+          ? captain.selected_round_ids
+          : [];
+
+    const rows = complete.map((p) => ({
       event_id: selectedItem.event.id,
       user_id: null,
       player_name: p.name.trim(),
       player_email: p.email.trim().toLowerCase(),
       team_name: teamName,
-      paid: false,
+      paid: true,
+      payment_method: 'team',
+      amount_paid: 0,
       checked_in: false,
       addons_selected: {},
-      selected_round_ids: selectedRoundIds,
-      payment_method: 'pending_checkout',
-      discount_code: appliedDiscount?.code || null,
-      discount_amount: appliedDiscount?.amount_saved || 0,
+      selected_round_ids: roundIds,
     }));
 
-    const { data: inserted, error: insertErr } = await supabase
-      .from('event_registrations')
-      .insert(regRows)
-      .select('id');
+    const { error } = await supabase.from('event_registrations').insert(rows);
+    if (error) throw error;
 
-    if (insertErr || !inserted?.length) {
-      throw new Error(insertErr?.message || 'Could not create registrations');
-    }
-
-    const registrationIds = inserted.map((r: any) => r.id);
-    const draftKey = `registration_draft_${selectedItem.event.id}`;
-
-sessionStorage.setItem(
-  draftKey,
-  JSON.stringify({
-    eventId: selectedItem.event.id,
-    mode: 'add_teammates',
-    isIndividual: false,
-    isOrganizerOnly: true,
-    teamName: addPlayersContext?.teamName || null,
-    payment_method: 'pending_checkout',
-    selected_round_ids: addPlayersContext?.selectedRoundIds || [],
-    players: complete.map((p) => ({
-      player_name: (p.name || '').trim(),
-      player_email: (p.email || '').trim().toLowerCase(),
-      user_id: null,
-    })),
-    totalCost: totalCost, // or whatever you compute
-    registration_ids: registrationIds,
-    discount: appliedDiscount
-      ? {
-          code: appliedDiscount.code,
-          discount_code_id: appliedDiscount.discount_code_id,
-          amount_saved: appliedDiscount.amount_saved,
-        }
-      : null,
-    sendReceipt: true,
-    receiptName:
-      currentUser?.user_metadata?.full_name ||
-      currentUser?.user_metadata?.name ||
-      currentUser?.email ||
-      '',
-    receiptEmail: (currentUser?.email || '').toLowerCase(),
-    inviter_email: (currentUser?.email || '').toLowerCase(),
-    inviter_name:
-      currentUser?.user_metadata?.full_name ||
-      currentUser?.user_metadata?.name ||
-      currentUser?.email ||
-      '',
-  })
-);
-
-    const baseUrl = window.location.origin;
-
-    const res = await fetch('/api/create-checkout-session', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount: totalCost,
-        player_name: complete[0].name.trim(),
-        email: currentUser.email,
-        description: `Add teammates – ${selectedItem.event.name}`,
-        event_name: selectedItem.event.name,
-        event_id: selectedItem.event.id,
-        type: 'registration',
-        registration_id: registrationIds[0],
-        registration_ids: registrationIds.join(','),
-        team_name: teamName || '',
-        selected_round_ids: selectedRoundIds,
-        success_url: `${baseUrl}/event/${selectedItem.event.id}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}&registration_ids=${registrationIds.join(',')}`,
-        cancel_url: `${baseUrl}/dashboard/play?payment=cancelled`,
-      }),
-    });
-
-    const data = await res.json();
-    if (!res.ok || !data.url) {
-      await supabase
-        .from('event_registrations')
-        .delete()
-        .in('id', registrationIds);
-      throw new Error(data.error || 'Checkout failed');
-    }
-
-    window.location.href = data.url;
+    alert(`Added ${complete.length} teammate${complete.length === 1 ? '' : 's'}.`);
+    setAddPlayersOpen(false);
+    setNewPlayers([]);
+    setAddPlayersContext(null);
+    await openDetail(selectedItem.event.id);
   } catch (e: any) {
     console.error(e);
-    alert(e.message || 'Could not start checkout');
+    alert(e.message || 'Could not add teammates');
   } finally {
     setSubmitting(false);
   }
@@ -693,6 +641,8 @@ const openDetail = async (id: number) => {
       'manual',
       'checkin',
       'payment_link',
+      'stripe',
+      'team',
     ].includes(m);
   };
 
@@ -1105,27 +1055,137 @@ const openDetail = async (id: number) => {
                     currentUser?.email &&
                     String(m.player_email).toLowerCase() ===
                       String(currentUser.email).toLowerCase());
+                const editing = String(editingMateId) === String(m.id);
+
                 return (
                   <li
                     key={m.id}
-                    className={`flex justify-between text-sm bg-gray-800 rounded-xl px-3 py-2 ${
+                    className={`bg-gray-800 rounded-xl px-3 py-2 ${
                       m.is_captain ? 'ring-1 ring-amber-400/40' : ''
                     }`}
                   >
-                    <span className="flex items-center flex-wrap gap-x-2">
-                      {m.player_name || 'Player'}
-                      {isYou && (
-                        <span className="text-emerald-400 text-xs">(you)</span>
-                      )}
-                      {m.is_captain && (
-                        <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-400/50 rounded-full px-2 py-0.5">
-                          Captain
-                        </span>
-                      )}
-                    </span>
-                    <span className="text-gray-500 text-xs">
-                      {m.paid ? 'Paid' : m.payment_method || 'Comp'}
-                    </span>
+                    {editing ? (
+                      <div className="space-y-2">
+                        <input
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+                        />
+                        <input
+                          type="email"
+                          value={editEmail}
+                          onChange={(e) => setEditEmail(e.target.value)}
+                          className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            className="flex-1 py-2 rounded-lg bg-emerald-700 text-sm font-medium"
+                            onClick={async () => {
+                              const name = editName.trim();
+                              const email = editEmail.trim().toLowerCase();
+                              if (!name) {
+                                alert('Name is required');
+                                return;
+                              }
+                              const { error } = await supabase
+                                .from('event_registrations')
+                                .update({
+                                  player_name: name,
+                                  player_email: email || null,
+                                })
+                                .eq('id', m.id);
+                              if (error) {
+                                alert(error.message);
+                                return;
+                              }
+                              setTeamRoster((prev) =>
+                                prev.map((x) =>
+                                  x.id === m.id
+                                    ? {
+                                        ...x,
+                                        player_name: name,
+                                        player_email: email,
+                                      }
+                                    : x
+                                )
+                              );
+                              setEditingMateId(null);
+                            }}
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            className="px-3 py-2 text-sm text-gray-400"
+                            onClick={() => setEditingMateId(null)}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-sm truncate">
+                            {m.player_name || 'Player'}
+                            {isYou && (
+                              <span className="text-emerald-400 text-xs ml-2">
+                                (you)
+                              </span>
+                            )}
+                            {m.is_captain && (
+                              <span className="text-amber-400 text-xs ml-2">
+                                Captain
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-gray-500 truncate">
+                            {m.player_email || 'no email'}
+                          </p>
+                        </div>
+                        <div className="flex gap-2 shrink-0">
+                          <button
+                            type="button"
+                            className="text-xs text-teal-400"
+                            onClick={() => {
+                              setEditingMateId(String(m.id));
+                              setEditName(m.player_name || '');
+                              setEditEmail(m.player_email || '');
+                            }}
+                          >
+                            Edit
+                          </button>
+                          {!isYou && (
+                            <button
+                              type="button"
+                              className="text-xs text-red-400"
+                              onClick={async () => {
+                                if (
+                                  !confirm(
+                                    `Remove ${m.player_name || 'this player'} from the team?`
+                                  )
+                                )
+                                  return;
+                                const { error } = await supabase
+                                  .from('event_registrations')
+                                  .delete()
+                                  .eq('id', m.id);
+                                if (error) {
+                                  alert(error.message);
+                                  return;
+                                }
+                                setTeamRoster((prev) =>
+                                  prev.filter((x) => x.id !== m.id)
+                                );
+                              }}
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </li>
                 );
               })}
@@ -1693,99 +1753,15 @@ setAddPlayersContext({
         + Another player
       </button>
 
-      <div className="bg-gray-900 rounded-2xl p-4 mb-4">
-        <label className="block text-sm text-gray-400 mb-2">
-          Discount code
-        </label>
-        {appliedDiscount ? (
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="font-medium text-emerald-400">
-                {appliedDiscount.code} applied
-              </p>
-              <p className="text-sm text-gray-400">
-                −${Number(appliedDiscount.amount_saved).toFixed(2)} per player
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={clearDiscount}
-              className="text-sm text-red-400"
-            >
-              Remove
-            </button>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <input
-              value={discountCode}
-              onChange={(e) =>
-                setDiscountCode(e.target.value.toUpperCase())
-              }
-              placeholder="Enter code"
-              className="flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
-            />
-            <button
-              type="button"
-              onClick={applyDiscountCode}
-              className="bg-teal-600 hover:bg-teal-700 px-4 py-3 rounded-xl font-medium"
-            >
-              Apply
-            </button>
-          </div>
-        )}
-        {discountError && (
-          <p className="text-red-400 text-sm mt-2">{discountError}</p>
-        )}
-      </div>
 
-      {(() => {
-        const complete = newPlayers.filter(
-          (p) => (p.name || '').trim() && isValidEmail(p.email || '')
-        );
-
-        const isPerRound =
-          (selectedItem.event.pricing_mode || 'event') === 'per_round';
-
-        let basePerPlayer = 0;
-        if (isPerRound) {
-          const ids = addPlayersContext?.selectedRoundIds || [];
-          basePerPlayer = ids.reduce((sum, id) => {
-            const round = rounds.find((r) => Number(r.id) === Number(id));
-            return sum + (Number(round?.price) || 0) + platformFee;
-          }, 0);
-        } else {
-          basePerPlayer =
-            (Number(selectedItem.event.price) || 0) + platformFee;
-        }
-
-        const discountPer = appliedDiscount
-          ? Number(appliedDiscount.amount_saved) || 0
-          : 0;
-        const total =
-          Math.max(0, basePerPlayer - discountPer) * complete.length;
-
-        return (
-          <p className="text-center text-lg font-semibold mb-4">
-            Total: ${total.toFixed(2)}
-            {complete.length > 0 && (
-              <span className="text-sm text-gray-400 font-normal">
-                {' '}
-                ({complete.length} player
-                {complete.length !== 1 ? 's' : ''})
-              </span>
-            )}
-          </p>
-        );
-      })()}
 
       <button
         type="button"
         disabled={submitting}
-        onClick={handleAddTeammatesCheckout}
+        onClick={handleAddTeammates}
         className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold"
       >
-        {submitting ? 'Processing…' : 'Register & pay'}
+        {submitting ? 'Saving…' : 'Add to team'}
       </button>
 
       <button

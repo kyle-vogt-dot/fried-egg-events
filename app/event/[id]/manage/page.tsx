@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import EventEmailsPanel from '@/app/components/EventEmailsPanel';
+import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 
 
 
@@ -87,7 +88,7 @@ const [adminPerms, setAdminPerms] = useState({
   scoring: true,
   leaderboard: true,
   scorecards: true,
-  income: false,
+  income: true,
 });
 
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -165,31 +166,15 @@ const [adminPerms, setAdminPerms] = useState({
         greens_fee: Number(eventData?.greens_fee) || 0,
       }));
 
-const email = (user.email || '').toLowerCase();
+      const access = await loadEventAccess(
+        supabase,
+        parseInt(eventId),
+        user
+      );
 
-// Attach user_id if invited by email before they had a profile
-await supabase
-  .from('event_admins')
-  .update({ user_id: user.id })
-  .eq('email', email)
-  .is('user_id', null);
+      setIsAdmin(access.allowed && canUse(access.perms, 'manage'));
 
-const isCreator = eventData.created_by === user.id;
-
-const { data: adminData } = await supabase
-  .from('event_admins')
-  .select('id, permissions')
-  .eq('event_id', parseInt(eventId))
-  .or(`user_id.eq.${user.id},email.eq."${email}"`)
-  .maybeSingle();
-
-      const isEventAdmin = !!adminData;
-      const ALLOWED_PLATFORM = ['kyle-vogt@hotmail.com'];
-      const isPlatformAdmin = ALLOWED_PLATFORM.includes(user.email || '');
-
-      setIsAdmin(isCreator || isEventAdmin || isPlatformAdmin);
-
-      if (!isCreator && !isEventAdmin && !isPlatformAdmin) {
+      if (!access.allowed || !canUse(access.perms, 'manage')) {
         router.push(`/event/${eventId}`);
         return;
       }
@@ -580,7 +565,7 @@ const handleSaveEvent = async () => {
       scoring: true,
       leaderboard: true,
       scorecards: true,
-      income: false,
+      income: true,
     });
   } catch (err: any) {
     console.error(err);
@@ -1899,8 +1884,11 @@ const handleDeleteEvent = async () => {
             <label className="block text-sm text-gray-400 mb-2">
               {(event.pricing_mode || 'event') === 'per_round'
                 ? 'Base Event Price (ignored in per-round mode)'
-                : 'Price per Player'}
+                : teamSize > 1
+                  ? 'Price per team'
+                  : 'Price per player'}
             </label>
+            
             <input
               type="number"
               value={event.price || ''}
@@ -1913,7 +1901,14 @@ const handleDeleteEvent = async () => {
             <p className="text-sm text-gray-400 mt-2">
               ${platformFee.toFixed(2)} platform fee is included in checkout totals
             </p>
+                        {teamSize > 1 && (event.pricing_mode || 'event') !== 'per_round' && (
+              <p className="text-xs text-gray-500 mt-2">
+                Captain pays this once at checkout. Teammates are added after
+                payment (or later in My Events).
+              </p>
+            )}
           </div>
+          
           {/* Skins */}
 <div className="md:col-span-2 mt-4 pt-6 border-t border-gray-700">
   <label className="flex items-center gap-3 text-lg cursor-pointer">

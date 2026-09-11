@@ -115,7 +115,9 @@ function EventFlyerPDF({
     (event?.pricing_mode || 'event') === 'per_round'
       ? 'Per-round pricing — see registration'
       : event?.price != null
-        ? `$${Number(event.price).toFixed(2)} per player`
+        ? `$${Number(event.price).toFixed(2)}${
+            Number(event.max_teammates) > 1 ? ' per team' : ' per player'
+          }`
         : '';
 
 const resolveImageUrl = (url: string | null | undefined) => {
@@ -1694,19 +1696,31 @@ const spotsLeft =
 
   const additionalCount = completeAdditionalPlayers.length;
 
+  const isTeamEvent = maxTeamSize > 1;
+
   const totalCost = isPerRound
-    ? (countingSelf ? costNewRoundsOnly : 0) +
-      additionalCount * costAllSelectedRounds
-    : (countingSelf ? 1 : 0) + additionalCount > 0
-      ? ((countingSelf ? 1 : 0) + additionalCount) *
-        Math.max(
+    ? isTeamEvent
+      ? costAllSelectedRounds
+      : (countingSelf ? costNewRoundsOnly : 0) +
+        additionalCount * costAllSelectedRounds
+    : isTeamEvent
+      ? Math.max(
           0,
           pricePerPlayer +
             feePerPlayer +
             selectedRoundsCostPerPlayer -
             discountPerPlayer
         )
-      : 0;
+      : (countingSelf ? 1 : 0) + additionalCount > 0
+        ? ((countingSelf ? 1 : 0) + additionalCount) *
+          Math.max(
+            0,
+            pricePerPlayer +
+              feePerPlayer +
+              selectedRoundsCostPerPlayer -
+              discountPerPlayer
+          )
+        : 0;
 
   const getSelectedRoundIds = () => {
     if (isPerRound) return [...selectedPaidRoundIds];
@@ -1942,23 +1956,17 @@ setWaitlistPhone('');
       router.push(`/login?redirect=/event/${eventId}`);
       return;
     }
-    setCurrentUser(user);
-        setShowRegisterModal(true);
+       setCurrentUser(user);
+    setShowRegisterModal(true);
 
-    // If they're already on this event, default to adding others only
-    const alreadyOnEvent = registrations.some((r) =>
-      isSelfPlayerRow(r, user)
-    );
-    setIsOrganizerOnly(alreadyOnEvent);
-
-    setMode('');
-    setSelectedTeam('');
+    setMode('create');
     setNewTeamName('');
+    setSelectedTeam('');
     setAdditionalPlayers([]);
+    setIsOrganizerOnly(false);
     setSelectedPaidRoundIds([]);
     setAgreedToWaiver(true);
 
-    // Reset discount
     setDiscountCode('');
     setAppliedDiscount(null);
     setDiscountError('');
@@ -1988,7 +1996,9 @@ setWaitlistPhone('');
     setSubmitting(true);
 
     try {
-      const finalTeamName = mode === 'create' ? newTeamName : selectedTeam;
+      const finalTeamName = (
+        isTeamEvent || mode === 'create' ? newTeamName : selectedTeam
+      ).trim();
       const selectedRoundIds = getSelectedRoundIds();
       const playerName = getPlayerName(user);
 
@@ -2004,17 +2014,7 @@ setWaitlistPhone('');
         return;
       }
 
-      const incomplete = additionalPlayers.filter(
-        (p) => !(p.name || '').trim() || !isValidEmail(p.email || '')
-      );
-      if (incomplete.length > 0) {
-        alert(
-          'Please enter a name and a valid email (e.g. name@email.com) for every additional player, or remove the empty slots.'
-        );
-        setSubmitting(false);
-        return;
-      }
-const completeAdditional = additionalPlayers.filter(
+      const completeAdditional = additionalPlayers.filter(
         (p) => (p.name || '').trim() && isValidEmail(p.email || '')
       );
 
@@ -2024,11 +2024,10 @@ const completeAdditional = additionalPlayers.filter(
         players.push({
           player_name: playerName,
           player_email: user.email || '',
-            team_name: isIndividual ? null : finalTeamName,
+          team_name: null,
           user_id: user.id,
         });
       } else {
-        // Self only when we're actually charging/counting them for NEW rounds
         const includeSelf = isPerRound
           ? !isOrganizerOnly && newlySelectedRoundIds.length > 0
           : !isOrganizerOnly && !alreadyRegistered;
@@ -2041,31 +2040,37 @@ const completeAdditional = additionalPlayers.filter(
           });
         }
 
-        for (const p of completeAdditional) {
-          const extraName = p.name.trim();
-          const extraEmail = p.email.trim().toLowerCase();
-          const samePersonAsSelf =
-            includeSelf &&
-            normalizeName(extraName) === normalizeName(playerName) &&
-            extraEmail === String(user.email || '').toLowerCase();
-          if (samePersonAsSelf) continue;
+        // Team events: extras are added AFTER pay. Don't create them here.
+        if (!isTeamEvent) {
+          for (const p of completeAdditional) {
+            const extraName = p.name.trim();
+            const extraEmail = p.email.trim().toLowerCase();
+            const samePersonAsSelf =
+              includeSelf &&
+              normalizeName(extraName) === normalizeName(playerName) &&
+              extraEmail === String(user.email || '').toLowerCase();
+            if (samePersonAsSelf) continue;
 
-          players.push({
-            player_name: extraName,
-            player_email: extraEmail,
-            user_id: null,
-          });
+            players.push({
+              player_name: extraName,
+              player_email: extraEmail,
+              user_id: null,
+            });
+          }
         }
 
         if (players.length === 0) {
           alert(
-            alreadyRegistered
-              ? 'Add at least one teammate, or select a new round to register yourself.'
-              : 'Add at least one player to the team'
+            isTeamEvent
+              ? 'Check the box to include yourself as captain, then pay for the team.'
+              : alreadyRegistered
+                ? 'Add at least one teammate, or select a new round to register yourself.'
+                : 'Add at least one player to the team'
           );
           setSubmitting(false);
           return;
         }
+      
       }
             const selectedRoundIdsForDup = getSelectedRoundIds();
 
@@ -2189,6 +2194,8 @@ paid: false,
           event_name: event.name,
           event_id: event.id,
           type: 'registration',
+          team_name: isIndividual ? null : finalTeamName,
+          selected_round_ids: selectedRoundIds.join(','),
           registration_id: primaryRegistrationId,
           registration_ids: registrationIds.join(','),
           success_url: `${baseUrl}/event/${eventId}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}&registration_ids=${registrationIds.join(',')}`,
@@ -2994,332 +3001,43 @@ paid: false,
                 </div>
               ) : (
                 <div className="space-y-8">
+                  {isTeamEvent && teamsFull && (
+                    <p className="text-amber-400 text-sm">
+                      This flight is full. No new teams can register.
+                    </p>
+                  )}
+
                   <div>
-                    <label className="block text-sm text-gray-400 mb-4">
-                      How would you like to register?
+                    <label className="block text-sm text-gray-400 mb-2">
+                      Team name
                     </label>
-                    <div className="grid grid-cols-2 gap-4">
-                      <button
-                        onClick={() => setMode('join')}
-                        className={`p-6 rounded-2xl border text-center font-medium transition-colors ${
-                          mode === 'join'
-                            ? 'border-blue-500 bg-blue-950'
-                            : 'border-gray-700 hover:border-gray-600'
-                        }`}
-                      >
-                        Join Existing Team
-                      </button>
-                                            <button
-                        type="button"
-                        onClick={() => {
-                          if (teamsFull) {
-                            alert(
-                              'No new teams available — join an existing team with open spots.'
-                            );
-                            return;
-                          }
-                          setMode('create');
-                        }}
-                        disabled={teamsFull}
-                        className={`p-6 rounded-2xl border text-center font-medium transition-colors ${
-                          mode === 'create'
-                            ? 'border-blue-500 bg-blue-950'
-                            : 'border-gray-700 hover:border-gray-600'
-                        } disabled:opacity-40 disabled:cursor-not-allowed`}
-                      >
-                                               Create New Team
-                        {teamsFull ? ' (full)' : ''}
-                      </button>
-                    </div>
-
-                    {teamsFull && (
-                      <p className="text-amber-400 text-sm mt-3">
-                        A selected round is full on teams. Uncheck that round or
-                        join an existing team.
-                      </p>
-                    )}
-                  </div>
-                                    {mode === 'join' && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">
-                        Select Team
-                      </label>
-                      <select
-                        value={selectedTeam}
-                        onChange={(e) => setSelectedTeam(e.target.value)}
-                        className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
-                      >
-                        <option value="">Choose a team</option>
-                        {existingTeams.map((team) => {
-                          const spots = getSpotsLeft(team);
-                          return (
-                            <option
-                              key={team}
-                              value={team}
-                              disabled={spots <= 0}
-                            >
-                              {team} ({spots} spot{spots !== 1 ? 's' : ''} left)
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-                  )}
-
-                  {mode === 'join' && selectedTeam && (
-                    <div className="mt-4 bg-gray-900 rounded-2xl p-5 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <p className="text-sm text-gray-400 font-medium">
-                          On this team
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {openSlotsForJoin} open on selected rounds
-                        </p>
-                      </div>
-                      {isPerRound && selectedPaidRoundIds.length > 0 && (
-                        <p className="text-xs text-gray-500">
-                          {selectedPaidRoundIds.map((id) => (
-                            <span key={id} className="mr-3">
-                              {roundNameById(id)}{' '}
-                              {peopleOnTeamRound(selectedTeam, Number(id))}/
-                              {maxTeamSize}
-                            </span>
-                          ))}
-                        </p>
-                      )}
-                      {selectedTeamMembers.length === 0 ? (
-                        <p className="text-sm text-gray-500">No players yet</p>
-                      ) : (
-                        <ul className="space-y-2">
-                          {selectedTeamMembers.map((m) => (
-                            <li
-                              key={m.key}
-                              className="flex justify-between items-start text-sm bg-gray-800 rounded-xl px-4 py-3"
-                            >
-                              <div>
-                                <p className="font-medium">
-                                  {m.name}
-                                  {(m.user_id === currentUser?.id ||
-                                    (m.email &&
-                                      currentUser?.email &&
-                                      normalizeEmail(m.email) ===
-                                        normalizeEmail(currentUser.email))) && (
-                                    <span className="text-emerald-400 text-xs ml-2">
-                                      (you)
-                                    </span>
-                                  )}
-                                </p>
-                                {isPerRound && m.roundLabels.length > 0 && (
-                                  <p className="text-xs text-gray-400 mt-1">
-                                    {m.roundLabels.join(' · ')}
-                                  </p>
-                                )}
-                              </div>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                  {mode === 'create' && (
-                    <div>
-                      <label className="block text-sm text-gray-400 mb-2">
-                        New Team Name
-                      </label>
-                      <input
-                        type="text"
-                        value={newTeamName}
-                        onChange={(e) => setNewTeamName(e.target.value)}
-                        placeholder="Enter team name"
-                        className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
-                      />
-                    </div>
-                  )}
-
-                  
-<div>
-  {currentUser &&
-    (!alreadyRegistered ||
-      (isPerRound && newlySelectedRoundIds.length > 0)) && (
-    <button
-      type="button"
-      onClick={() => setIsOrganizerOnly(!isOrganizerOnly)}
-      className={`w-full mb-4 rounded-2xl px-5 py-4 text-left border transition-colors ${
-        !isOrganizerOnly
-          ? 'border-emerald-500 bg-emerald-950/40'
-          : 'border-gray-600 bg-gray-900 opacity-60'
-      }`}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <p
-            className={`font-medium ${
-              !isOrganizerOnly ? 'text-white' : 'text-gray-400 line-through'
-            }`}
-          >
-            {getPlayerName(currentUser)}
-          </p>
-          <p
-            className={`text-xs mt-0.5 ${
-              !isOrganizerOnly ? 'text-emerald-400' : 'text-gray-500'
-            }`}
-          >
-            {!isOrganizerOnly
-              ? mode === 'join' && selectedTeam
-                ? `Joining ${selectedTeam}`
-                : 'Captain · on this team'
-              : mode === 'join'
-                ? 'Removed · not joining this team'
-                : 'Removed · not on this team'}
-          </p>
-        </div>
-        <input
-          type="checkbox"
-          checked={!isOrganizerOnly}
-          onChange={(e) => setIsOrganizerOnly(!e.target.checked)}
-          className="w-5 h-5 accent-emerald-500 shrink-0"
-          onClick={(e) => e.stopPropagation()}
-        />
-      </div>
-    </button>
-  )}
-
-  <div className="flex justify-between items-center mb-3">
-    <label className="text-sm text-gray-400">
-      {mode === 'join' && selectedTeam
-        ? 'Add players to this team'
-        : 'Additional Players'}
-    </label>
-                      <span className="text-xs text-gray-500">
-                        {completeAdditionalPlayers.length} complete /{' '}
-                        {additionalPlayers.length} added
-                        {mode === 'join' && selectedTeam
-                          ? ` · ${openSlotsForJoin} open`
-                          : ''}
-                      </span>
-                    </div>
-
-                    {appliedDiscount && (
-                      <p className="text-amber-400 text-sm mb-3">
-                        Discount codes apply to one player only. Additional
-                        teammates must register separately.
-                      </p>
-                    )}
-
-                    {additionalPlayers.map((player, index) => {
-  const nameValue = player.name || '';
-  const emailValue = player.email || '';
-  const nameOk = nameValue.trim().length > 0;
-  const emailOk = isValidEmail(emailValue);
-
-  return (
-    <div key={index} className="bg-gray-900 p-5 rounded-2xl mb-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-gray-400">
-          Player {index + 1}
-        </span>
-        <button
-          type="button"
-          onClick={() => removeExtraPlayer(index)}
-          className="w-9 h-9 flex items-center justify-center bg-red-500 hover:bg-red-600 text-white rounded-xl text-lg font-bold"
-        >
-          −
-        </button>
-      </div>
-
-      <div>
-        <label className="block text-xs text-gray-400 mb-1">
-          Player Name *
-        </label>
-        <input
-          type="text"
-          value={nameValue}
-          onChange={(e) =>
-            updateExtraPlayer(index, 'name', e.target.value)
-          }
-          placeholder="John Smith"
-          className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
-            nameOk ? 'border-gray-600' : 'border-red-500'
-          }`}
-        />
-        {!nameOk && (
-          <p className="text-red-400 text-xs mt-1">Name is required</p>
-        )}
-      </div>
-
-      <div>
-        <label className="block text-xs text-gray-400 mb-1">
-          Email *
-        </label>
-        <input
-          type="email"
-          value={emailValue}
-          onChange={(e) =>
-            updateExtraPlayer(index, 'email', e.target.value)
-          }
-          placeholder="name@email.com"
-          className={`w-full bg-gray-700 border rounded-xl px-4 py-3 ${
-            emailOk ? 'border-gray-600' : 'border-red-500'
-          }`}
-        />
-        {!emailOk && (
-          <p className="text-red-400 text-xs mt-1">
-            Enter a valid email (name@email.com)
-          </p>
-        )}
-      </div>
-    </div>
-  );
-})}
-
-                    <button
-                                            onClick={() => {
-                        let maxAdditional = maxTeamSize;
-                        if (mode === 'join' && selectedTeam) {
-                          // Only fill open spots — never reserve a slot for "self"
-                          // when already registered or organizer-only
-                          maxAdditional =
-                            alreadyRegistered || isOrganizerOnly
-                              ? openSlotsForJoin
-                              : Math.max(0, openSlotsForJoin - 1);
-                        } else if (mode === 'create') {
-                          maxAdditional = isOrganizerOnly
-                            ? maxTeamSize
-                            : maxTeamSize - 1;
-                        }
-
-                        if (additionalPlayers.length < maxAdditional) {
-                          setAdditionalPlayers([
-                            ...additionalPlayers,
-                            { name: '', email: '' },
-                          ]);
-                        }
-                      }}
-                                            disabled={
-                        !!appliedDiscount?.one_player_only ||
-                        (mode === 'join' && !selectedTeam) ||
-                        (mode === 'create' && !newTeamName) ||
-                        additionalPlayers.length >=
-                          (mode === 'join' && selectedTeam
-                            ? alreadyRegistered || isOrganizerOnly
-                              ? openSlotsForJoin
-                              : Math.max(0, openSlotsForJoin - 1)
-                            : isOrganizerOnly
-                              ? maxTeamSize
-                              : maxTeamSize - 1)
-                      }
-                      className="w-full py-4 border border-dashed border-gray-600 rounded-2xl text-gray-400 hover:text-white disabled:opacity-50"
-                    >
-                      + Add Another Player
-                    </button>
+                    <input
+                      type="text"
+                      value={newTeamName}
+                      onChange={(e) => setNewTeamName(e.target.value)}
+                      placeholder="Enter team name"
+                      className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4"
+                    />
                   </div>
 
-                  {/* Discount Code (Team) */}
+                  {currentUser && (
+                    <div className="w-full rounded-2xl px-5 py-4 border border-emerald-500 bg-emerald-950/40">
+                      <p className="font-medium">{getPlayerName(currentUser)}</p>
+                      <p className="text-xs text-emerald-400 mt-0.5">
+                        Captain · paid with this checkout
+                      </p>
+                    </div>
+                  )}
+
+                  <p className="text-sm text-gray-400">
+                    After you pay you can add the rest of the team, or skip and
+                    add them later from My Events.
+                  </p>
+
                   <div className="bg-gray-900 p-5 rounded-2xl">
                     <label className="block text-sm text-gray-400 mb-2">
                       Discount Code
                     </label>
-
                     {appliedDiscount ? (
                       <div className="flex items-center justify-between gap-3">
                         <div>
@@ -3328,7 +3046,7 @@ paid: false,
                           </p>
                           <p className="text-sm text-gray-400">
                             {appliedDiscount.label} · −$
-                            {appliedDiscount.amount_saved.toFixed(2)} per player
+                            {appliedDiscount.amount_saved.toFixed(2)}
                           </p>
                         </div>
                         <button
@@ -3341,24 +3059,25 @@ paid: false,
                       </div>
                     ) : (
                       <div className="flex flex-col sm:flex-row gap-3">
-  <input
-    type="text"
-    value={discountCode}
-    onChange={(e) => setDiscountCode(e.target.value.toUpperCase())}
-    placeholder="Enter code"
-    className="w-full sm:flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
-  />
-  <button
-    type="button"
-    onClick={applyDiscountCode}
-    disabled={discountLoading || !discountCode.trim()}
-    className="w-full sm:w-auto bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-5 py-3 rounded-xl font-medium shrink-0"
-  >
-    {discountLoading ? '…' : 'Apply'}
-  </button>
-</div>
+                        <input
+                          type="text"
+                          value={discountCode}
+                          onChange={(e) =>
+                            setDiscountCode(e.target.value.toUpperCase())
+                          }
+                          placeholder="Enter code"
+                          className="w-full sm:flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
+                        />
+                        <button
+                          type="button"
+                          onClick={applyDiscountCode}
+                          disabled={discountLoading || !discountCode.trim()}
+                          className="w-full sm:w-auto bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-5 py-3 rounded-xl font-medium shrink-0"
+                        >
+                          {discountLoading ? '…' : 'Apply'}
+                        </button>
+                      </div>
                     )}
-
                     {discountError && (
                       <p className="text-red-400 text-sm mt-2">{discountError}</p>
                     )}
@@ -3366,25 +3085,11 @@ paid: false,
 
                   <div className="bg-gray-900 p-6 rounded-2xl">
                     <div className="flex justify-between text-xl font-semibold">
-                      <span>Total Cost</span>
+                      <span>Total</span>
                       <span>${totalCost.toFixed(2)}</span>
                     </div>
-                    {appliedDiscount && (
-                      <p className="text-sm text-emerald-400 mt-1">
-                        Discount applied (−$
-                        {appliedDiscount.amount_saved.toFixed(2)} per player)
-                      </p>
-                    )}
-                    {hasIncompleteAdditionalPlayers && (
-                      <p className="text-amber-400 text-sm mt-3">
-                        Fill in name and a valid email for all additional
-                        players to continue.
-                      </p>
-                    )}
-                 
                   </div>
 
-                  {/* Receipt — just above the button */}
                   <div className="bg-gray-900 rounded-2xl p-4 space-y-4">
                     <div className="flex items-center gap-3">
                       <input
@@ -3425,18 +3130,14 @@ paid: false,
                     onClick={handleRegister}
                     disabled={
                       submitting ||
-                      mode === '' ||
-                      (mode === 'create' && !newTeamName) ||
-                      (mode === 'join' && !selectedTeam) ||
-                      (isPerRound && selectedPaidRoundIds.length === 0) ||
-                      hasIncompleteAdditionalPlayers
-                      
+                      !newTeamName.trim() ||
+                      (isPerRound && selectedPaidRoundIds.length === 0)
                     }
                     className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-5 rounded-2xl text-xl font-semibold"
                   >
                     {submitting
                       ? 'Processing Payment...'
-                      : `Complete Registration — $${totalCost.toFixed(2)}`}
+                      : `Pay for team — $${totalCost.toFixed(2)}`}
                   </button>
                 </div>
               )}
@@ -3462,7 +3163,6 @@ paid: false,
             <div className="mx-auto w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center mb-6">
               <span className="text-4xl">✅</span>
             </div>
-
             <h2 className="text-3xl font-semibold mb-2">
               Add-ons Paid Successfully
             </h2>
@@ -3471,7 +3171,6 @@ paid: false,
               <br />
               <strong>Awaiting Admin Check-In</strong>
             </p>
-
             <div className="grid grid-cols-2 gap-4">
               <button
                 onClick={() => {
@@ -3482,7 +3181,6 @@ paid: false,
               >
                 Scorecard
               </button>
-
               <button
                 onClick={() => {
                   setShowSuccessModal(false);
@@ -3493,7 +3191,6 @@ paid: false,
                 Leaderboard
               </button>
             </div>
-
             <button
               onClick={() => setShowSuccessModal(false)}
               className="mt-6 text-gray-400 hover:text-white text-sm"

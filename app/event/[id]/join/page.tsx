@@ -328,10 +328,9 @@ export default function JoinFromInvitePage() {
       setAppliedDiscount(null);
     }
   };
-
-  const handleCheckout = async () => {
+  const handleJoin = async () => {
     if (!event) return;
-    if (!currentUser) return alert('Please sign in to register');
+    if (!currentUser) return alert('Please sign in to join');
     if (!name.trim()) return alert('Enter your name');
     if (!isValidEmail(email)) return alert('Enter a valid email');
     if (selectedOptions.length === 0) {
@@ -340,118 +339,35 @@ export default function JoinFromInvitePage() {
 
     setSubmitting(true);
     try {
-      const rows = selectedOptions.map((o) => ({
+      const byTeam = new Map<string, number[]>();
+      for (const o of selectedOptions) {
+        const team = o.teamName === 'Individual' ? '' : o.teamName;
+        const ids = byTeam.get(team) || [];
+        if (o.roundId) ids.push(o.roundId);
+        byTeam.set(team, ids);
+      }
+
+      const rows = Array.from(byTeam.entries()).map(([team, rids]) => ({
         event_id: event.id,
         user_id: currentUser.id,
         player_name: name.trim(),
         player_email: email.trim().toLowerCase(),
-        team_name: o.teamName === 'Individual' ? null : o.teamName,
-        paid: false,
-        payment_method: 'pending_checkout',
+        team_name: team || null,
+        paid: true,
+        payment_method: 'team',
+        amount_paid: 0,
         checked_in: false,
         addons_selected: {},
-        selected_round_ids: o.roundId ? [o.roundId] : [],
-        discount_code: appliedDiscount?.code || null,
-        discount_amount: appliedDiscount?.amount_saved || 0,
+        selected_round_ids: rids,
       }));
 
-      const { data: inserted, error } = await supabase
-        .from('event_registrations')
-        .insert(rows)
-        .select('id');
+      const { error } = await supabase.from('event_registrations').insert(rows);
+      if (error) throw error;
 
-      if (error || !inserted?.length) {
-        throw new Error(error?.message || 'Could not create registration');
-      }
-
-      const registrationIds = inserted.map((r: any) => r.id);
-
-      const draftKey = `registration_draft_${event.id}`;
-
-      sessionStorage.setItem(
-        draftKey,
-        JSON.stringify({
-          eventId: event.id,
-          mode: 'join',
-          isIndividual: false,
-          isOrganizerOnly: true,
-          teamName: selectedOptions[0]?.teamName || null,
-          payment_method: 'pending_checkout',
-          selected_round_ids: selectedOptions
-            .map((o) => o.roundId)
-            .filter((rid) => rid !== 0),
-          players: [
-            {
-              player_name: name.trim(),
-              player_email: email.trim().toLowerCase(),
-              user_id: currentUser.id,
-            },
-          ],
-          totalCost: total,
-          registration_ids: registrationIds,
-          discount: appliedDiscount
-            ? {
-                code: appliedDiscount.code,
-                discount_code_id: appliedDiscount.discount_code_id,
-                amount_saved: appliedDiscount.amount_saved,
-              }
-            : null,
-          sendReceipt: true,
-          receiptName: name.trim(),
-          receiptEmail: email.trim().toLowerCase(),
-          inviter_email: inviter?.email || null,
-          inviter_name: inviter?.name || null,
-        })
-      );
-
-      const baseUrl =
-        process.env.NEXT_PUBLIC_APP_URL || window.location.origin;
-
-      if (total <= 0) {
-        await supabase
-          .from('event_registrations')
-          .update({ paid: true, payment_method: 'comp' })
-          .in('id', registrationIds);
-        router.push(
-          `/event/${event.id}?payment=success&type=registration&registration_ids=${registrationIds.join(',')}`
-        );
-        return;
-      }
-
-      const res = await fetch('/api/create-checkout-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          amount: total,
-          player_name: name.trim(),
-          email: email.trim().toLowerCase(),
-          description: `Join – ${event.name}`,
-          event_name: event.name,
-          event_id: event.id,
-          type: 'registration',
-          registration_id: registrationIds[0],
-          registration_ids: registrationIds.join(','),
-          success_url: `${baseUrl}/event/${event.id}?payment=success&type=registration&session_id={CHECKOUT_SESSION_ID}&registration_ids=${registrationIds.join(',')}`,
-          cancel_url: `${baseUrl}/event/${event.id}/join${joinQuery()}&payment=cancelled`.replace(
-            'join&',
-            'join?'
-          ),
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.url) {
-        await supabase
-          .from('event_registrations')
-          .delete()
-          .in('id', registrationIds);
-        throw new Error(data.error || 'Checkout failed');
-      }
-
-      window.location.href = data.url;
+      router.push(`/event/${event.id}?joined=1`);
     } catch (e: any) {
       console.error(e);
-      alert(e.message || 'Could not start checkout');
+      alert(e.message || 'Could not join team');
     } finally {
       setSubmitting(false);
     }
@@ -528,11 +444,7 @@ export default function JoinFromInvitePage() {
                       {t ? ` · ${t}` : ''}
                     </p>
                     <p className="text-xs text-gray-500 mt-1">
-                      {o.spotsLeft > 0
-                        ? `${o.spotsLeft} open · $${(
-                            o.price + platformFee
-                          ).toFixed(2)}`
-                        : 'Full'}
+                      {o.spotsLeft > 0 ? `${o.spotsLeft} open` : 'Full'}
                     </p>
                   </div>
                 </label>
@@ -557,62 +469,13 @@ export default function JoinFromInvitePage() {
           />
         </div>
 
-        <div className="mt-6 bg-gray-800 rounded-2xl p-4">
-          <label className="block text-sm text-gray-400 mb-2">
-            Discount code
-          </label>
-          {appliedDiscount ? (
-            <div className="flex justify-between items-center">
-              <p className="text-emerald-400 text-sm">
-                {appliedDiscount.code} · −$
-                {Number(appliedDiscount.amount_saved).toFixed(2)}
-              </p>
-              <button
-                type="button"
-                className="text-red-400 text-sm"
-                onClick={() => {
-                  setAppliedDiscount(null);
-                  setDiscountCode('');
-                }}
-              >
-                Remove
-              </button>
-            </div>
-          ) : (
-            <div className="flex gap-2">
-              <input
-                value={discountCode}
-                onChange={(e) =>
-                  setDiscountCode(e.target.value.toUpperCase())
-                }
-                placeholder="Code"
-                className="flex-1 bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 uppercase"
-              />
-              <button
-                type="button"
-                onClick={applyDiscountCode}
-                className="bg-teal-600 px-4 rounded-xl font-medium"
-              >
-                Apply
-              </button>
-            </div>
-          )}
-          {discountError && (
-            <p className="text-red-400 text-sm mt-2">{discountError}</p>
-          )}
-        </div>
-
-        <p className="text-center text-xl font-semibold mt-6">
-          Total: ${total.toFixed(2)}
-        </p>
-
         <button
           type="button"
           disabled={submitting || selectedOptions.length === 0}
-          onClick={handleCheckout}
-          className="w-full mt-4 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold text-lg"
+          onClick={handleJoin}
+          className="w-full mt-6 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 py-4 rounded-2xl font-semibold text-lg"
         >
-          {submitting ? 'Processing…' : 'Register & pay'}
+          {submitting ? 'Adding…' : 'Add me to this team'}
         </button>
       </div>
     </div>
