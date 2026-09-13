@@ -654,61 +654,8 @@ useEffect(() => {
     if (already) setIsOrganizerOnly(true);
   }, [selectedTeam, mode, currentUser, registrations, event?.pricing_mode]);
 
-  // Browser back from Stripe (no cancel_url) — clean up unpaid draft regs
-  // Only clean abandoned Stripe drafts on explicit cancel — not on
-  // visibility/back. Visibility cleanup was deleting in-flight rows
-  // so Stripe succeeded with nothing to mark paid.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const paymentStatus = searchParams.get('payment');
-    if (paymentStatus !== 'cancelled') return;
-
-    const cleanupAbandonedCheckout = async () => {
-      try {
-        const raw = sessionStorage.getItem(draftKey);
-        if (!raw) return;
-
-        const draft = JSON.parse(raw);
-        const ids: (string | number)[] = draft.registration_ids || [];
-        if (ids.length === 0) return;
-
-        const protectedMethods = new Set([
-          'comp',
-          'complimentary',
-          'cash',
-          'manual',
-          'checkin',
-          'payment_link',
-        ]);
-
-        const { data: rows } = await supabase
-          .from('event_registrations')
-          .select('id, payment_method')
-          .in('id', ids)
-          .eq('paid', false);
-
-        const idsToDelete = (rows || [])
-          .filter((r) => {
-            const m = String(r.payment_method || '').toLowerCase();
-            return !protectedMethods.has(m);
-          })
-          .map((r) => r.id);
-
-        if (idsToDelete.length > 0) {
-          await supabase.from('event_registrations').delete().in('id', idsToDelete);
-        }
-
-        draft.registration_ids = [];
-        sessionStorage.setItem(draftKey, JSON.stringify(draft));
-        await fetchData();
-      } catch (e) {
-        console.error(e);
-      }
-    };
-
-    cleanupAbandonedCheckout();
-  }, [eventId, searchParams, draftKey]);
+  // Do not delete unpaid drafts on visibilitychange / cancel.
+  // Stripe checkout.session.completed updates those rows by UUID.
 
 
 const myRegistrations = useMemo(() => {
@@ -856,45 +803,8 @@ const myRegisteredRoundNames = useMemo(() => {
 
       if (raw) {
         const draft = JSON.parse(raw);
-        const ids: (string | number)[] = draft.registration_ids || [];
-
-        // Remove unpaid rows created before Checkout
-        if (ids.length > 0) {
-  const protectedMethods = new Set([
-    'comp',
-    'complimentary',
-    'cash',
-    'manual',
-    'checkin',
-  ]);
-
-  const { data: rows } = await supabase
-    .from('event_registrations')
-    .select('id, payment_method')
-    .in('id', ids)
-    .eq('paid', false);
-
-  const idsToDelete = (rows || [])
-    .filter((r) => {
-      const m = String(r.payment_method || '').toLowerCase();
-      return !protectedMethods.has(m);
-    })
-    .map((r) => r.id);
-
-  if (idsToDelete.length > 0) {
-    const { error: delErr } = await supabase
-      .from('event_registrations')
-      .delete()
-      .in('id', idsToDelete);
-
-    if (delErr) {
-      console.error('Failed to clean up unpaid regs on cancel:', delErr);
-    } else {
-      await fetchData();
-    }
-  }
-}
-        
+        // Do not delete unpaid drafts on cancel. Webhook marks them paid
+        // by UUID if Checkout completed after the tab closed.
 
         // Restore form so they can try again
         setMode(draft.mode || '');

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import EventTabs from '@/app/components/EventTabs';
+import BackButton from '@/app/components/BackButton';
 import { createBrowserClient } from '@supabase/ssr';
 import { Document, Page, Text, View, StyleSheet, PDFDownloadLink } from '@react-pdf/renderer';
 
@@ -430,12 +432,9 @@ export default function EventContactsPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-5xl mx-auto space-y-8">
-        <button
-          onClick={() => router.back()}
-          className="text-gray-400 hover:text-white"
-        >
-          ← Back
-        </button>
+        <BackButton href="/events" className="text-gray-400 hover:text-white" />
+
+        <EventTabs eventId={eventId} variant="dayof" active="contacts" />
 
         <div>
           <h1 className="text-4xl font-bold">Player contacts</h1>

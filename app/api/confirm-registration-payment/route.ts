@@ -30,10 +30,10 @@ function parseIds(
   const raw = [meta.registration_ids || '', meta.registration_id || '', extraStr]
     .join(',')
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => String(s).trim())
     .filter(Boolean);
 
-  // Support numeric ids and UUID ids
+  // Keep UUID strings. Do not parseInt.
   return Array.from(new Set(raw));
 }
 
@@ -105,14 +105,6 @@ async function confirmRegistrationPayment(opts: {
     return NextResponse.json({ success: true, paymentIntentId, ids, type });
   }
 
-  if (ids.length === 0) {
-    console.error('confirm: no registration_ids on session', session_id, meta);
-    return NextResponse.json(
-      { error: 'Missing registration_ids on payment' },
-      { status: 400 }
-    );
-  }
-
   const roundIds = parseRoundIds(meta);
   const updatePayload: Record<string, any> = {
     paid: true,
@@ -122,6 +114,37 @@ async function confirmRegistrationPayment(opts: {
   };
   if (meta.team_name) updatePayload.team_name = meta.team_name;
   if (roundIds) updatePayload.selected_round_ids = roundIds;
+
+  if (ids.length === 0) {
+    const eventId = meta.event_id ? parseInt(meta.event_id, 10) : null;
+    const email = (meta.email || session.customer_email || '')
+      .toLowerCase()
+      .trim();
+    if (eventId && email) {
+      const { data: updated, error } = await supabaseAdmin
+        .from('event_registrations')
+        .update(updatePayload)
+        .eq('event_id', eventId)
+        .ilike('player_email', email)
+        .eq('paid', false)
+        .select('id');
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+      return NextResponse.json({
+        success: true,
+        paymentIntentId,
+        amountPaid,
+        ids: (updated || []).map((r) => r.id),
+        fallback: 'email',
+      });
+    }
+    console.error('confirm: no registration_ids on session', session_id, meta);
+    return NextResponse.json(
+      { error: 'Missing registration_ids on payment' },
+      { status: 400 }
+    );
+  }
 
   const { data: updated, error } = await supabaseAdmin
     .from('event_registrations')

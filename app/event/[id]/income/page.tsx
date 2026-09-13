@@ -11,6 +11,8 @@ import {
   StyleSheet,
   PDFDownloadLink,
 } from '@react-pdf/renderer';
+import EventTabs from '@/app/components/EventTabs';
+import BackButton from '@/app/components/BackButton';
 
 const pdfStyles = StyleSheet.create({
   page: {
@@ -721,12 +723,9 @@ export default function EventIncomePage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-6xl mx-auto space-y-10">
-        <button
-          onClick={() => router.back()}
-          className="text-gray-400 hover:text-white"
-        >
-          ← Back
-        </button>
+        <BackButton href="/events" className="text-gray-400 hover:text-white" />
+
+        <EventTabs eventId={eventId} variant="manage" active="income" />
 
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
           <div>

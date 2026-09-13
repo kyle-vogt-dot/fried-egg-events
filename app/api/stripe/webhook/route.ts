@@ -11,15 +11,187 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-function parseIds(session: Stripe.Checkout.Session): string[] {
-  const meta = session.metadata || {};
-  const raw = [meta.registration_ids || '', meta.registration_id || '']
+function parseIdsFromMeta(meta: Record<string, string> | null | undefined): string[] {
+  const m = meta || {};
+  const raw = [m.registration_ids || '', m.registration_id || '']
     .join(',')
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => String(s).trim())
     .filter(Boolean);
 
+  // Keep UUID strings. Do not parseInt.
   return Array.from(new Set(raw));
+}
+
+function parseIds(session: Stripe.Checkout.Session): string[] {
+  return parseIdsFromMeta(session.metadata as Record<string, string> | null);
+}
+
+function stripeForLivemode(livemode: boolean) {
+  const key = livemode
+    ? process.env.STRIPE_SECRET_KEY
+    : process.env.STRIPE_TEST_SECRET_KEY || process.env.STRIPE_SECRET_KEY;
+  if (!key) {
+    throw new Error('Missing Stripe secret key for webhook retrieve');
+  }
+  return new Stripe(key);
+}
+
+function paidPatchFromMeta(
+  meta: Record<string, string>,
+  paymentIntentId: string | null,
+  amountPaid: number | null
+) {
+  const paidPatch: Record<string, any> = {
+    paid: true,
+    payment_method: 'stripe',
+    stripe_payment_intent_id: paymentIntentId,
+    amount_paid: amountPaid,
+  };
+  if (meta.team_name) paidPatch.team_name = meta.team_name;
+  if (meta.selected_round_ids) {
+    const roundIds = String(meta.selected_round_ids)
+      .split(',')
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    if (roundIds.length) paidPatch.selected_round_ids = roundIds;
+  }
+  return paidPatch;
+}
+
+async function markRegistrationsPaid(opts: {
+  meta: Record<string, string>;
+  ids: string[];
+  paymentIntentId: string | null;
+  amountPaid: number | null;
+  email: string;
+  logLabel: string;
+}) {
+  const { meta, ids, paymentIntentId, amountPaid, email, logLabel } = opts;
+  const type = (meta.type || '').toLowerCase();
+  const eventId = meta.event_id ? parseInt(meta.event_id, 10) : null;
+  const paidPatch = paidPatchFromMeta(meta, paymentIntentId, amountPaid);
+
+  if (type === 'sponsorship') {
+    return;
+  }
+
+  if (type === 'addon' || type === 'addon_payment') {
+    if (ids.length > 0) {
+      const { error } = await supabaseAdmin
+        .from('event_registrations')
+        .update({
+          paid_addons: true,
+          stripe_payment_intent_id: paymentIntentId,
+        })
+        .in('id', ids);
+      if (error) throw error;
+    }
+    return;
+  }
+
+  if (ids.length > 0) {
+    const { data: updated, error } = await supabaseAdmin
+      .from('event_registrations')
+      .update(paidPatch)
+      .in('id', ids)
+      .select('id');
+
+    if (error) throw error;
+
+    const updatedIds = new Set((updated || []).map((r) => String(r.id)));
+    const missing = ids.filter((id) => !updatedIds.has(String(id)));
+    if (missing.length) {
+      console.error('Webhook: paid session but rows gone', logLabel, missing);
+    }
+    return;
+  }
+
+  const fallbackEmail = email.toLowerCase().trim();
+  if (eventId && fallbackEmail) {
+    const { error } = await supabaseAdmin
+      .from('event_registrations')
+      .update(paidPatch)
+      .eq('event_id', eventId)
+      .ilike('player_email', fallbackEmail)
+      .eq('paid', false);
+    if (error) throw error;
+  } else {
+    console.warn(`${logLabel} with no registration ids`);
+  }
+}
+
+async function handleCheckoutSession(
+  session: Stripe.Checkout.Session,
+  logLabel: string
+) {
+  const meta = (session.metadata || {}) as Record<string, string>;
+  const ids = parseIds(session);
+  const paymentIntentId =
+    typeof session.payment_intent === 'string'
+      ? session.payment_intent
+      : session.payment_intent?.id ?? null;
+  const netFromMeta = meta.net_amount ? Number(meta.net_amount) : null;
+  const amountPaidTotal =
+    session.amount_total != null ? session.amount_total / 100 : null;
+  const amountPaid = netFromMeta ?? amountPaidTotal;
+  const email = (meta.email || session.customer_email || '').trim();
+
+  await markRegistrationsPaid({
+    meta,
+    ids,
+    paymentIntentId,
+    amountPaid,
+    email,
+    logLabel,
+  });
+}
+
+async function handlePaymentIntent(
+  pi: Stripe.PaymentIntent,
+  client: Stripe
+) {
+  let meta = (pi.metadata || {}) as Record<string, string>;
+  let ids = parseIdsFromMeta(meta);
+  let email = (meta.email || pi.receipt_email || '').trim();
+  let amountPaid = meta.net_amount
+    ? Number(meta.net_amount)
+    : pi.amount != null
+      ? pi.amount / 100
+      : null;
+
+  if (ids.length === 0) {
+    const listed = await client.checkout.sessions.list({
+      payment_intent: pi.id,
+      limit: 1,
+    });
+    const session = listed.data[0];
+    if (session) {
+      const sessionMeta = (session.metadata || {}) as Record<string, string>;
+      meta = { ...sessionMeta, ...meta };
+      ids = parseIds(session);
+      if (!email) {
+        email = (sessionMeta.email || session.customer_email || '').trim();
+      }
+      if (amountPaid == null) {
+        const netFromMeta = sessionMeta.net_amount
+          ? Number(sessionMeta.net_amount)
+          : null;
+        amountPaid =
+          netFromMeta ??
+          (session.amount_total != null ? session.amount_total / 100 : null);
+      }
+    }
+  }
+
+  await markRegistrationsPaid({
+    meta,
+    ids,
+    paymentIntentId: pi.id,
+    amountPaid,
+    email,
+    logLabel: pi.id,
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -75,96 +247,17 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (event.type === 'checkout.session.completed') {
+    if (
+      event.type === 'checkout.session.completed' ||
+      event.type === 'checkout.session.async_payment_succeeded'
+    ) {
       const session = event.data.object as Stripe.Checkout.Session;
-      const meta = session.metadata || {};
-      const type = (meta.type || '').toLowerCase();
-      const eventId = meta.event_id ? parseInt(meta.event_id, 10) : null;
-      const ids = parseIds(session);
+      await handleCheckoutSession(session, session.id);
+    }
 
-      const paymentIntentId =
-        typeof session.payment_intent === 'string'
-          ? session.payment_intent
-          : session.payment_intent?.id ?? null;
-
-      const netFromMeta = meta.net_amount ? Number(meta.net_amount) : null;
-      const amountPaidTotal =
-        session.amount_total != null ? session.amount_total / 100 : null;
-      const amountPaid = netFromMeta ?? amountPaidTotal;
-
-      const paidPatch = {
-        paid: true,
-        payment_method: 'stripe',
-        stripe_payment_intent_id: paymentIntentId,
-        amount_paid: amountPaid,
-      };
-
-      if (type === 'sponsorship') {
-        return NextResponse.json({ received: true });
-      }
-
-      if (type === 'addon' || type === 'addon_payment') {
-        if (ids.length > 0) {
-          const { error } = await supabaseAdmin
-            .from('event_registrations')
-            .update({
-              paid_addons: true,
-              stripe_payment_intent_id: paymentIntentId,
-            })
-            .in('id', ids);
-          if (error) {
-            console.error('Addon payment update failed:', error);
-            return NextResponse.json({ error: error.message }, { status: 500 });
-          }
-        }
-        return NextResponse.json({ received: true });
-      }
-
-      if (ids.length > 0) {
-        const { data: updated, error } = await supabaseAdmin
-          .from('event_registrations')
-          .update(paidPatch)
-          .in('id', ids)
-          .select('id');
-
-        if (error) {
-          console.error('Registration payment update failed:', error);
-          return NextResponse.json({ error: error.message }, { status: 500 });
-        }
-
-        const updatedIds = new Set((updated || []).map((r) => String(r.id)));
-        const missing = ids.filter((id) => !updatedIds.has(String(id)));
-        if (missing.length) {
-          console.error(
-            'Webhook: paid session but rows gone',
-            session.id,
-            missing
-          );
-        }
-        return NextResponse.json({ received: true });
-      }
-
-      // No IDs in metadata — recover unpaid drafts for this event + email
-      const email = (meta.email || session.customer_email || '')
-        .toLowerCase()
-        .trim();
-      if (eventId && email) {
-        const { error } = await supabaseAdmin
-          .from('event_registrations')
-          .update(paidPatch)
-          .eq('event_id', eventId)
-          .ilike('player_email', email)
-          .eq('paid', false);
-        if (error) {
-          console.error('Webhook email fallback failed:', error);
-          return NextResponse.json({ error: error.message }, { status: 500 });
-        }
-      } else {
-        console.warn(
-          'checkout.session.completed with no registration ids',
-          session.id
-        );
-      }
+    if (event.type === 'payment_intent.succeeded') {
+      const pi = event.data.object as Stripe.PaymentIntent;
+      await handlePaymentIntent(pi, stripeForLivemode(!!event.livemode));
     }
 
     return NextResponse.json({ received: true });

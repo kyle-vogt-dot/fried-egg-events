@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import EventTabs from '@/app/components/EventTabs';
+import BackButton from '@/app/components/BackButton';
 import { createBrowserClient } from '@supabase/ssr';
 import { QRCodeCanvas } from 'qrcode.react';
 import QRCode from 'qrcode';
@@ -707,12 +709,12 @@ export default function EventScorecardsPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-6xl mx-auto">
-        <button
-          onClick={() => router.back()}
+        <BackButton
+          href="/events"
           className="mb-6 text-gray-400 hover:text-white"
-        >
-          ← Back
-        </button>
+        />
+
+        <EventTabs eventId={eventId} variant="dayof" active="scorecards" />
 
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-10">
           <div>

@@ -153,7 +153,14 @@ export async function POST(request: NextRequest) {
       cancel_url: finalCancel,
       metadata: meta,
       payment_intent_data: {
-        metadata: meta,
+        metadata: {
+          ...meta,
+          registration_ids: meta.registration_ids,
+          registration_id: meta.registration_id,
+          event_id: meta.event_id,
+          email: meta.email,
+          type: meta.type,
+        },
       },
       customer_email: email,
     });

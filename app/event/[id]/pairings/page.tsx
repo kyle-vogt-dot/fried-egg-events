@@ -12,6 +12,8 @@ import {
   PDFDownloadLink,
 } from '@react-pdf/renderer';
 import { isListableReg } from '@/app/libs/event-emails';
+import EventTabs from '@/app/components/EventTabs';
+import BackButton from '@/app/components/BackButton';
 
 type Slot = 'A' | 'B' | 'C' | 'D';
 type StartFormat = 'shotgun' | 'tee_times' | 'double_tee';
@@ -793,12 +795,9 @@ export default function EventPairingsPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-5xl mx-auto space-y-8">
-        <button
-          onClick={() => router.back()}
-          className="text-gray-400 hover:text-white"
-        >
-          ← Back
-        </button>
+        <BackButton href="/events" className="text-gray-400 hover:text-white" />
+
+        <EventTabs eventId={eventId} variant="manage" active="pairings" />
 
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
           <div>

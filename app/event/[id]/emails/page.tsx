@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import EventEmailsPanel from '@/app/components/EventEmailsPanel';
+import EventTabs from '@/app/components/EventTabs';
 
 export default function EventEmailsPage() {
   const params = useParams();
@@ -83,6 +84,7 @@ export default function EventEmailsPage() {
         >
           ← Back
         </button>
+        <EventTabs eventId={eventId} variant="dayof" active="" />
         <h1 className="text-3xl font-bold">Emails</h1>
         <p className="text-gray-400">{eventName}</p>
         <EventEmailsPanel eventId={parseInt(eventId)} />

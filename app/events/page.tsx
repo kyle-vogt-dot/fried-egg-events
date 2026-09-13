@@ -3,6 +3,10 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { createBrowserClient } from '@supabase/ssr';
+import {
+  isEventSetupComplete,
+  onlyAdminStorageKey,
+} from '@/app/libs/event-setup';
 
 export default function CreatedEventsPage() {
   const [events, setEvents] = useState<any[]>([]);
@@ -83,7 +87,36 @@ export default function CreatedEventsPage() {
         }
       }
 
-      setEvents(Array.from(byId.values()));
+      const list = Array.from(byId.values());
+      const ids = list.map((e) => e.id);
+      const roundCount: Record<number, number> = {};
+      const adminCount: Record<number, number> = {};
+      if (ids.length > 0) {
+        const { data: roundRows } = await supabase
+          .from('event_rounds')
+          .select('event_id')
+          .in('event_id', ids);
+        for (const row of roundRows || []) {
+          roundCount[row.event_id] = (roundCount[row.event_id] || 0) + 1;
+        }
+        for (const row of adminRows || []) {
+          if (row.event_id == null) continue;
+          adminCount[row.event_id] = (adminCount[row.event_id] || 0) + 1;
+        }
+      }
+      setEvents(
+        list.map((e) => ({
+          ...e,
+          setupComplete: isEventSetupComplete({
+            event: e,
+            roundCount: roundCount[e.id] || 0,
+            adminCount: adminCount[e.id] || 0,
+            onlyAdmin:
+              typeof window !== 'undefined' &&
+              localStorage.getItem(onlyAdminStorageKey(e.id)) === '1',
+          }),
+        }))
+      );
       setLoading(false);
     };
 
@@ -124,11 +157,7 @@ export default function CreatedEventsPage() {
   }) => {
     const p = event.permissions || {};
     const canManage = event.role === 'creator' || p.manage === true;
-    const canIncome = event.role === 'creator' || p.income === true;
     const canCheckin = event.role === 'creator' || p.checkin === true;
-    const canScoring = event.role === 'creator' || p.scoring === true;
-    const canLeaderboard = event.role === 'creator' || p.leaderboard === true;
-    const canScorecards = event.role === 'creator' || p.scorecards === true;
 
     return (
       <div
@@ -156,96 +185,39 @@ export default function CreatedEventsPage() {
           {event.course}
         </p>
 
-        <div className="space-y-4 text-sm">
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
-              Setup
-            </p>
-            <div className="space-y-1.5">
-              {canManage && (
-                <Link
-                  href={`/event/${event.id}/manage`}
-                  className="block text-blue-400 hover:text-blue-300 font-medium"
-                >
-                  Manage Event →
-                </Link>
-              )}
-              {canManage && (
-                <Link
-                  href={`/event/${event.id}/pairings`}
-                  className="block text-blue-400 hover:text-blue-300"
-                >
-                  Pairings →
-                </Link>
-              )}
-              <a
-  href={`/event/${event.id}/emails`}
-  className="block text-blue-400 hover:text-blue-300"
->
-  Emails →
-</a>
-              {canIncome && (
-                <Link
-                  href={`/event/${event.id}/income`}
-                  className="block text-blue-400 hover:text-blue-300"
-                >
-                  Income →
-                </Link>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
-              Day of
-            </p>
-            <div className="space-y-1.5">
-              {canCheckin && (
-                <Link
-                  href={`/event/${event.id}/check-in`}
-                  className="block text-emerald-400 hover:text-emerald-300"
-                >
-                  Check-In →
-                </Link>
-              )}
-              {canScoring && (
-                <Link
-                  href={`/event/${event.id}/scoring`}
-                  className="block text-emerald-400 hover:text-emerald-300"
-                >
-                  Scoring →
-                </Link>
-              )}
-              {canLeaderboard && (
-                <Link
-                  href={`/event/${event.id}/leaderboard`}
-                  className="block text-emerald-400 hover:text-emerald-300"
-                >
-                  Leaderboard →
-                </Link>
-              )}
-              {canScorecards && (
-                <Link
-                  href={`/event/${event.id}/scorecards`}
-                  className="block text-emerald-400 hover:text-emerald-300"
-                >
-                  Scorecards →
-                </Link>
-              )}
-            </div>
-          </div>
-
-          <div>
-            <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">
-              Public
-            </p>
+        <div className="flex flex-col sm:flex-row gap-3 mb-4">
+          {canManage && (
             <Link
-              href={`/event/${event.id}`}
-              className="block text-gray-400 hover:text-gray-300"
+              href={`/event/${event.id}/manage`}
+              className="flex-1 text-center bg-blue-600 hover:bg-blue-700 px-4 py-3 rounded-2xl font-semibold"
             >
-              View public page →
+              Manage
             </Link>
-          </div>
+          )}
+          {canCheckin && event.setupComplete ? (
+            <Link
+              href={`/event/${event.id}/check-in`}
+              className="flex-1 text-center bg-emerald-600 hover:bg-emerald-700 px-4 py-3 rounded-2xl font-semibold"
+            >
+              Day of
+            </Link>
+          ) : canCheckin ? (
+            <span className="flex-1 text-center bg-gray-700 text-gray-400 px-4 py-3 rounded-2xl font-semibold cursor-not-allowed opacity-60">
+              Day of
+              <span className="block text-xs font-normal mt-0.5">
+                Finish setup
+              </span>
+            </span>
+          ) : null}
+        </div>
+
+        <div>
+          <Link
+            href={`/event/${event.id}`}
+            className="block text-gray-400 hover:text-gray-300 text-sm"
+          >
+            View public page →
+          </Link>
         </div>
       </div>
     );

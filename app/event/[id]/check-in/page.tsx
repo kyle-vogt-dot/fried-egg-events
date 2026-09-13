@@ -5,6 +5,8 @@ import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 import { isListableReg } from '@/app/libs/event-emails';
+import EventTabs from '@/app/components/EventTabs';
+import BackButton from '@/app/components/BackButton';
 import {
   amountWithPlatformFee,
   DEFAULT_PLATFORM_FEE_PERCENT,
@@ -831,12 +833,12 @@ export default function EventCheckInPage() {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8">
       <div className="max-w-6xl mx-auto">
-        <button
-          onClick={() => router.back()}
+        <BackButton
+          href="/events"
           className="mb-6 text-gray-400 hover:text-white flex items-center gap-2"
-        >
-          ← Back
-        </button>
+        />
+
+        <EventTabs eventId={eventId} variant="dayof" active="check-in" />
 
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
           <div>

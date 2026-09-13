@@ -758,16 +758,14 @@ const openDetail = async (id: number) => {
                           )}
                         </div>
                                                 <div className="flex flex-col sm:flex-row gap-3">
+                          {teams.length > 0 && (
                           <Link
-                            href={`/event/${item.event.id}/live${
-                              teams[0]
-                                ? `?team=${encodeURIComponent(String(teams[0]))}`
-                                : ''
-                            }`}
+                            href={`/event/${item.event.id}/live?team=${encodeURIComponent(String(teams[0]))}`}
                             className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-center font-medium text-sm"
                           >
                             Live Scoring
                           </Link>
+                          )}
                           <button
                             type="button"
                             onClick={() => openLeaderboard(item.event)}
@@ -1229,18 +1227,14 @@ setAddPlayersContext({
       )}
       {selectedItem.isCheckedIn &&
         !selectedItem.isLocked &&
-        (selectedItem.event.date || '').slice(0, 10) === today && (
+        (selectedItem.event.date || '').slice(0, 10) === today &&
+        selectedItem.regs.find((r: any) => r.team_name)?.team_name && (
           <Link
-            href={`/event/${selectedItem.event.id}/live${
-              selectedItem.regs.find((r: any) => r.team_name)?.team_name
-                ? `?team=${encodeURIComponent(
-                    String(
-                      selectedItem.regs.find((r: any) => r.team_name)
-                        ?.team_name
-                    )
-                  )}`
-                : ''
-            }`}
+            href={`/event/${selectedItem.event.id}/live?team=${encodeURIComponent(
+              String(
+                selectedItem.regs.find((r: any) => r.team_name)?.team_name
+              )
+            )}`}
             className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-center font-medium text-sm"
           >
             Live Scoring

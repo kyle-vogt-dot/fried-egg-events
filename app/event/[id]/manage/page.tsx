@@ -5,10 +5,11 @@ import { useState, useEffect, useRef } from 'react';
 import { createBrowserClient } from '@supabase/ssr';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import EventEmailsPanel from '@/app/components/EventEmailsPanel';
+import EventTabs from '@/app/components/EventTabs';
+import BackButton from '@/app/components/BackButton';
 import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 import {
   DEFAULT_PLATFORM_FEE_PERCENT,
-  formatPlatformFeePercent,
   resolvePlatformFeePercent,
 } from '@/app/libs/platform-fee';
 
@@ -22,6 +23,54 @@ const teamSizeFromEventType = (type: string) => {
   return 1; // other / unknown
 };
 
+const ROUND_FORMATS = [
+  { value: 'stroke', label: 'Stroke' },
+  { value: 'scramble', label: 'Scramble' },
+  { value: 'shamble', label: 'Shamble' },
+  { value: 'alt_shot', label: 'Alt shot' },
+  { value: 'best_ball', label: 'Best ball' },
+] as const;
+
+function startTypeLabel(type?: string | null) {
+  if (type === 'tee_times') return 'Tee times';
+  if (type === 'double_tee') return 'Double tee';
+  return 'Shotgun';
+}
+
+function formatLabel(type?: string | null) {
+  const v = normalizeRoundFormat(type);
+  return ROUND_FORMATS.find((f) => f.value === v)?.label || v || '';
+}
+
+function normalizeRoundFormat(type?: string | null) {
+  const t = String(type || '').toLowerCase();
+  if (t.includes('shamble')) return 'shamble';
+  if (t.includes('scramble')) return 'scramble';
+  if (t.includes('best')) return 'best_ball';
+  if (t.includes('alt')) return 'alt_shot';
+  if (
+    t === 'stroke' ||
+    t === 'individual' ||
+    t.includes('stroke')
+  ) {
+    return 'stroke';
+  }
+  return t && ROUND_FORMATS.some((f) => f.value === t) ? t : '';
+}
+
+function courseDisplayName(course: any): string {
+  if (!course) return '';
+  return (
+    course.course_name ||
+    course.name ||
+    course.club_name ||
+    course.course?.course_name ||
+    course.course?.name ||
+    course.course?.club_name ||
+    ''
+  );
+}
+
 function tomorrowDateStr() {
   const d = new Date();
   d.setDate(d.getDate() + 1);
@@ -30,6 +79,89 @@ function tomorrowDateStr() {
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
 }
+
+function roundHasGreensFee(fee: unknown) {
+  return String(fee ?? '').trim() !== '';
+}
+
+function hasFilledAmount(value: unknown) {
+  const s = String(value ?? '').trim();
+  if (s === '') return false;
+  const n = Number(s);
+  return Number.isFinite(n) && n > 0;
+}
+
+function amountInputValue(value: unknown) {
+  if (value == null || value === '') return '';
+  const n = Number(value);
+  if (!Number.isFinite(n) || n === 0) return '';
+  return String(value);
+}
+
+function parseAmountOrNull(raw: string) {
+  const s = raw.trim();
+  if (s === '') return null;
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function formatRoundClock(t?: string | null) {
+  if (!t) return '';
+  return String(t).slice(0, 5);
+}
+
+function formatEventDate(dateStr?: string | null) {
+  if (!dateStr) return '';
+  const d = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return String(dateStr);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function AccordionSection({
+  title,
+  complete,
+  summary,
+  startOpen,
+  locked,
+  children,
+}: {
+  title: string;
+  complete: boolean;
+  summary?: string;
+  startOpen: boolean;
+  locked?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(startOpen);
+  return (
+    <div
+      className={`rounded-3xl border border-gray-700 bg-gray-800/40 overflow-hidden ${
+        locked ? 'opacity-50' : ''
+      }`}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-start justify-between gap-4 px-6 py-5 text-left"
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-3">
+            <span className={complete ? 'text-emerald-400' : 'text-gray-500'}>
+              {complete ? '✓' : '○'}
+            </span>
+            <span className="text-lg font-semibold">{title}</span>
+          </div>
+          {complete && summary && !open ? (
+            <p className="text-sm text-gray-400 mt-1 ml-7 truncate">{summary}</p>
+          ) : null}
+        </div>
+        <span className="text-gray-400 shrink-0">{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open ? <div className="px-6 pb-6 space-y-6">{children}</div> : null}
+    </div>
+  );
+}
+
 
 export default function EventManagePage() {
   const params = useParams();
@@ -64,6 +196,7 @@ export default function EventManagePage() {
   const [showAddOns, setShowAddOns] = useState(false);
   const [showAdmins, setShowAdmins] = useState(false);
   const [showRounds, setShowRounds] = useState(false);
+  const [showAllSettings, setShowAllSettings] = useState(false);
   const [saving, setSaving] = useState(false);
 const [deleting, setDeleting] = useState(false); // ← here with the rest
   const [duplicating, setDuplicating] = useState(false);
@@ -78,6 +211,7 @@ const [deleting, setDeleting] = useState(false); // ← here with the rest
   const [admins, setAdmins] = useState<any[]>([]);
   const [newAdminName, setNewAdminName] = useState('');
   const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [onlyAdmin, setOnlyAdmin] = useState(false);
 
     const [showSponsors, setShowSponsors] = useState(false);
   const [sponsorPackages, setSponsorPackages] = useState<any[]>([]);
@@ -91,14 +225,36 @@ const [deleting, setDeleting] = useState(false); // ← here with the rest
   });
 
   const [rounds, setRounds] = useState<any[]>([]);
+  const [roundMode, setRoundMode] = useState<'single' | 'multi'>('single');
+  const [expandedRoundId, setExpandedRoundId] = useState<number | 'new' | null>(
+    null
+  );
+  const [doubleTeeHole2, setDoubleTeeHole2] = useState(10);
     const [newRound, setNewRound] = useState({
     name: '',
-    start_time: '',
+    course: '',
+    format: 'stroke',
+    start_format: 'shotgun',
+    starting_hole: 1,
+    starting_hole_2: 10,
     max_teams: 18,
-    pay_separately: false,
-    price: 0,
-    greens_fee: 0,
+    max_players: 72,
+    greens_fee: '' as string,
+    price: '' as string,
+    date: '',
+    start_time: '',
+    registration_open_date: '',
+    registration_open_time: '',
+    registration_close_date: '',
+    registration_close_time: '',
   });
+  const [roundCourseQuery, setRoundCourseQuery] = useState<
+    Record<string, string>
+  >({});
+  const [roundCourseResults, setRoundCourseResults] = useState<
+    Record<string, any[]>
+  >({});
+  const roundSearchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 const [adminPerms, setAdminPerms] = useState({
   manage: true,
   checkin: true,
@@ -109,6 +265,7 @@ const [adminPerms, setAdminPerms] = useState({
 });
 
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const onlyAdminKey = `friedegg:only-admin:${eventId}`;
 
          useEffect(() => {
     const fetchData = async () => {
@@ -172,16 +329,21 @@ const [adminPerms, setAdminPerms] = useState({
         return;
       }
 
+      const courseName =
+        eventData.course || courseDisplayName(eventData.course_data) || '';
       const synced = {
         ...eventData,
+        course: courseName,
+        location:
+          eventData.location ||
+          (typeof eventData.course_data?.location === 'string'
+            ? eventData.course_data.location
+            : ''),
         max_teammates: teamSizeFromEventType(eventData.event_type || ''),
       };
       setEvent(synced);
-
-      setNewRound((prev) => ({
-        ...prev,
-        greens_fee: Number(eventData?.greens_fee) || 0,
-      }));
+      setCourseSearch(courseName);
+      setSelectedCourse(eventData.course_data || null);
 
       const access = await loadEventAccess(
         supabase,
@@ -227,6 +389,7 @@ const [adminPerms, setAdminPerms] = useState({
         console.error('Rounds load error:', roundsError);
       }
       setRounds(roundsData || []);
+      setRoundMode((roundsData || []).length > 1 ? 'multi' : 'single');
 
       const { data: feeData } = await supabase
         .from('platform_settings')
@@ -243,6 +406,14 @@ const [adminPerms, setAdminPerms] = useState({
 
     fetchData();
   }, [eventId, supabase, router, searchParams]);
+
+  useEffect(() => {
+    try {
+      setOnlyAdmin(localStorage.getItem(onlyAdminKey) === '1');
+    } catch {
+      /* ignore */
+    }
+  }, [onlyAdminKey]);
 
   const fetchAdmins = async () => {
     const { data } = await supabase
@@ -281,12 +452,10 @@ const [adminPerms, setAdminPerms] = useState({
     return (
       <div className="min-h-screen bg-gray-900 text-white p-12 text-center">
         <p className="text-red-400 text-xl">{error || 'Access Denied'}</p>
-        <button
-          onClick={() => router.back()}
-          className="mt-6 px-6 py-3 bg-gray-700 rounded-2xl"
-        >
-          ← Go Back
-        </button>
+        <BackButton
+          href="/events"
+          className="mt-6 px-6 py-3 bg-gray-700 rounded-2xl inline-block"
+        />
       </div>
     );
   }
@@ -462,7 +631,10 @@ const handleSaveEvent = async () => {
   setSaving(true);
   const payload = {
     ...event,
-    max_teammates: teamSizeFromEventType(event.event_type || ''),
+    max_teammates:
+      Number(event.default_competing) ||
+      Number(event.roster_max) ||
+      teamSizeFromEventType(event.event_type || ''),
   };
 
   const { error } = await supabase
@@ -795,64 +967,244 @@ const handleSaveEvent = async () => {
     setSponsorPackages(data || []);
   };
 
+    const reloadRounds = async () => {
+    const { data: roundsData, error: roundsError } = await supabase
+      .from('event_rounds')
+      .select('*')
+      .eq('event_id', parseInt(eventId))
+      .order('sort_order', { ascending: true });
+    if (roundsError) {
+      console.error('Rounds load error:', roundsError);
+    }
+    setRounds(roundsData || []);
+  };
+
+  const defaultRoundCaps = () => {
+    const isTeam = Number(event?.roster_max) >= 2;
+    const fieldCap = Number(event?.max_players) || 72;
+    const roster = Number(event?.roster_max) || 4;
+    if (!isTeam) {
+      return { max_players: fieldCap, max_teams: null as number | null };
+    }
+    const maxTeams = Math.max(1, Math.floor(fieldCap / roster));
+    return { max_teams: maxTeams, max_players: maxTeams * roster };
+  };
+
     const handleAddRound = async () => {
-    if (!newRound.name.trim()) {
-      alert('Round name is required');
-      return;
-    }
+    const caps = defaultRoundCaps();
+    const isTeam = Number(event?.roster_max) >= 2;
+    const name =
+      newRound.name.trim() || `Round ${rounds.length + 1}`;
+    const greensFee = parseAmountOrNull(String(newRound.greens_fee ?? ''));
+    const entryPrice = parseAmountOrNull(String(newRound.price ?? ''));
+    const maxTeams = isTeam
+      ? Math.max(1, Number(newRound.max_teams) || caps.max_teams || 1)
+      : null;
+    const maxPlayers = isTeam
+      ? maxTeams! * (Number(event.roster_max) || 4)
+      : Math.max(1, Number(newRound.max_players) || caps.max_players || 72);
 
-    const isPerRound = (event.pricing_mode || 'event') === 'per_round';
-    const paySeparately = isPerRound ? true : newRound.pay_separately;
-    const price = paySeparately ? Number(newRound.price) : 0;
-    const greensFee =
-      Number(newRound.greens_fee ?? event?.greens_fee) || 0;
-
-    if (paySeparately && (!price || price <= 0)) {
-      alert('Enter a price for this round');
-      return;
-    }
-
-    const playersPerTeam = teamSizeFromEventType(event.event_type || '') || 1;
-    const maxTeams = Math.max(1, Number(newRound.max_teams) || 18);
-    // Keep max_players in sync for older code / sold-out logic
-    const maxPlayers = maxTeams * playersPerTeam;
-
-    const { error } = await supabase.from('event_rounds').insert({
+    const base: Record<string, any> = {
       event_id: parseInt(eventId),
-      name: newRound.name.trim(),
-      start_time: newRound.start_time || null,
+      name,
+      start_time: newRound.start_time.trim() || null,
       max_teams: maxTeams,
       max_players: maxPlayers,
-      pay_separately: paySeparately,
-      price,
-      greens_fee: greensFee,
+      pay_separately: entryPrice != null,
       sort_order: rounds.length,
-    });
+    };
+    if (entryPrice != null) {
+      base.price = entryPrice;
+    }
+    if (greensFee != null) {
+      base.greens_fee = greensFee;
+    }
+    const extras: Record<string, any> = {
+      course: newRound.course.trim() || event?.course || null,
+      course_data: (newRound as any).course_data || null,
+      format: newRound.format || null,
+      start_format: newRound.start_format || 'shotgun',
+      starting_hole:
+        newRound.start_format === 'shotgun'
+          ? null
+          : Number(newRound.starting_hole) || 1,
+      starting_hole_2:
+        newRound.start_format === 'double_tee'
+          ? Number(newRound.starting_hole_2) || 10
+          : null,
+      date: newRound.date || event?.date || null,
+    };
+    if (entryPrice != null) {
+      extras.registration_open_date =
+        newRound.registration_open_date ||
+        event?.registration_open_date ||
+        null;
+      extras.registration_open_time =
+        newRound.registration_open_time ||
+        event?.registration_open_time ||
+        null;
+      extras.registration_close_date =
+        newRound.registration_close_date ||
+        event?.registration_close_date ||
+        null;
+      extras.registration_close_time =
+        newRound.registration_close_time ||
+        event?.registration_close_time ||
+        null;
+    }
+
+    let { error } = await supabase
+      .from('event_rounds')
+      .insert({ ...base, ...extras });
+    if (error) {
+      ({ error } = await supabase.from('event_rounds').insert(base));
+    }
 
     if (error) {
       alert('Failed to add round: ' + error.message);
       return;
     }
 
-    const { data: roundsData, error: roundsError } = await supabase
-      .from('event_rounds')
-      .select('*')
-      .eq('event_id', parseInt(eventId))
-      .order('sort_order', { ascending: true });
-
-    if (roundsError) {
-      console.error('Rounds load error:', roundsError);
-    }
-    setRounds(roundsData || []);
-
+    await reloadRounds();
+    const nextCaps = defaultRoundCaps();
     setNewRound({
       name: '',
+      course: event?.course || '',
+      format: 'stroke',
+      start_format: 'shotgun',
+      starting_hole: 1,
+      starting_hole_2: 10,
+      max_teams: nextCaps.max_teams || 18,
+      max_players: nextCaps.max_players || 72,
+      greens_fee: '',
+      price: '',
+      date: event?.date || '',
       start_time: '',
-      max_teams: 18,
-      pay_separately: false,
-      price: 0,
-      greens_fee: Number(event?.greens_fee) || 0,
+      registration_open_date: event?.registration_open_date || '',
+      registration_open_time: event?.registration_open_time || '',
+      registration_close_date: event?.registration_close_date || '',
+      registration_close_time: event?.registration_close_time || '',
     });
+    setExpandedRoundId(null);
+    setRoundCourseQuery((prev) => {
+      const next = { ...prev };
+      delete next.new;
+      return next;
+    });
+    setRoundCourseResults((prev) => {
+      const next = { ...prev };
+      delete next.new;
+      return next;
+    });
+  };
+
+  const persistRound = async (id: number, patch: Record<string, any>) => {
+    setRounds((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, ...patch } : r))
+    );
+    const { error } = await supabase
+      .from('event_rounds')
+      .update(patch)
+      .eq('id', id);
+    if (error) {
+      const allowed = [
+        'name',
+        'greens_fee',
+        'max_players',
+        'max_teams',
+        'price',
+        'pay_separately',
+        'start_time',
+        'sort_order',
+      ];
+      const slim = Object.fromEntries(
+        Object.entries(patch).filter(([k]) => allowed.includes(k))
+      );
+      if (Object.keys(slim).length) {
+        await supabase.from('event_rounds').update(slim).eq('id', id);
+      }
+    }
+  };
+
+  const searchRoundCourses = (key: string, query: string) => {
+    setRoundCourseQuery((prev) => ({ ...prev, [key]: query }));
+    if (roundSearchTimeoutRef.current) {
+      clearTimeout(roundSearchTimeoutRef.current);
+    }
+    roundSearchTimeoutRef.current = setTimeout(async () => {
+      if (query.length < 3) {
+        setRoundCourseResults((prev) => ({ ...prev, [key]: [] }));
+        return;
+      }
+      try {
+        const res = await fetch(
+          `/api/golf-search?q=${encodeURIComponent(query)}`
+        );
+        if (!res.ok) {
+          setRoundCourseResults((prev) => ({ ...prev, [key]: [] }));
+          return;
+        }
+        const data = await res.json();
+        setRoundCourseResults((prev) => ({
+          ...prev,
+          [key]: data.results || data.courses || data || [],
+        }));
+      } catch {
+        setRoundCourseResults((prev) => ({ ...prev, [key]: [] }));
+      }
+    }, 500);
+  };
+
+  const selectRoundCourse = async (
+    key: string,
+    basicCourse: any,
+    apply: (name: string, data: any) => void
+  ) => {
+    const courseName =
+      basicCourse.name ||
+      basicCourse.course_name ||
+      basicCourse.club_name ||
+      '';
+    setRoundCourseQuery((prev) => ({ ...prev, [key]: courseName }));
+    setRoundCourseResults((prev) => ({ ...prev, [key]: [] }));
+    try {
+      const res = await fetch(
+        `/api/golf-course-details?id=${encodeURIComponent(
+          basicCourse.id || ''
+        )}&name=${encodeURIComponent(courseName)}`
+      );
+      const fullData = res.ok ? await res.json() : basicCourse;
+      apply(courseName, fullData);
+    } catch {
+      apply(courseName, basicCourse);
+    }
+  };
+
+  const openNewRoundForm = () => {
+    const caps = defaultRoundCaps();
+    setNewRound({
+      name: '',
+      course: courseLabel || event?.course || '',
+      format: 'stroke',
+      start_format: 'shotgun',
+      starting_hole: 1,
+      starting_hole_2: 10,
+      max_teams: caps.max_teams || 18,
+      max_players: caps.max_players || 72,
+      greens_fee: '',
+      price: '',
+      date: event?.date || '',
+      start_time: '',
+      registration_open_date: event?.registration_open_date || '',
+      registration_open_time: event?.registration_open_time || '',
+      registration_close_date: event?.registration_close_date || '',
+      registration_close_time: event?.registration_close_time || '',
+    });
+    setRoundCourseQuery((prev) => ({
+      ...prev,
+      new: courseLabel || event?.course || '',
+    }));
+    setExpandedRoundId('new');
   };
 
 
@@ -1036,446 +1388,465 @@ const handleDeleteEvent = async () => {
 };
 
   const teamSize = teamSizeFromEventType(event.event_type || '');
+  const isTeamEvent = Number(event?.roster_max) >= 2;
+  const holeCount = Number(event?.number_of_holes) || 18;
+
+  const courseLabel =
+    event?.course || courseDisplayName(event?.course_data) || '';
+  const rosterSize = Number(event?.roster_max);
+  const hasRoster = event?.roster_max != null && rosterSize >= 1;
+  const hasFieldCap =
+    event?.max_players != null && Number(event.max_players) >= 1;
+  const priceSet = event?.price != null && event.price !== '';
+  const isFree = event?.price != null && Number(event.price) === 0;
+  const basicsComplete = Boolean(
+    String(event?.name || '').trim() && event?.date && courseLabel
+  );
+  const fieldComplete = hasRoster && hasFieldCap;
+  const roundsComplete =
+    (rounds && rounds.length > 0) || Boolean(event?.date && courseLabel);
+  const moneyComplete = priceSet || isFree;
+  const registrationComplete = Boolean(
+    event?.registration_open_date &&
+      event?.registration_open_time &&
+      event?.registration_close_date &&
+      event?.registration_close_time
+  );
+  const peopleComplete = onlyAdmin || admins.length > 0;
+  const moreComplete = Boolean(
+    String(event?.contact_name || '').trim() ||
+      String(event?.contact_email || '').trim()
+  );
+  const setupUnlocked =
+    basicsComplete &&
+    fieldComplete &&
+    roundsComplete &&
+    moneyComplete &&
+    registrationComplete &&
+    peopleComplete &&
+    moreComplete;
+
+  const basicsSummary = [courseLabel, formatEventDate(event?.date)]
+    .filter(Boolean)
+    .join(' · ');
+  const fieldSummary = [
+    hasRoster
+      ? rosterSize === 1
+        ? 'Individual'
+        : `${rosterSize}-person roster`
+      : null,
+    hasFieldCap ? `cap ${event.max_players}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const roundsSummary =
+    roundMode === 'multi'
+      ? `${rounds.length || 0} round${rounds.length === 1 ? '' : 's'}`
+      : 'Single round';
+  const moneySummary = isFree
+    ? 'Free'
+    : priceSet
+      ? `$${Number(event.price).toFixed(2)}`
+      : '';
+  const registrationSummary = [
+    event?.registration_open_date
+      ? `Opens ${formatEventDate(event.registration_open_date)}`
+      : null,
+    event?.registration_close_date
+      ? `closes ${formatEventDate(event.registration_close_date)}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const peopleSummary = onlyAdmin
+    ? 'Only admin'
+    : admins.length
+      ? `${admins.length} invited admin${admins.length === 1 ? '' : 's'}`
+      : '';
+  const moreSummary =
+    String(event?.contact_name || '').trim() ||
+    String(event?.contact_email || '').trim();
+
+  const copyLiveLink = async () => {
+    const url = `${window.location.origin}/event/${eventId}/live`;
+    try {
+      await navigator.clipboard.writeText(url);
+      alert('Live link copied');
+    } catch {
+      alert(url);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8 overflow-x-hidden">
       <div className="max-w-6xl mx-auto">
-        <button
-          onClick={() => router.back()}
+        <BackButton
+          href="/events"
           className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors mb-6"
-        >
-          ← Back
-        </button>
+        />
 
-                        <h1 className="text-4xl font-bold mb-2">{event.name}</h1>
+        <EventTabs eventId={eventId} variant="manage" active="manage" />
+
+        <h1 className="text-4xl font-bold mb-2">{event.name}</h1>
         <p className="text-gray-400 mb-6">Manage Event Details</p>
 
-        {needsPayoutSetup && !payoutBannerDismissed && (
-          <div className="mb-8 rounded-3xl border border-amber-500/40 bg-amber-950/40 p-6">
-            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-              <div className="min-w-0">
-                <h2 className="text-lg font-semibold text-amber-300">
-                  Set up payouts
-                </h2>
-                <p className="text-sm text-gray-300 mt-2 leading-relaxed">
-                  Connect Stripe so registration money can be paid out to your
-                  bank. Fried Egg Events never sees or stores your bank details —
-                  Stripe handles that. The platform fee is taken out before
-                  funds hit your Stripe balance.
-                </p>
-              </div>
-              <div className="flex flex-col sm:flex-row gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleConnectPayouts}
-                  disabled={stripeConnecting}
-                  className="bg-amber-500 hover:bg-amber-400 disabled:bg-gray-600 text-gray-900 font-semibold px-6 py-3 rounded-2xl"
-                >
-                  {stripeConnecting ? 'Opening Stripe…' : 'Connect with Stripe'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPayoutBannerDismissed(true)}
-                  className="text-sm text-gray-400 hover:text-white px-4 py-3"
-                >
-                  Remind me later
-                </button>
-              </div>
+        <div className="space-y-4">
+          <AccordionSection
+            title="Day of"
+            complete={setupUnlocked}
+            startOpen={true}
+            locked={!setupUnlocked}
+          >
+            {!setupUnlocked ? (
+              <p className="text-sm text-gray-400">
+                Finish setup to unlock day-of tools
+              </p>
+            ) : null}
+            <div
+              className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 ${
+                setupUnlocked ? '' : 'pointer-events-none'
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => router.push(`/event/${eventId}/check-in`)}
+                className="bg-gray-700 hover:bg-gray-600 px-5 py-4 rounded-2xl font-medium"
+              >
+                Check-in
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/event/${eventId}/scoring`)}
+                className="bg-gray-700 hover:bg-gray-600 px-5 py-4 rounded-2xl font-medium"
+              >
+                Scoring
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/event/${eventId}/live`)}
+                className="bg-gray-700 hover:bg-gray-600 px-5 py-4 rounded-2xl font-medium"
+              >
+                Live
+              </button>
+              <button
+                type="button"
+                onClick={copyLiveLink}
+                className="bg-gray-800 hover:bg-gray-700 px-5 py-4 rounded-2xl font-medium"
+              >
+                Copy live link
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/event/${eventId}/pairings`)}
+                className="bg-gray-700 hover:bg-gray-600 px-5 py-4 rounded-2xl font-medium"
+              >
+                Pairings
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/event/${eventId}/scorecards`)}
+                className="bg-gray-700 hover:bg-gray-600 px-5 py-4 rounded-2xl font-medium"
+              >
+                Scorecards
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push(`/event/${eventId}/contacts`)}
+                className="bg-gray-700 hover:bg-gray-600 px-5 py-4 rounded-2xl font-medium"
+              >
+                Contacts PDF
+              </button>
             </div>
-          </div>
-        )}
+          </AccordionSection>
 
-        {/* Event Image */}
-        <div>
-          <h3 className="text-xl font-medium mb-4">Event Image</h3>
-          <div className="flex flex-col md:flex-row gap-6 items-start">
-            <div className="w-full md:w-80 h-52 bg-gray-900 rounded-3xl overflow-hidden border border-gray-700 flex-shrink-0">
-              {event.image_url ? (
-                <img
-                  src={event.image_url}
-                  alt={event.name}
-                  className="w-full h-full object-cover"
+          <AccordionSection
+            title="Event basics"
+            complete={basicsComplete}
+            summary={basicsSummary}
+            startOpen={!basicsComplete}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Event Name
+                </label>
+                <input
+                  value={event.name || ''}
+                  onChange={(e) => handleEventChange('name', e.target.value)}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                 />
-              ) : (
-                <div className="w-full h-full flex items-center justify-center text-6xl text-gray-600">
-                  🏌️
-                </div>
-              )}
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Date of Event
+                </label>
+                <input
+                  type="date"
+                  value={event.date || ''}
+                  onChange={(e) => handleEventChange('date', e.target.value)}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                />
+              </div>
             </div>
-
-            <div className="flex-1">
-              <input
-                type="file"
-                accept="image/*"
-                onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (!file) return;
-                  try {
-                    const fileExt = file.name.split('.').pop();
-                    const fileName = `${Date.now()}.${fileExt}`;
-                    const filePath = `events/${eventId}/${fileName}`;
-
-                    const { error: uploadError } = await supabase.storage
-                      .from('tournament-images')
-                      .upload(filePath, file, {
-                        cacheControl: '3600',
-                        upsert: false,
-                      });
-
-                    if (uploadError) throw uploadError;
-
-                    const {
-                      data: { publicUrl },
-                    } = supabase.storage
-                      .from('tournament-images')
-                      .getPublicUrl(filePath);
-
-                    handleEventChange('image_url', publicUrl);
-                    alert(
-                      "Image uploaded successfully! Click 'Save Changes' to store it."
-                    );
-                  } catch (err: any) {
-                    alert('Failed to upload image: ' + err.message);
-                  }
-                }}
-                className="block w-full text-sm text-gray-400 file:mr-4 file:py-4 file:px-6 file:rounded-3xl file:border-0 file:text-sm file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">
+                Description
+              </label>
+              <textarea
+                value={event.description || ''}
+                onChange={(e) =>
+                  handleEventChange('description', e.target.value)
+                }
+                rows={5}
+                placeholder="18-hole stroke play..."
+                className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500 resize-y min-h-[120px]"
               />
             </div>
-          </div>
-        </div>
+            <div>
+              <h3 className="text-xl font-medium mb-4">Golf Course</h3>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={courseSearch}
+                  onChange={(e) => {
+                    setCourseSearch(e.target.value);
+                    debouncedSearch(e.target.value);
+                  }}
+                  placeholder={courseLabel || 'Start typing course name...'}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500"
+                />
+                {courseResults.map((course, idx) => (
+                  <div
+                    key={idx}
+                    onClick={async () => {
+                      await selectCourse(course);
+                    }}
+                    className="px-6 py-5 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none bg-gray-800"
+                  >
+                    <div className="font-medium">
+                      {course.name || course.course_name || 'Unknown Course'}
+                    </div>
+                    <div className="text-sm text-gray-400">
+                      {course.club_name ||
+                        course.city ||
+                        course.location?.city ||
+                        ''}{' '}
+                      • {course.state || course.location?.state || ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {courseLabel && (
+                <p className="text-green-400 mt-3 text-sm">
+                  Current course:{' '}
+                  <span className="font-medium">{courseLabel}</span>
+                  {event.location ? (
+                    <span className="text-gray-400"> · {event.location}</span>
+                  ) : null}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-sm text-gray-400 mb-3">
+                Number of Holes
+              </label>
+              <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
+                <button
+                  type="button"
+                  onClick={() => handleEventChange('number_of_holes', 9)}
+                  className={`flex-1 py-4 rounded-3xl font-medium ${
+                    event?.number_of_holes === 9
+                      ? 'bg-blue-600 text-white'
+                      : 'hover:bg-gray-600 text-gray-300'
+                  }`}
+                >
+                  9 Holes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleEventChange('number_of_holes', 18)}
+                  className={`flex-1 py-4 rounded-3xl font-medium ${
+                    event?.number_of_holes === 18 || !event?.number_of_holes
+                      ? 'bg-blue-600 text-white'
+                      : 'hover:bg-gray-600 text-gray-300'
+                  }`}
+                >
+                  18 Holes
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">
+                Minutes between Tee Times
+              </label>
+              <input
+                type="number"
+                value={event.tee_time_interval || 10}
+                onChange={(e) =>
+                  handleEventChange(
+                    'tee_time_interval',
+                    parseInt(e.target.value) || 10
+                  )
+                }
+                className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                min="5"
+              />
+            </div>
+            <div>
+              <h3 className="text-xl font-medium mb-4">Event Image</h3>
+              <div className="flex flex-col md:flex-row gap-6 items-start">
+                <div className="w-full md:w-80 h-52 bg-gray-900 rounded-3xl overflow-hidden border border-gray-700 flex-shrink-0">
+                  {event.image_url ? (
+                    <img
+                      src={event.image_url}
+                      alt={event.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-6xl text-gray-600">
+                      🏌️
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      try {
+                        const fileExt = file.name.split('.').pop();
+                        const fileName = `${Date.now()}.${fileExt}`;
+                        const filePath = `events/${eventId}/${fileName}`;
+                        const { error: uploadError } = await supabase.storage
+                          .from('tournament-images')
+                          .upload(filePath, file, {
+                            cacheControl: '3600',
+                            upsert: false,
+                          });
+                        if (uploadError) throw uploadError;
+                        const {
+                          data: { publicUrl },
+                        } = supabase.storage
+                          .from('tournament-images')
+                          .getPublicUrl(filePath);
+                        handleEventChange('image_url', publicUrl);
+                        alert(
+                          "Image uploaded successfully! Click 'Save Changes' to store it."
+                        );
+                      } catch (err: any) {
+                        alert('Failed to upload image: ' + err.message);
+                      }
+                    }}
+                    className="block w-full text-sm text-gray-400 file:mr-4 file:py-4 file:px-6 file:rounded-3xl file:border-0 file:text-sm file:font-medium file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+          </AccordionSection>
 
-        {/* Golf Course Search */}
-        <div className="mt-10">
-          <h3 className="text-xl font-medium mb-4">Golf Course</h3>
-          <div className="relative">
-            <input
-              type="text"
-              value={courseSearch}
-              onChange={(e) => {
-                setCourseSearch(e.target.value);
-                debouncedSearch(e.target.value);
-              }}
-              placeholder="Start typing course name..."
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500"
-            />
-            {courseResults.map((course, idx) => (
-              <div
-                key={idx}
-                onClick={async () => {
-                  await selectCourse(course);
+          <AccordionSection
+            title="Field & teams"
+            complete={fieldComplete}
+            summary={fieldSummary}
+            startOpen={!fieldComplete}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <button
+                type="button"
+                onClick={() => {
+                  handleEventChange('roster_max', 1);
+                  handleEventChange('default_competing', 1);
                 }}
-                className="px-6 py-5 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none bg-gray-800"
+                className={`text-left p-6 rounded-2xl border-2 ${
+                  Number(event.roster_max) === 1
+                    ? 'border-emerald-500 bg-emerald-900/30'
+                    : 'border-gray-700 bg-gray-800'
+                }`}
               >
-                <div className="font-medium">
-                  {course.name || course.course_name || 'Unknown Course'}
-                </div>
-                <div className="text-sm text-gray-400">
-                  {course.club_name || course.city || course.location?.city || ''}{' '}
-                  • {course.state || course.location?.state || ''}
-                </div>
-              </div>
-            ))}
-          </div>
-          {event.course && (
-            <p className="text-green-400 mt-3 text-sm">
-              Current course: <span className="font-medium">{event.course}</span>
-            </p>
-          )}
-        </div>
-
-        
-
-        {/* Pricing Mode */}
-<div className="bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 mt-8 mb-2">
-  <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
-    {/* Toggle */}
-    <div className="flex items-center justify-center sm:justify-start gap-3 text-sm shrink-0">
-      <span
-        className={
-          (event.pricing_mode || 'event') === 'event'
-            ? 'text-white'
-            : 'text-gray-500'
-        }
-      >
-        Event
-      </span>
-      <button
-        type="button"
-        onClick={() =>
-          handleEventChange(
-            'pricing_mode',
-            (event.pricing_mode || 'event') === 'event' ? 'per_round' : 'event'
-          )
-        }
-        className={`relative w-14 h-8 rounded-full transition-colors ${
-          (event.pricing_mode || 'event') === 'per_round'
-            ? 'bg-blue-600'
-            : 'bg-gray-600'
-        }`}
-      >
-        <span
-          className={`absolute top-1 left-1 w-6 h-6 rounded-full bg-white transition-transform ${
-            (event.pricing_mode || 'event') === 'per_round'
-              ? 'translate-x-6'
-              : 'translate-x-0'
-          }`}
-        />
-      </button>
-      <span
-        className={
-          (event.pricing_mode || 'event') === 'per_round'
-            ? 'text-white'
-            : 'text-gray-500'
-        }
-      >
-        Per-round
-      </span>
-    </div>
-
-    {/* Description */}
-    <p className="text-xs text-gray-400 text-center sm:text-left leading-relaxed sm:border-l sm:border-gray-700 sm:pl-6">
-      {(event.pricing_mode || 'event') === 'per_round'
-        ? 'Event price ignored. Players only pay for rounds they select.'
-        : 'Players pay the event price (plus any rounds marked pay separately).'}
-    </p>
-  </div>
-</div>
-
-        {/* Five Buttons */}
-        <div className="flex flex-wrap gap-3 mt-8">
-          <button
-  type="button"
-  onClick={() => router.push(`/event/${eventId}/emails`)}
-  className="bg-gray-700 hover:bg-gray-600 px-5 py-3 rounded-2xl font-medium"
->
-  Email Players
-</button>
-          <button
-            onClick={() => setShowRounds(!showRounds)}
-            className="flex-1 sm:flex-none bg-teal-600 hover:bg-teal-700 px-6 py-4 rounded-3xl font-medium transition-colors"
-          >
-            {showRounds ? 'Hide Rounds' : 'Manage Rounds'}
-          </button>
-
-          <button
-            onClick={() => setShowFlights(!showFlights)}
-            className="flex-1 sm:flex-none bg-purple-600 hover:bg-purple-700 px-6 py-4 rounded-3xl font-medium transition-colors"
-          >
-            {showFlights ? 'Hide Flights' : 'Manage Flights'}
-          </button>
-
-          <button
-            onClick={() => setShowAddOns(!showAddOns)}
-            className="flex-1 sm:flex-none bg-yellow-600 hover:bg-yellow-700 px-6 py-4 rounded-3xl font-medium transition-colors"
-          >
-            {showAddOns ? 'Hide Add-ons' : 'Manage Add-ons'}
-          </button>
-
-                    <button
-            type="button"
-            onClick={() => setShowSponsors((v) => !v)}
-            className={`px-5 py-3 rounded-2xl font-medium ${
-              showSponsors
-                ? 'bg-emerald-600 text-white'
-                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-            }`}
-          >
-            Sponsors
-          </button>
-
-          <button
-            onClick={() => setShowAdmins(!showAdmins)}
-            className="flex-1 sm:flex-none bg-indigo-600 hover:bg-indigo-700 px-6 py-4 rounded-3xl font-medium transition-colors"
-          >
-            {showAdmins ? 'Hide Admins' : 'Manage Admins'}
-          </button>
-        </div>
-
-        {/* Rounds Panel */}
-        {showRounds && (
-          <div className="bg-gray-900 border border-teal-500/30 rounded-3xl p-8 mt-8">
-            <h3 className="text-xl font-medium mb-2">Event Rounds</h3>
-            <p className="text-sm text-gray-400 mb-6">
-              {(event.pricing_mode || 'event') === 'per_round'
-                ? 'Per-round pricing: set a price on each round. Players only pay for rounds they select.'
-                : 'Event pricing: rounds are included unless you check “Charge separately.”'}
-            </p>
-
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
-              <div className="md:col-span-3">
-                <label className="block text-sm text-gray-400 mb-2">Round Name</label>
-                <input
-                  value={newRound.name}
-                  onChange={(e) => setNewRound({ ...newRound, name: e.target.value })}
-                  placeholder="Morning Round"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-                />
-              </div>
-              <div className="md:col-span-2">
-                <label className="block text-sm text-gray-400 mb-2">Start Time</label>
-                <input
-                  type="time"
-                  value={newRound.start_time}
-                  onChange={(e) =>
-                    setNewRound({ ...newRound, start_time: e.target.value })
-                  }
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-                />
-              </div>
-                            <div className="md:col-span-2">
+                <div className="font-semibold text-lg">Individual</div>
+                <p className="text-sm text-gray-400 mt-1">One person.</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const n = Math.max(2, Number(event.roster_max) || 4);
+                  handleEventChange('roster_max', n);
+                  handleEventChange('default_competing', n);
+                }}
+                className={`text-left p-6 rounded-2xl border-2 ${
+                  Number(event.roster_max) >= 2
+                    ? 'border-emerald-500 bg-emerald-900/30'
+                    : 'border-gray-700 bg-gray-800'
+                }`}
+              >
+                <div className="font-semibold text-lg">Team</div>
+                <p className="text-sm text-gray-400 mt-1">Roster of 2 or more.</p>
+              </button>
+            </div>
+            {Number(event.roster_max) >= 2 && (
+              <div>
                 <label className="block text-sm text-gray-400 mb-2">
-                  Max teams
+                  Roster size
                 </label>
                 <input
                   type="number"
-                  min={1}
-                  value={newRound.max_teams}
-                  onChange={(e) =>
-                    setNewRound({
-                      ...newRound,
-                      max_teams: parseInt(e.target.value) || 0,
-                    })
-                  }
-                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                  min="2"
+                  value={event.roster_max ?? ''}
+                  onChange={(e) => {
+                    const n =
+                      e.target.value === ''
+                        ? null
+                        : parseInt(e.target.value, 10) || null;
+                    handleEventChange('roster_max', n);
+                    if (n != null) handleEventChange('default_competing', n);
+                  }}
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  {(() => {
-                    const ppt = teamSizeFromEventType(event.event_type || '') || 1;
-                    const teams = Number(newRound.max_teams) || 0;
-                    return `${teams} teams · ${ppt}/team · ${teams * ppt} seats`;
-                  })()}
-                </p>
               </div>
-              <div className="md:col-span-2">
-  <label className="block text-sm text-gray-400 mb-2">
-    Greens fee (per player)
-  </label>
-  <input
-    type="number"
-    step="0.01"
-    min="0"
-    value={newRound.greens_fee}
-    onChange={(e) =>
-      setNewRound({
-        ...newRound,
-        greens_fee: parseFloat(e.target.value) || 0,
-      })
-    }
-    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-  />
-</div>
-
-              <div className="md:col-span-3">
-                {(event.pricing_mode || 'event') === 'per_round' ? (
-                  <>
-                    <label className="block text-sm text-gray-400 mb-2">
-                      Price per player
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={newRound.price}
-                      onChange={(e) =>
-                        setNewRound({
-                          ...newRound,
-                          price: parseFloat(e.target.value) || 0,
-                          pay_separately: true,
-                        })
-                      }
-                      placeholder="40.00"
-                      className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-                    />
-                  </>
-                ) : (
-                  <>
-                    <label className="flex items-center gap-3 text-sm text-gray-300 mb-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={newRound.pay_separately}
-                        onChange={(e) =>
-                          setNewRound({
-                            ...newRound,
-                            pay_separately: e.target.checked,
-                          })
-                        }
-                        className="w-5 h-5 accent-teal-600"
-                      />
-                      Charge separately
-                    </label>
-                    {newRound.pay_separately && (
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={newRound.price}
-                        onChange={(e) =>
-                          setNewRound({
-                            ...newRound,
-                            price: parseFloat(e.target.value) || 0,
-                          })
-                        }
-                        placeholder="Price per player"
-                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-                      />
-                    )}
-                  </>
-                )}
-              </div>
-              
-
-              <div className="md:col-span-2">
-                <button
-                  onClick={handleAddRound}
-                  className="w-full bg-teal-600 hover:bg-teal-700 py-4 rounded-3xl font-medium"
-                >
-                  Add Round
-                </button>
-              </div>
+            )}
+            <div>
+              <label className="block text-sm text-gray-400 mb-2">
+                Field cap
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={event.max_players ?? ''}
+                onChange={(e) =>
+                  handleEventChange(
+                    'max_players',
+                    e.target.value === ''
+                      ? null
+                      : parseInt(e.target.value, 10) || null
+                  )
+                }
+                placeholder="e.g. 72"
+                className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+              />
+              <p className="text-xs text-gray-500 mt-2">
+                Registration stops at this number (Sold Out). Leave blank for
+                unlimited.
+              </p>
             </div>
-
-            <div className="space-y-4">
-              {rounds.length === 0 && (
-                <p className="text-gray-500 text-sm">
-                  No rounds yet. Add one above (e.g. 8:00 AM, 12:00 PM, 4:00 PM).
-                </p>
-              )}
-              {rounds.map((round) => (
-                <div
-                  key={round.id}
-                  className="bg-gray-800 p-6 rounded-3xl flex justify-between items-center"
-                >
-                  <div>
-                    <div className="font-semibold text-lg">{round.name}</div>
-                    <div className="text-sm text-gray-400 mt-1">
-                      {round.start_time
-                        ? String(round.start_time).slice(0, 5)
-                        : 'No time set'}
-                      {' · '}
-                                            {round.max_teams != null
-                        ? `Max ${round.max_teams} teams (${round.max_players || round.max_teams * (teamSizeFromEventType(event.event_type || '') || 1)} seats)`
-                        : `Max ${round.max_players} players`}
-                      {(event.pricing_mode || 'event') === 'per_round' || round.pay_separately
-    ? ` · $${Number(round.price).toFixed(2)} per player`
-    : ' · Included in event price'}
-  {` · Greens $${Number(round.greens_fee || 0).toFixed(2)}/player`}
-                    </div>
-                  </div>
-<button
-  type="button"
-  onClick={handleDeleteEvent}
-  disabled={saving || deleting}
-  className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded-3xl font-medium text-lg"
->
-  {deleting ? 'Deleting…' : '🗑️ Delete Event'}
-</button>
-                </div>
-              ))}
-            </div>
+            <div className="md:col-span-2 mt-6 pt-8 border-t border-gray-700">
+            <label className="flex items-center gap-3 text-lg cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!event?.use_handicaps}
+                onChange={(e) =>
+                  handleEventChange('use_handicaps', e.target.checked)
+                }
+                className="w-6 h-6 accent-blue-600"
+              />
+              <span className="font-medium">Use Handicaps for this Event</span>
+            </label>
+            <p className="text-sm text-gray-500 mt-2 ml-9">
+              When enabled, you can enter individual handicaps in the Check-in tab.
+            </p>
           </div>
-        )}
-
-        {/* Flights Panel */}
-        {showFlights && (
-          <div className="bg-gray-900 border border-purple-500/30 rounded-3xl p-8 mt-8">
+            <div className="bg-gray-900 border border-purple-500/30 rounded-3xl p-8 mt-8">
             <h3 className="text-xl font-medium mb-6">Manage Flights</h3>
 
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
@@ -1560,11 +1931,1101 @@ const handleDeleteEvent = async () => {
               </p>
             )}
           </div>
-        )}
 
-        {/* Add-ons Panel */}
-        {showAddOns && (
-          <div className="bg-gray-900 border border-yellow-500/30 rounded-3xl p-8 mt-8">
+          </AccordionSection>
+
+          <AccordionSection
+            title="Rounds"
+            complete={roundsComplete}
+            summary={roundsSummary}
+            startOpen={!roundsComplete}
+          >
+            <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
+              <button
+                type="button"
+                onClick={() => setRoundMode('single')}
+                className={`flex-1 py-4 rounded-3xl font-medium ${
+                  roundMode === 'single'
+                    ? 'bg-blue-600 text-white'
+                    : 'hover:bg-gray-600 text-gray-300'
+                }`}
+              >
+                Single round
+              </button>
+              <button
+                type="button"
+                onClick={() => setRoundMode('multi')}
+                className={`flex-1 py-4 rounded-3xl font-medium ${
+                  roundMode === 'multi'
+                    ? 'bg-blue-600 text-white'
+                    : 'hover:bg-gray-600 text-gray-300'
+                }`}
+              >
+                Multi-round
+              </button>
+            </div>
+
+            {roundMode === 'single' ? (
+              <div className="space-y-6">
+                <p className="text-sm text-gray-400">
+                  Uses the course and date from Event basics
+                  {courseLabel || event.date
+                    ? ` (${[courseLabel, formatEventDate(event.date)]
+                        .filter(Boolean)
+                        .join(' · ')})`
+                    : ''}
+                  .
+                </p>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">
+                    {Number(event.roster_max) > 1
+                      ? 'Price per team'
+                      : 'Price per player'}
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={amountInputValue(event.price)}
+                    onChange={(e) =>
+                      handleEventChange(
+                        'price',
+                        parseAmountOrNull(e.target.value)
+                      )
+                    }
+                    placeholder="Event price"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">
+                    Greens fee per person
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={amountInputValue(event.greens_fee)}
+                    onChange={(e) =>
+                      handleEventChange(
+                        'greens_fee',
+                        parseAmountOrNull(e.target.value)
+                      )
+                    }
+                    placeholder="None"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">
+                    Format
+                  </label>
+                  <select
+                    value={normalizeRoundFormat(event.event_type) || ''}
+                    onChange={(e) =>
+                      handleEventChange('event_type', e.target.value)
+                    }
+                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                  >
+                    <option value="">Select format</option>
+                    {ROUND_FORMATS.map((f) => (
+                      <option key={f.value} value={f.value}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-400 mb-2">
+                    Start type
+                  </label>
+                  <select
+                    value={event.start_format || 'shotgun'}
+                    onChange={(e) =>
+                      handleEventChange('start_format', e.target.value)
+                    }
+                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                  >
+                    <option value="shotgun">Shotgun</option>
+                    <option value="tee_times">Tee times</option>
+                    <option value="double_tee">Double tee</option>
+                  </select>
+                </div>
+                {(event.start_format || 'shotgun') === 'tee_times' && (
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">
+                      Starting hole
+                    </label>
+                    <select
+                      value={event.starting_hole || 1}
+                      onChange={(e) =>
+                        handleEventChange(
+                          'starting_hole',
+                          parseInt(e.target.value)
+                        )
+                      }
+                      className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                    >
+                      {Array.from({ length: holeCount }, (_, i) => (
+                        <option key={i + 1} value={i + 1}>
+                          Hole {i + 1}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                {(event.start_format || 'shotgun') === 'double_tee' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Starting hole 1
+                      </label>
+                      <select
+                        value={event.starting_hole || 1}
+                        onChange={(e) =>
+                          handleEventChange(
+                            'starting_hole',
+                            parseInt(e.target.value)
+                          )
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                      >
+                        {Array.from({ length: holeCount }, (_, i) => (
+                          <option key={i + 1} value={i + 1}>
+                            Hole {i + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Starting hole 2
+                      </label>
+                      <select
+                        value={doubleTeeHole2 || 10}
+                        onChange={(e) =>
+                          setDoubleTeeHole2(parseInt(e.target.value) || 10)
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                      >
+                        {Array.from({ length: holeCount }, (_, i) => (
+                          <option key={i + 1} value={i + 1}>
+                            Hole {i + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {rounds.map((round) => {
+                  const startType = round.start_format || 'shotgun';
+                  const key = String(round.id);
+                  const courseValue =
+                    roundCourseQuery[key] ??
+                    round.course ??
+                    courseLabel ??
+                    '';
+                  const results = roundCourseResults[key] || [];
+                  const expanded = expandedRoundId === round.id;
+                  const unitWord =
+                    Number(event.roster_max) > 1 ? 'team' : 'player';
+                  const summary = [
+                    round.name || 'Round',
+                    round.course || courseLabel,
+                    formatLabel(round.format || round.event_type),
+                    startTypeLabel(startType),
+                    formatEventDate(round.date || event.date),
+                    formatRoundClock(round.start_time),
+                    hasFilledAmount(round.price)
+                      ? `$${Number(round.price).toFixed(2)} per ${unitWord}`
+                      : null,
+                    hasFilledAmount(round.greens_fee)
+                      ? `Greens $${Number(round.greens_fee).toFixed(2)}/person`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ');
+                  return (
+                    <div
+                      key={round.id}
+                      className="bg-gray-900 border border-gray-700 rounded-3xl overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedRoundId(expanded ? null : round.id)
+                        }
+                        className="w-full text-left px-6 py-4 flex items-center justify-between gap-3"
+                      >
+                        <span className="font-medium truncate">{summary}</span>
+                        <span className="text-gray-400 text-sm shrink-0">
+                          {expanded ? 'Hide' : 'Edit'}
+                        </span>
+                      </button>
+                      {expanded && (
+                        <div className="px-6 pb-6 space-y-4 border-t border-gray-800 pt-4">
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Round name
+                        </label>
+                        <input
+                          value={round.name || ''}
+                          onChange={(e) =>
+                            persistRound(round.id, { name: e.target.value })
+                          }
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-2">
+                            Round date
+                          </label>
+                          <input
+                            type="date"
+                            value={round.date || event.date || ''}
+                            onChange={(e) =>
+                              persistRound(round.id, { date: e.target.value })
+                            }
+                            className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-2">
+                            Round start time
+                          </label>
+                          <input
+                            type="time"
+                            value={formatRoundClock(round.start_time)}
+                            onChange={(e) =>
+                              persistRound(round.id, {
+                                start_time: e.target.value || null,
+                              })
+                            }
+                            className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Course
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={courseValue}
+                            onChange={(e) => {
+                              searchRoundCourses(key, e.target.value);
+                              persistRound(round.id, {
+                                course: e.target.value,
+                              });
+                            }}
+                            placeholder={courseLabel || 'Search course…'}
+                            className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                          />
+                          {results.length > 0 && (
+                            <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-700 rounded-2xl max-h-56 overflow-auto">
+                              {results.map((course: any, idx: number) => (
+                                <div
+                                  key={course.id ?? idx}
+                                  onClick={() =>
+                                    selectRoundCourse(
+                                      key,
+                                      course,
+                                      (name, data) =>
+                                        persistRound(round.id, {
+                                          course: name,
+                                          course_data: data,
+                                        })
+                                    )
+                                  }
+                                  className="px-4 py-3 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none text-sm"
+                                >
+                                  <div className="font-medium">
+                                    {course.name ||
+                                      course.course_name ||
+                                      'Unknown Course'}
+                                  </div>
+                                  <div className="text-gray-400">
+                                    {course.club_name ||
+                                      course.city ||
+                                      course.location?.city ||
+                                      ''}{' '}
+                                    • {course.state || course.location?.state || ''}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          {isTeamEvent ? 'Max teams' : 'Max players'}
+                        </label>
+                        {isTeamEvent ? (
+                          <input
+                            type="number"
+                            min={1}
+                            value={round.max_teams ?? ''}
+                            onChange={(e) => {
+                              const maxTeams =
+                                parseInt(e.target.value, 10) || 0;
+                              persistRound(round.id, {
+                                max_teams: maxTeams,
+                                max_players:
+                                  maxTeams * (Number(event.roster_max) || 4),
+                              });
+                            }}
+                            className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                          />
+                        ) : (
+                          <input
+                            type="number"
+                            min={1}
+                            value={round.max_players ?? ''}
+                            onChange={(e) =>
+                              persistRound(round.id, {
+                                max_players:
+                                  parseInt(e.target.value, 10) || 0,
+                              })
+                            }
+                            className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                          />
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          {Number(event.roster_max) > 1
+                            ? 'Price per team'
+                            : 'Price per player'}
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={amountInputValue(round.price)}
+                          onChange={(e) => {
+                            const n = parseAmountOrNull(e.target.value);
+                            persistRound(round.id, {
+                              price: n,
+                              pay_separately: n != null,
+                            });
+                          }}
+                          placeholder="Use event price"
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Greens fee per person
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={amountInputValue(round.greens_fee)}
+                          onChange={(e) => {
+                            persistRound(round.id, {
+                              greens_fee: parseAmountOrNull(e.target.value),
+                            });
+                          }}
+                          placeholder="None"
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        />
+                      </div>
+                      {hasFilledAmount(round.price) && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-2">
+                              Registration opens
+                            </label>
+                            <input
+                              type="date"
+                              value={
+                                round.registration_open_date ||
+                                event.registration_open_date ||
+                                ''
+                              }
+                              onChange={(e) =>
+                                persistRound(round.id, {
+                                  registration_open_date: e.target.value,
+                                })
+                              }
+                              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-2">
+                              Open time
+                            </label>
+                            <input
+                              type="time"
+                              value={formatRoundClock(
+                                round.registration_open_time ||
+                                  event.registration_open_time
+                              )}
+                              onChange={(e) =>
+                                persistRound(round.id, {
+                                  registration_open_time: e.target.value || null,
+                                })
+                              }
+                              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-2">
+                              Registration closes
+                            </label>
+                            <input
+                              type="date"
+                              value={
+                                round.registration_close_date ||
+                                event.registration_close_date ||
+                                ''
+                              }
+                              onChange={(e) =>
+                                persistRound(round.id, {
+                                  registration_close_date: e.target.value,
+                                })
+                              }
+                              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-2">
+                              Close time
+                            </label>
+                            <input
+                              type="time"
+                              value={formatRoundClock(
+                                round.registration_close_time ||
+                                  event.registration_close_time
+                              )}
+                              onChange={(e) =>
+                                persistRound(round.id, {
+                                  registration_close_time:
+                                    e.target.value || null,
+                                })
+                              }
+                              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Format
+                        </label>
+                        <select
+                          value={
+                            normalizeRoundFormat(round.format || round.event_type) ||
+                            ''
+                          }
+                          onChange={(e) =>
+                            persistRound(round.id, { format: e.target.value })
+                          }
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        >
+                          <option value="">Select format</option>
+                          {ROUND_FORMATS.map((f) => (
+                            <option key={f.value} value={f.value}>
+                              {f.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Start type
+                        </label>
+                        <select
+                          value={startType}
+                          onChange={(e) =>
+                            persistRound(round.id, {
+                              start_format: e.target.value,
+                            })
+                          }
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        >
+                          <option value="shotgun">Shotgun</option>
+                          <option value="tee_times">Tee times</option>
+                          <option value="double_tee">Double tee</option>
+                        </select>
+                      </div>
+                      {startType === 'tee_times' && (
+                        <div>
+                          <label className="block text-sm text-gray-400 mb-2">
+                            Starting hole
+                          </label>
+                          <select
+                            value={round.starting_hole || 1}
+                            onChange={(e) =>
+                              persistRound(round.id, {
+                                starting_hole: parseInt(e.target.value),
+                              })
+                            }
+                            className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                          >
+                            {Array.from({ length: holeCount }, (_, i) => (
+                              <option key={i + 1} value={i + 1}>
+                                Hole {i + 1}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {startType === 'double_tee' && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-2">
+                              Starting hole 1
+                            </label>
+                            <select
+                              value={round.starting_hole || 1}
+                              onChange={(e) =>
+                                persistRound(round.id, {
+                                  starting_hole: parseInt(e.target.value),
+                                })
+                              }
+                              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                            >
+                              {Array.from({ length: holeCount }, (_, i) => (
+                                <option key={i + 1} value={i + 1}>
+                                  Hole {i + 1}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-sm text-gray-400 mb-2">
+                              Starting hole 2
+                            </label>
+                            <select
+                              value={round.starting_hole_2 || 10}
+                              onChange={(e) =>
+                                persistRound(round.id, {
+                                  starting_hole_2: parseInt(e.target.value),
+                                })
+                              }
+                              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                            >
+                              {Array.from({ length: holeCount }, (_, i) => (
+                                <option key={i + 1} value={i + 1}>
+                                  Hole {i + 1}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {expandedRoundId === 'new' ? (
+                <div className="bg-gray-800 border border-dashed border-gray-600 rounded-3xl p-6 space-y-4">
+                  <div className="font-medium">New round</div>
+                  <input
+                    value={newRound.name}
+                    onChange={(e) =>
+                      setNewRound({ ...newRound, name: e.target.value })
+                    }
+                    placeholder="Round name"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                  />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Round date
+                      </label>
+                      <input
+                        type="date"
+                        value={newRound.date || event.date || ''}
+                        onChange={(e) =>
+                          setNewRound({ ...newRound, date: e.target.value })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-2">
+                        Round start time
+                      </label>
+                      <input
+                        type="time"
+                        value={newRound.start_time}
+                        onChange={(e) =>
+                          setNewRound({
+                            ...newRound,
+                            start_time: e.target.value,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">
+                      Course
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={
+                          roundCourseQuery.new ??
+                          newRound.course ??
+                          courseLabel ??
+                          ''
+                        }
+                        onChange={(e) => {
+                          searchRoundCourses('new', e.target.value);
+                          setNewRound({
+                            ...newRound,
+                            course: e.target.value,
+                          });
+                        }}
+                        placeholder={courseLabel || 'Search course…'}
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                      />
+                      {(roundCourseResults.new || []).length > 0 && (
+                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-700 rounded-2xl max-h-56 overflow-auto">
+                          {(roundCourseResults.new || []).map(
+                            (course: any, idx: number) => (
+                              <div
+                                key={course.id ?? idx}
+                                onClick={() =>
+                                  selectRoundCourse('new', course, (name, data) =>
+                                    setNewRound({
+                                      ...newRound,
+                                      course: name,
+                                      course_data: data,
+                                    } as any)
+                                  )
+                                }
+                                className="px-4 py-3 hover:bg-gray-700 cursor-pointer border-b border-gray-700 last:border-none text-sm"
+                              >
+                                <div className="font-medium">
+                                  {course.name ||
+                                    course.course_name ||
+                                    'Unknown Course'}
+                                </div>
+                                <div className="text-gray-400">
+                                  {course.club_name ||
+                                    course.city ||
+                                    course.location?.city ||
+                                    ''}{' '}
+                                  • {course.state || course.location?.state || ''}
+                                </div>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">
+                      {isTeamEvent ? 'Max teams' : 'Max players'}
+                    </label>
+                    {isTeamEvent ? (
+                      <input
+                        type="number"
+                        min={1}
+                        value={newRound.max_teams}
+                        onChange={(e) =>
+                          setNewRound({
+                            ...newRound,
+                            max_teams: parseInt(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                      />
+                    ) : (
+                      <input
+                        type="number"
+                        min={1}
+                        value={newRound.max_players}
+                        onChange={(e) =>
+                          setNewRound({
+                            ...newRound,
+                            max_players: parseInt(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                      />
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">
+                      {Number(event.roster_max) > 1
+                        ? 'Price per team'
+                        : 'Price per player'}
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={newRound.price}
+                      onChange={(e) =>
+                        setNewRound({
+                          ...newRound,
+                          price: e.target.value,
+                        })
+                      }
+                      placeholder="Use event price"
+                      className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-2">
+                      Greens fee per person
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={newRound.greens_fee}
+                      onChange={(e) =>
+                        setNewRound({
+                          ...newRound,
+                          greens_fee: e.target.value,
+                        })
+                      }
+                      placeholder="None"
+                      className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                    />
+                  </div>
+                  {hasFilledAmount(newRound.price) && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Registration opens
+                        </label>
+                        <input
+                          type="date"
+                          value={
+                            newRound.registration_open_date ||
+                            event.registration_open_date ||
+                            ''
+                          }
+                          onChange={(e) =>
+                            setNewRound({
+                              ...newRound,
+                              registration_open_date: e.target.value,
+                            })
+                          }
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Open time
+                        </label>
+                        <input
+                          type="time"
+                          value={
+                            newRound.registration_open_time ||
+                            formatRoundClock(event.registration_open_time)
+                          }
+                          onChange={(e) =>
+                            setNewRound({
+                              ...newRound,
+                              registration_open_time: e.target.value,
+                            })
+                          }
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Registration closes
+                        </label>
+                        <input
+                          type="date"
+                          value={
+                            newRound.registration_close_date ||
+                            event.registration_close_date ||
+                            ''
+                          }
+                          onChange={(e) =>
+                            setNewRound({
+                              ...newRound,
+                              registration_close_date: e.target.value,
+                            })
+                          }
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-400 mb-2">
+                          Close time
+                        </label>
+                        <input
+                          type="time"
+                          value={
+                            newRound.registration_close_time ||
+                            formatRoundClock(event.registration_close_time)
+                          }
+                          onChange={(e) =>
+                            setNewRound({
+                              ...newRound,
+                              registration_close_time: e.target.value,
+                            })
+                          }
+                          className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <select
+                    value={newRound.format}
+                    onChange={(e) =>
+                      setNewRound({ ...newRound, format: e.target.value })
+                    }
+                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                  >
+                    {ROUND_FORMATS.map((f) => (
+                      <option key={f.value} value={f.value}>
+                        {f.label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={newRound.start_format}
+                    onChange={(e) =>
+                      setNewRound({ ...newRound, start_format: e.target.value })
+                    }
+                    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                  >
+                    <option value="shotgun">Shotgun</option>
+                    <option value="tee_times">Tee times</option>
+                    <option value="double_tee">Double tee</option>
+                  </select>
+                  {newRound.start_format === 'tee_times' && (
+                    <select
+                      value={newRound.starting_hole}
+                      onChange={(e) =>
+                        setNewRound({
+                          ...newRound,
+                          starting_hole: parseInt(e.target.value) || 1,
+                        })
+                      }
+                      className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                    >
+                      {Array.from({ length: holeCount }, (_, i) => (
+                        <option key={i + 1} value={i + 1}>
+                          Hole {i + 1}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {newRound.start_format === 'double_tee' && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <select
+                        value={newRound.starting_hole}
+                        onChange={(e) =>
+                          setNewRound({
+                            ...newRound,
+                            starting_hole: parseInt(e.target.value) || 1,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                      >
+                        {Array.from({ length: holeCount }, (_, i) => (
+                          <option key={i + 1} value={i + 1}>
+                            Hole {i + 1}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={newRound.starting_hole_2}
+                        onChange={(e) =>
+                          setNewRound({
+                            ...newRound,
+                            starting_hole_2: parseInt(e.target.value) || 10,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+                      >
+                        {Array.from({ length: holeCount }, (_, i) => (
+                          <option key={i + 1} value={i + 1}>
+                            Hole {i + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleAddRound}
+                    className="w-full bg-teal-600 hover:bg-teal-700 py-4 rounded-3xl font-medium"
+                  >
+                    Save round
+                  </button>
+                </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={openNewRoundForm}
+                    className="w-full bg-teal-600 hover:bg-teal-700 py-4 rounded-3xl font-medium"
+                  >
+                    + Add round
+                  </button>
+                )}
+              </div>
+            )}
+          </AccordionSection>
+
+          <AccordionSection
+            title="Price, add-ons & payouts"
+            complete={moneyComplete}
+            summary={moneySummary}
+            startOpen={!moneyComplete}
+          >
+                    {/* Pricing Mode */}
+<div className="bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 mt-8 mb-2">
+  <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
+    {/* Toggle */}
+    <div className="flex items-center justify-center sm:justify-start gap-3 text-sm shrink-0">
+      <span
+        className={
+          (event.pricing_mode || 'event') === 'event'
+            ? 'text-white'
+            : 'text-gray-500'
+        }
+      >
+        Event
+      </span>
+      <button
+        type="button"
+        onClick={() =>
+          handleEventChange(
+            'pricing_mode',
+            (event.pricing_mode || 'event') === 'event' ? 'per_round' : 'event'
+          )
+        }
+        className={`relative w-14 h-8 rounded-full transition-colors ${
+          (event.pricing_mode || 'event') === 'per_round'
+            ? 'bg-blue-600'
+            : 'bg-gray-600'
+        }`}
+      >
+        <span
+          className={`absolute top-1 left-1 w-6 h-6 rounded-full bg-white transition-transform ${
+            (event.pricing_mode || 'event') === 'per_round'
+              ? 'translate-x-6'
+              : 'translate-x-0'
+          }`}
+        />
+      </button>
+      <span
+        className={
+          (event.pricing_mode || 'event') === 'per_round'
+            ? 'text-white'
+            : 'text-gray-500'
+        }
+      >
+        Per-round
+      </span>
+    </div>
+
+    {/* Description */}
+    <p className="text-xs text-gray-400 text-center sm:text-left leading-relaxed sm:border-l sm:border-gray-700 sm:pl-6">
+      {(event.pricing_mode || 'event') === 'per_round'
+        ? 'Event price ignored. Players only pay for rounds they select.'
+        : 'Players pay the event price (plus any rounds marked pay separately).'}
+    </p>
+  </div>
+</div>
+
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+            <label className="block text-sm text-gray-400 mb-2">
+              {(event.pricing_mode || 'event') === 'per_round'
+                ? 'Base Event Price (ignored in per-round mode)'
+                : teamSize > 1
+                  ? 'Price per team'
+                  : 'Price per player'}
+            </label>
+            
+            <input
+              type="number"
+              value={event.price || ''}
+              onChange={(e) =>
+                handleEventChange('price', parseFloat(e.target.value) || 0)
+              }
+              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+              disabled={(event.pricing_mode || 'event') === 'per_round'}
+            />
+                        {teamSize > 1 && (event.pricing_mode || 'event') !== 'per_round' && (
+              <p className="text-xs text-gray-500 mt-2">
+                Captain pays this once at checkout. Teammates are added after
+                payment (or later in My Events).
+              </p>
+            )}
+          </div>
+              <div>
+            <label className="block text-sm text-gray-400 mb-2">
+              Greens fees <span className="text-gray-500">(per player)</span>
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={event?.greens_fee ?? 0}
+              onChange={(e) =>
+                handleEventChange('greens_fee', Number(e.target.value) || 0)
+              }
+              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+            />
+            <p className="text-xs text-gray-500 mt-2">
+              Used on Income and for “refund minus greens fees.”
+            </p>
+          </div>
+            </div>
+            <div className="md:col-span-2 mt-4 pt-6 border-t border-gray-700">
+  <label className="flex items-center gap-3 text-lg cursor-pointer">
+    <input
+      type="checkbox"
+      checked={!!event?.enable_skins}
+      onChange={(e) => {
+        handleEventChange('enable_skins', e.target.checked);
+        if (!e.target.checked) handleEventChange('skins_fee', 0);
+      }}
+      className="w-6 h-6 accent-emerald-600"
+    />
+    <span className="font-medium">Skins game</span>
+  </label>
+  <p className="text-sm text-gray-500 mt-2 ml-9">
+    Players opt in at check-in. Birdie or better (alone) wins a share of the pot.
+  </p>
+
+  {event?.enable_skins && (
+    <div className="mt-4 ml-9 max-w-xs">
+      <label className="block text-sm text-gray-400 mb-2">
+        Cost to play skins (per player)
+      </label>
+      <input
+        type="number"
+        step="0.01"
+        min="0"
+        value={event?.skins_fee ?? 0}
+        onChange={(e) =>
+          handleEventChange('skins_fee', Number(e.target.value) || 0)
+        }
+        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
+      />
+    </div>
+  )}
+</div>
+            <div className="bg-gray-900 border border-yellow-500/30 rounded-3xl p-8 mt-8">
             <h3 className="text-xl font-medium mb-6">Manage Add-ons</h3>
 
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
@@ -1643,11 +3104,8 @@ const handleDeleteEvent = async () => {
               <p className="text-gray-400 text-center py-8">No add-ons added yet.</p>
             )}
           </div>
-        )}
 
-                {/* Sponsors Panel */}
-        {showSponsors && (
-          <div className="bg-gray-900 border border-emerald-500/30 rounded-3xl p-8 mt-8">
+            <div className="bg-gray-900 border border-emerald-500/30 rounded-3xl p-8 mt-8">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
               <h3 className="text-xl font-medium">Sponsor Packages</h3>
               <button
@@ -1829,11 +3287,122 @@ const handleDeleteEvent = async () => {
               )}
             </div>
           </div>
-        )}
 
-        {/* Admins Panel */}
-{showAdmins && (
-  <div className="bg-gray-900 border border-indigo-500/30 rounded-3xl p-8 mt-8">
+            <div className="rounded-2xl border border-amber-500/40 bg-amber-950/40 p-5">
+              <h3 className="font-semibold text-amber-300">Payouts</h3>
+              <p className="text-sm text-gray-300 mt-2 leading-relaxed">
+                Connect Stripe so registration money for this event can be paid
+                out to your bank.
+              </p>
+              {needsPayoutSetup ? (
+                <p className="text-sm text-amber-200 mt-2">
+                  Payouts are not set up yet.
+                </p>
+              ) : (
+                <p className="text-sm text-emerald-400 mt-2">
+                  Payouts connected.
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={handleConnectPayouts}
+                disabled={stripeConnecting}
+                className="mt-4 bg-amber-500 hover:bg-amber-400 disabled:bg-gray-600 text-gray-900 font-semibold px-6 py-3 rounded-2xl"
+              >
+                {stripeConnecting ? 'Opening Stripe…' : 'Connect with Stripe'}
+              </button>
+            </div>
+          </AccordionSection>
+
+          <AccordionSection
+            title="Registration"
+            complete={registrationComplete}
+            summary={registrationSummary}
+            startOpen={!registrationComplete}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Registration opens
+                </label>
+                <input
+                  type="date"
+                  value={event.registration_open_date || ''}
+                  onChange={(e) =>
+                    handleEventChange('registration_open_date', e.target.value)
+                  }
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Open time
+                </label>
+                <input
+                  type="time"
+                  value={event.registration_open_time || ''}
+                  onChange={(e) =>
+                    handleEventChange('registration_open_time', e.target.value)
+                  }
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Registration closes
+                </label>
+                <input
+                  type="date"
+                  value={event.registration_close_date || ''}
+                  onChange={(e) =>
+                    handleEventChange(
+                      'registration_close_date',
+                      e.target.value
+                    )
+                  }
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-2">
+                  Close time
+                </label>
+                <input
+                  type="time"
+                  value={event.registration_close_time || ''}
+                  onChange={(e) =>
+                    handleEventChange('registration_close_time', e.target.value)
+                  }
+                  className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
+                />
+              </div>
+            </div>
+          </AccordionSection>
+
+          <AccordionSection
+            title="People"
+            complete={peopleComplete}
+            summary={peopleSummary}
+            startOpen={!peopleComplete}
+          >
+            <label className="flex items-start gap-3 cursor-pointer bg-gray-900 border border-gray-700 rounded-2xl p-5">
+              <input
+                type="checkbox"
+                checked={onlyAdmin}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setOnlyAdmin(checked);
+                  try {
+                    localStorage.setItem(onlyAdminKey, checked ? '1' : '0');
+                  } catch {
+                    /* ignore */
+                  }
+                }}
+                className="mt-1 w-5 h-5 accent-indigo-600"
+              />
+              <span className="font-medium">I am the only admin.</span>
+            </label>
+            <div className="bg-gray-900 border border-indigo-500/30 rounded-3xl p-8 mt-8">
     <h3 className="text-xl font-medium mb-6">Event Admins</h3>
 
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -1932,331 +3501,54 @@ const handleDeleteEvent = async () => {
       <p className="text-gray-400 text-center py-8">No admins added yet.</p>
     )}
   </div>
-)}
+          </AccordionSection>
 
-        {/* ====================== MAIN FORM FIELDS ====================== */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-12">
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Event Name</label>
-            <input
-              value={event.name || ''}
-              onChange={(e) => handleEventChange('name', e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Event Type</label>
-            <select
-              value={event.event_type || ''}
-              onChange={(e) => handleEventTypeChange(e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            >
-              <option value="">Select Event Type</option>
-              <option value="individual">Individual Stroke Play</option>
-              <option value="2man-best-ball">2-Man Best Ball</option>
-              <option value="2man-scramble">2-Man Scramble</option>
-              <option value="4man-best-ball">4-Man Best Ball</option>
-              <option value="4man-scramble">4-Man Scramble</option>
-              <option value="other">Other</option>
-            </select>
-            <p className="text-sm text-gray-400 mt-2">
-              Players per team:{' '}
-              <span className="text-white font-medium">{teamSize}</span>
-              {teamSize === 1
-                ? ' (individual)'
-                : teamSize === 2
-                  ? ' (2-man)'
-                  : ' (4-man)'}
-            </p>
-          </div>
-          <div>
-  <label className="block text-sm text-gray-400 mb-2">
-    Max players
-  </label>
-  <input
-    type="number"
-    min="1"
-    value={event.max_players ?? ''}
-    onChange={(e) =>
-      handleEventChange(
-        'max_players',
-        e.target.value === '' ? null : parseInt(e.target.value, 10) || null
-      )
-    }
-    placeholder="e.g. 40"
-    className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-  />
-  <p className="text-xs text-gray-500 mt-2">
-    Registration stops at this number (Sold Out). Leave blank for unlimited.
-  </p>
-</div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              {(event.pricing_mode || 'event') === 'per_round'
-                ? 'Base Event Price (ignored in per-round mode)'
-                : teamSize > 1
-                  ? 'Price per team'
-                  : 'Price per player'}
-            </label>
-            
-            <input
-              type="number"
-              value={event.price || ''}
-              onChange={(e) =>
-                handleEventChange('price', parseFloat(e.target.value) || 0)
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-              disabled={(event.pricing_mode || 'event') === 'per_round'}
-            />
-            <p className="text-sm text-gray-400 mt-2">
-              {formatPlatformFeePercent(platformFeePercent)}% platform fee
-              included at checkout
-            </p>
-                        {teamSize > 1 && (event.pricing_mode || 'event') !== 'per_round' && (
-              <p className="text-xs text-gray-500 mt-2">
-                Captain pays this once at checkout. Teammates are added after
-                payment (or later in My Events).
-              </p>
-            )}
-          </div>
-          
-          {/* Skins */}
-<div className="md:col-span-2 mt-4 pt-6 border-t border-gray-700">
-  <label className="flex items-center gap-3 text-lg cursor-pointer">
-    <input
-      type="checkbox"
-      checked={!!event?.enable_skins}
-      onChange={(e) => {
-        handleEventChange('enable_skins', e.target.checked);
-        if (!e.target.checked) handleEventChange('skins_fee', 0);
-      }}
-      className="w-6 h-6 accent-emerald-600"
-    />
-    <span className="font-medium">Skins game</span>
-  </label>
-  <p className="text-sm text-gray-500 mt-2 ml-9">
-    Players opt in at check-in. Birdie or better (alone) wins a share of the pot.
-  </p>
-
-  {event?.enable_skins && (
-    <div className="mt-4 ml-9 max-w-xs">
-      <label className="block text-sm text-gray-400 mb-2">
-        Cost to play skins (per player)
-      </label>
-      <input
-        type="number"
-        step="0.01"
-        min="0"
-        value={event?.skins_fee ?? 0}
-        onChange={(e) =>
-          handleEventChange('skins_fee', Number(e.target.value) || 0)
-        }
-        className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
-      />
-    </div>
-  )}
-</div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Greens fees <span className="text-gray-500">(per player)</span>
-            </label>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              value={event?.greens_fee ?? 0}
-              onChange={(e) =>
-                handleEventChange('greens_fee', Number(e.target.value) || 0)
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            />
-            <p className="text-xs text-gray-500 mt-2">
-              Used on Income and for “refund minus greens fees.”
-            </p>
-          </div>
-
-                    <div>
-            <label className="block text-sm text-gray-400 mb-2">Date of Event</label>
-            <input
-              type="date"
-              value={event.date || ''}
-              onChange={(e) => handleEventChange('date', e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            />
-          </div>
-
-          
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Registration Open Date
-            </label>
-            <input
-              type="date"
-              value={event.registration_open_date || ''}
-              onChange={(e) =>
-                handleEventChange('registration_open_date', e.target.value)
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Open Time</label>
-            <input
-              type="time"
-              value={event.registration_open_time || ''}
-              onChange={(e) =>
-                handleEventChange('registration_open_time', e.target.value)
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">
-              Registration Close Date
-            </label>
-            <input
-              type="date"
-              value={event.registration_close_date || ''}
-              onChange={(e) =>
-                handleEventChange('registration_close_date', e.target.value)
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Close Time</label>
-            <input
-              type="time"
-              value={event.registration_close_time || ''}
-              onChange={(e) =>
-                handleEventChange('registration_close_time', e.target.value)
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            />
-          </div>
-
-
-
-          {/* Number of Holes */}
-          <div className="md:col-span-2">
-            <label className="block text-sm text-gray-400 mb-3">Number of Holes</label>
-            <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
-              <button
-                type="button"
-                onClick={() => handleEventChange('number_of_holes', 9)}
-                className={`flex-1 py-4 rounded-3xl font-medium ${
-                  event?.number_of_holes === 9
-                    ? 'bg-blue-600 text-white'
-                    : 'hover:bg-gray-600 text-gray-300'
-                }`}
-              >
-                9 Holes
-              </button>
-              <button
-                type="button"
-                onClick={() => handleEventChange('number_of_holes', 18)}
-                className={`flex-1 py-4 rounded-3xl font-medium ${
-                  event?.number_of_holes === 18 || !event?.number_of_holes
-                    ? 'bg-blue-600 text-white'
-                    : 'hover:bg-gray-600 text-gray-300'
-                }`}
-              >
-                18 Holes
-              </button>
-            </div>
-          </div>
-
-          {/* Start Format */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Start Format</label>
-            <select
-              value={event.start_format || 'shotgun'}
-              onChange={(e) => handleEventChange('start_format', e.target.value)}
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            >
-              <option value="shotgun">Shotgun Start</option>
-              <option value="tee_times">Tee Times</option>
-              <option value="double_tee">Double Tee</option>
-            </select>
-          </div>
-
-          {event.start_format === 'tee_times' && (
-            <div>
-              <label className="block text-sm text-gray-400 mb-2">
-                Minutes between Tee Times
-              </label>
+          <AccordionSection
+            title="More"
+            complete={moreComplete}
+            summary={moreSummary || undefined}
+            startOpen={!moreComplete}
+          >
+            <label className="flex items-start gap-3 cursor-pointer bg-gray-900 border border-gray-700 rounded-2xl p-5">
               <input
-                type="number"
-                value={event.tee_time_interval || 10}
-                onChange={(e) =>
-                  handleEventChange(
-                    'tee_time_interval',
-                    parseInt(e.target.value) || 10
-                  )
-                }
-                className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-                min="5"
+                type="checkbox"
+                checked={!!event?.is_demo}
+                onChange={(e) => handleEventChange('is_demo', e.target.checked)}
+                className="mt-1 w-5 h-5 accent-amber-500"
               />
-            </div>
-          )}
-
-          {/* Starting Hole */}
-          <div>
-            <label className="block text-sm text-gray-400 mb-2">Starting Hole</label>
-            <select
-              value={event.starting_hole || 1}
-              onChange={(e) =>
-                handleEventChange('starting_hole', parseInt(e.target.value))
-              }
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-            >
-              {Array.from({ length: event?.number_of_holes || 18 }, (_, i) => (
-                <option key={i + 1} value={i + 1}>
-                  Hole {i + 1}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Event Contact */}
-          <div className="md:col-span-2">
-            <label className="block text-sm text-gray-400 mb-4">
-              Event Contact (optional)
+              <span>
+                <span className="font-medium">Demo / training event</span>
+                <span className="block text-sm text-gray-400 mt-1">
+                  Test-mode event. No real charges.
+                </span>
+              </span>
             </label>
-            <div className="space-y-6">
-              <div>
-                <label className="block text-xs text-gray-500 mb-2">Contact Name</label>
+
+            <div>
+              <label className="block text-sm text-gray-400 mb-4">
+                Event contact
+              </label>
+              <div className="space-y-4">
                 <input
-                  placeholder="John Smith"
+                  placeholder="Contact name"
                   value={event.contact_name || ''}
-                  onChange={(e) => handleEventChange('contact_name', e.target.value)}
+                  onChange={(e) =>
+                    handleEventChange('contact_name', e.target.value)
+                  }
                   className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base"
                 />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-2">Email Address</label>
                 <input
                   type="email"
-                  placeholder="John@friedeggevents.app"
+                  placeholder="Contact email"
                   value={event.contact_email || ''}
                   onChange={(e) =>
                     handleEventChange('contact_email', e.target.value)
                   }
                   className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base"
                 />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-2">Phone Number</label>
                 <input
                   type="tel"
-                  placeholder="(555) 555-5555"
+                  placeholder="Contact phone"
                   value={event.contact_phone || ''}
                   onChange={(e) =>
                     handleEventChange('contact_phone', e.target.value)
@@ -2265,74 +3557,54 @@ const handleDeleteEvent = async () => {
                 />
               </div>
             </div>
-          </div>
 
-          {/* Event Description */}
-          <div className="md:col-span-2 mt-4">
-            <h3 className="text-xl font-medium mb-4">Event Description</h3>
-            <textarea
-              value={event.description || ''}
-              onChange={(e) => handleEventChange('description', e.target.value)}
-              rows={6}
-              placeholder="18-hole stroke play tournament with flights based on handicap..."
-              className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5 text-base focus:outline-none focus:border-blue-500 resize-y min-h-[140px]"
-            />
-            <p className="text-xs text-gray-500 mt-2">
-              This will appear on the event page and registration form.
-            </p>
-          </div>
+            <button
+              type="button"
+              onClick={() => router.push(`/event/${eventId}/emails`)}
+              className="w-full bg-gray-700 hover:bg-gray-600 px-5 py-4 rounded-2xl font-medium"
+            >
+              Email players
+            </button>
 
-          {/* Handicaps */}
-          <div className="md:col-span-2 mt-6 pt-8 border-t border-gray-700">
-            <label className="flex items-center gap-3 text-lg cursor-pointer">
-              <input
-                type="checkbox"
-                checked={!!event?.use_handicaps}
-                onChange={(e) =>
-                  handleEventChange('use_handicaps', e.target.checked)
+            <button
+              type="button"
+              onClick={handleDuplicateEvent}
+              disabled={saving || duplicating || deleting}
+              className="w-full bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg"
+            >
+              {duplicating ? 'Duplicating…' : 'Duplicate Event'}
+            </button>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  alert('Update the date and save to postpone the event')
                 }
-                className="w-6 h-6 accent-blue-600"
-              />
-              <span className="font-medium">Use Handicaps for this Event</span>
-            </label>
-            <p className="text-sm text-gray-500 mt-2 ml-9">
-              When enabled, you can enter individual handicaps in the Check-in tab.
-            </p>
-          </div>
+                disabled={saving || duplicating || deleting}
+                className="bg-amber-600 hover:bg-amber-700 disabled:bg-gray-600 py-4 rounded-3xl font-semibold"
+              >
+                Postpone Event
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteEvent}
+                disabled={saving || duplicating || deleting}
+                className="bg-red-600 hover:bg-red-700 disabled:bg-gray-600 py-4 rounded-3xl font-semibold"
+              >
+                {deleting ? 'Deleting…' : 'Delete Event'}
+              </button>
+            </div>
+          </AccordionSection>
         </div>
 
-        {/* Save / Duplicate / Postpone / Delete */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-12">
+        <div className="mt-10">
           <button
             onClick={handleSaveEvent}
             disabled={saving || duplicating || deleting}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg"
+            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg"
           >
             {saving ? 'Saving...' : 'Save Changes'}
-          </button>
-          <button
-            type="button"
-            onClick={handleDuplicateEvent}
-            disabled={saving || duplicating || deleting}
-            className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg"
-          >
-            {duplicating ? 'Duplicating…' : 'Duplicate Event'}
-          </button>
-          <button
-            onClick={() =>
-              alert('Update the date and save to postpone the event')
-            }
-            disabled={saving || duplicating || deleting}
-            className="bg-amber-600 hover:bg-amber-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg"
-          >
-            Postpone Event
-          </button>
-          <button
-            onClick={handleDeleteEvent}
-            disabled={saving || duplicating || deleting}
-            className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded-3xl font-medium text-lg transition-colors flex items-center justify-center gap-2"
-          >
-            🗑️ Delete Event
           </button>
         </div>
       </div>
