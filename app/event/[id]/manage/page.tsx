@@ -93,8 +93,6 @@ function hasFilledAmount(value: unknown) {
 
 function amountInputValue(value: unknown) {
   if (value == null || value === '') return '';
-  const n = Number(value);
-  if (!Number.isFinite(n) || n === 0) return '';
   return String(value);
 }
 
@@ -103,6 +101,55 @@ function parseAmountOrNull(raw: string) {
   if (s === '') return null;
   const n = parseFloat(s);
   return Number.isFinite(n) ? n : null;
+}
+
+function coerceAmount(raw: unknown): number | null {
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
+function optionalInt(raw: unknown): number | null {
+  if (raw == null || raw === '') return null;
+  const n = typeof raw === 'number' ? raw : parseInt(String(raw), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function roundStartType(round: any): string {
+  const t = String(round?.start_type || round?.start_format || 'shotgun');
+  if (t === 'tee_times' || t === 'double_tee' || t === 'shotgun') return t;
+  return 'shotgun';
+}
+
+function roundEntryPrice(round: any): number | null {
+  return coerceAmount(round?.entry_price ?? round?.price);
+}
+
+function buildRoundWritePayload(round: any) {
+  const startType = roundStartType(round);
+  const entryPrice = roundEntryPrice(round);
+  const greens = coerceAmount(round?.greens_fee);
+  return {
+    name: String(round?.name || '').trim() || null,
+    date: round?.date || null,
+    start_time: round?.start_time || null,
+    course: round?.course || null,
+    course_data: round?.course_data ?? null,
+    format: round?.format || null,
+    start_type: startType,
+    starting_hole:
+      startType === 'shotgun' ? null : optionalInt(round?.starting_hole) ?? 1,
+    starting_hole_2:
+      startType === 'double_tee'
+        ? optionalInt(round?.starting_hole_2) ?? 10
+        : null,
+    entry_price: entryPrice,
+    greens_fee: greens,
+    price: entryPrice,
+    pay_separately: hasFilledAmount(entryPrice),
+    max_teams: optionalInt(round?.max_teams),
+    max_players: optionalInt(round?.max_players),
+  };
 }
 
 function formatRoundClock(t?: string | null) {
@@ -229,16 +276,15 @@ const [deleting, setDeleting] = useState(false); // ← here with the rest
   const [expandedRoundId, setExpandedRoundId] = useState<number | 'new' | null>(
     null
   );
-  const [doubleTeeHole2, setDoubleTeeHole2] = useState(10);
     const [newRound, setNewRound] = useState({
     name: '',
     course: '',
     format: 'stroke',
-    start_format: 'shotgun',
+    start_type: 'shotgun',
     starting_hole: 1,
     starting_hole_2: 10,
-    max_teams: 18,
-    max_players: 72,
+    max_teams: 18 as number | '',
+    max_players: 72 as number | '',
     greens_fee: '' as string,
     price: '' as string,
     date: '',
@@ -648,6 +694,10 @@ const handleSaveEvent = async () => {
     return;
   }
 
+  if (roundMode === 'single') {
+    await persistSingleRound({});
+  }
+
   // Sync Skins add-on so check-in / payments work like other add-ons
   try {
     if (event.enable_skins && Number(event.skins_fee) > 0) {
@@ -990,6 +1040,25 @@ const handleSaveEvent = async () => {
     return { max_teams: maxTeams, max_players: maxTeams * roster };
   };
 
+    const emptyNewRound = (caps = defaultRoundCaps()) => ({
+    name: '',
+    course: event?.course || '',
+    format: 'stroke',
+    start_type: 'shotgun',
+    starting_hole: 1,
+    starting_hole_2: 10,
+    max_teams: (caps.max_teams ?? '') as number | '',
+    max_players: (caps.max_players ?? '') as number | '',
+    greens_fee: '' as string,
+    price: '' as string,
+    date: event?.date || '',
+    start_time: '',
+    registration_open_date: event?.registration_open_date || '',
+    registration_open_time: event?.registration_open_time || '',
+    registration_close_date: event?.registration_close_date || '',
+    registration_close_time: event?.registration_close_time || '',
+  });
+
     const handleAddRound = async () => {
     const caps = defaultRoundCaps();
     const isTeam = Number(event?.roster_max) >= 2;
@@ -998,67 +1067,34 @@ const handleSaveEvent = async () => {
     const greensFee = parseAmountOrNull(String(newRound.greens_fee ?? ''));
     const entryPrice = parseAmountOrNull(String(newRound.price ?? ''));
     const maxTeams = isTeam
-      ? Math.max(1, Number(newRound.max_teams) || caps.max_teams || 1)
+      ? optionalInt(newRound.max_teams) ?? caps.max_teams
       : null;
     const maxPlayers = isTeam
-      ? maxTeams! * (Number(event.roster_max) || 4)
-      : Math.max(1, Number(newRound.max_players) || caps.max_players || 72);
+      ? maxTeams != null
+        ? maxTeams * (Number(event.roster_max) || 4)
+        : caps.max_players
+      : optionalInt(newRound.max_players) ?? caps.max_players;
 
-    const base: Record<string, any> = {
+    const payload = {
       event_id: parseInt(eventId),
-      name,
-      start_time: newRound.start_time.trim() || null,
-      max_teams: maxTeams,
-      max_players: maxPlayers,
-      pay_separately: entryPrice != null,
       sort_order: rounds.length,
+      ...buildRoundWritePayload({
+        ...newRound,
+        name,
+        start_type: newRound.start_type || 'shotgun',
+        entry_price: entryPrice,
+        price: entryPrice,
+        greens_fee: greensFee,
+        course: newRound.course.trim() || event?.course || null,
+        course_data: (newRound as any).course_data || event?.course_data || null,
+        date: newRound.date || event?.date || null,
+        start_time: newRound.start_time.trim() || null,
+        max_teams: maxTeams,
+        max_players: maxPlayers,
+      }),
     };
-    if (entryPrice != null) {
-      base.price = entryPrice;
-    }
-    if (greensFee != null) {
-      base.greens_fee = greensFee;
-    }
-    const extras: Record<string, any> = {
-      course: newRound.course.trim() || event?.course || null,
-      course_data: (newRound as any).course_data || null,
-      format: newRound.format || null,
-      start_format: newRound.start_format || 'shotgun',
-      starting_hole:
-        newRound.start_format === 'shotgun'
-          ? null
-          : Number(newRound.starting_hole) || 1,
-      starting_hole_2:
-        newRound.start_format === 'double_tee'
-          ? Number(newRound.starting_hole_2) || 10
-          : null,
-      date: newRound.date || event?.date || null,
-    };
-    if (entryPrice != null) {
-      extras.registration_open_date =
-        newRound.registration_open_date ||
-        event?.registration_open_date ||
-        null;
-      extras.registration_open_time =
-        newRound.registration_open_time ||
-        event?.registration_open_time ||
-        null;
-      extras.registration_close_date =
-        newRound.registration_close_date ||
-        event?.registration_close_date ||
-        null;
-      extras.registration_close_time =
-        newRound.registration_close_time ||
-        event?.registration_close_time ||
-        null;
-    }
 
-    let { error } = await supabase
-      .from('event_rounds')
-      .insert({ ...base, ...extras });
-    if (error) {
-      ({ error } = await supabase.from('event_rounds').insert(base));
-    }
+    const { error } = await supabase.from('event_rounds').insert(payload);
 
     if (error) {
       alert('Failed to add round: ' + error.message);
@@ -1066,25 +1102,7 @@ const handleSaveEvent = async () => {
     }
 
     await reloadRounds();
-    const nextCaps = defaultRoundCaps();
-    setNewRound({
-      name: '',
-      course: event?.course || '',
-      format: 'stroke',
-      start_format: 'shotgun',
-      starting_hole: 1,
-      starting_hole_2: 10,
-      max_teams: nextCaps.max_teams || 18,
-      max_players: nextCaps.max_players || 72,
-      greens_fee: '',
-      price: '',
-      date: event?.date || '',
-      start_time: '',
-      registration_open_date: event?.registration_open_date || '',
-      registration_open_time: event?.registration_open_time || '',
-      registration_close_date: event?.registration_close_date || '',
-      registration_close_time: event?.registration_close_time || '',
-    });
+    setNewRound(emptyNewRound());
     setExpandedRoundId(null);
     setRoundCourseQuery((prev) => {
       const next = { ...prev };
@@ -1099,31 +1117,104 @@ const handleSaveEvent = async () => {
   };
 
   const persistRound = async (id: number, patch: Record<string, any>) => {
+    const mapped = { ...patch };
+    if ('start_format' in mapped && mapped.start_type == null) {
+      mapped.start_type = mapped.start_format;
+    }
+    if ('price' in mapped && !('entry_price' in mapped)) {
+      mapped.entry_price = mapped.price;
+    }
+    if ('entry_price' in mapped) {
+      mapped.price = mapped.entry_price;
+    }
+    if (!id || id <= 0) return;
+    const current = rounds.find((r) => r.id === id) || {};
+    const merged = { ...current, ...mapped };
     setRounds((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, ...patch } : r))
+      prev.map((r) => (r.id === id ? { ...r, ...mapped } : r))
     );
+    const payload = buildRoundWritePayload(merged);
     const { error } = await supabase
       .from('event_rounds')
-      .update(patch)
+      .update(payload)
       .eq('id', id);
     if (error) {
-      const allowed = [
-        'name',
-        'greens_fee',
-        'max_players',
-        'max_teams',
-        'price',
-        'pay_separately',
-        'start_time',
-        'sort_order',
-      ];
-      const slim = Object.fromEntries(
-        Object.entries(patch).filter(([k]) => allowed.includes(k))
-      );
-      if (Object.keys(slim).length) {
-        await supabase.from('event_rounds').update(slim).eq('id', id);
+      console.error('Round save error:', error);
+      alert('Failed to save round: ' + error.message);
+      await reloadRounds();
+      return;
+    }
+    await reloadRounds();
+  };
+
+  const persistSingleRound = async (patch: Record<string, any> = {}) => {
+    const existing = rounds[0];
+    const caps = defaultRoundCaps();
+    const isPerRound = (event?.pricing_mode || 'event') === 'per_round';
+    const mapped = { ...patch };
+    if ('start_format' in mapped && mapped.start_type == null) {
+      mapped.start_type = mapped.start_format;
+    }
+    if ('price' in mapped && !('entry_price' in mapped)) {
+      mapped.entry_price = mapped.price;
+    }
+    const merged = {
+      name: existing?.name || 'Round 1',
+      date: existing?.date || event?.date || null,
+      start_time: existing?.start_time || null,
+      course: existing?.course || event?.course || null,
+      course_data: existing?.course_data || event?.course_data || null,
+      format: existing?.format || null,
+      start_type: existing?.start_type || 'shotgun',
+      starting_hole: existing?.starting_hole ?? 1,
+      starting_hole_2: existing?.starting_hole_2 ?? 10,
+      entry_price: existing?.entry_price ?? existing?.price ?? (isPerRound
+        ? coerceAmount(event?.price)
+        : null),
+      price: existing?.price ?? existing?.entry_price ?? null,
+      greens_fee: existing?.greens_fee ?? null,
+      max_teams: existing?.max_teams ?? caps.max_teams,
+      max_players: existing?.max_players ?? caps.max_players,
+      ...mapped,
+    };
+    if (!isPerRound && !('entry_price' in mapped) && !('price' in mapped)) {
+      if (!hasFilledAmount(merged.entry_price ?? merged.price)) {
+        merged.entry_price = null;
+        merged.price = null;
       }
     }
+    const payload = {
+      event_id: parseInt(eventId),
+      sort_order: existing?.sort_order ?? 0,
+      ...buildRoundWritePayload(merged),
+    };
+    if (existing?.id && existing.id > 0) {
+      setRounds((prev) =>
+        prev.map((r) => (r.id === existing.id ? { ...r, ...merged } : r))
+      );
+      const { error } = await supabase
+        .from('event_rounds')
+        .update(payload)
+        .eq('id', existing.id);
+      if (error) {
+        console.error('Round save error:', error);
+        alert('Failed to save round: ' + error.message);
+        await reloadRounds();
+        return;
+      }
+    } else {
+      setRounds((prev) =>
+        prev.length > 0 ? prev : [{ id: -1, ...payload }]
+      );
+      const { error } = await supabase.from('event_rounds').insert(payload);
+      if (error) {
+        console.error('Round save error:', error);
+        alert('Failed to save round: ' + error.message);
+        await reloadRounds();
+        return;
+      }
+    }
+    await reloadRounds();
   };
 
   const searchRoundCourses = (key: string, query: string) => {
@@ -1181,24 +1272,9 @@ const handleSaveEvent = async () => {
   };
 
   const openNewRoundForm = () => {
-    const caps = defaultRoundCaps();
     setNewRound({
-      name: '',
+      ...emptyNewRound(),
       course: courseLabel || event?.course || '',
-      format: 'stroke',
-      start_format: 'shotgun',
-      starting_hole: 1,
-      starting_hole_2: 10,
-      max_teams: caps.max_teams || 18,
-      max_players: caps.max_players || 72,
-      greens_fee: '',
-      price: '',
-      date: event?.date || '',
-      start_time: '',
-      registration_open_date: event?.registration_open_date || '',
-      registration_open_time: event?.registration_open_time || '',
-      registration_close_date: event?.registration_close_date || '',
-      registration_close_time: event?.registration_close_time || '',
     });
     setRoundCourseQuery((prev) => ({
       ...prev,
@@ -1255,14 +1331,8 @@ const handleDuplicateEvent = async () => {
     if (rounds.length > 0) {
       const roundRows = rounds.map((r: any, i: number) => ({
         event_id: newId,
-        name: r.name,
-        start_time: r.start_time || null,
-        max_teams: r.max_teams,
-        max_players: r.max_players,
-        pay_separately: !!r.pay_separately,
-        price: r.price,
-        greens_fee: r.greens_fee,
         sort_order: r.sort_order ?? i,
+        ...buildRoundWritePayload(r),
       }));
       const { error: roundsErr } = await supabase
         .from('event_rounds')
@@ -1390,6 +1460,9 @@ const handleDeleteEvent = async () => {
   const teamSize = teamSizeFromEventType(event.event_type || '');
   const isTeamEvent = Number(event?.roster_max) >= 2;
   const holeCount = Number(event?.number_of_holes) || 18;
+  const singleRound = rounds[0];
+  const singleStartType = roundStartType(singleRound);
+  const isPerRoundPricing = (event?.pricing_mode || 'event') === 'per_round';
 
   const courseLabel =
     event?.course || courseDisplayName(event?.course_data) || '';
@@ -2005,12 +2078,25 @@ const handleDeleteEvent = async () => {
                     type="number"
                     step="0.01"
                     min="0"
-                    value={amountInputValue(event.greens_fee)}
-                    onChange={(e) =>
-                      handleEventChange(
-                        'greens_fee',
-                        parseAmountOrNull(e.target.value)
-                      )
+                    value={amountInputValue(singleRound?.greens_fee)}
+                    onChange={(e) => {
+                      const n = parseAmountOrNull(e.target.value);
+                      if (singleRound?.id) {
+                        setRounds((prev) =>
+                          prev.map((r) =>
+                            r.id === singleRound.id
+                              ? { ...r, greens_fee: n }
+                              : r
+                          )
+                        );
+                      } else {
+                        persistSingleRound({ greens_fee: n });
+                      }
+                    }}
+                    onBlur={(e) =>
+                      persistSingleRound({
+                        greens_fee: parseAmountOrNull(e.target.value),
+                      })
                     }
                     placeholder="None"
                     className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
@@ -2021,9 +2107,9 @@ const handleDeleteEvent = async () => {
                     Format
                   </label>
                   <select
-                    value={normalizeRoundFormat(event.event_type) || ''}
+                    value={normalizeRoundFormat(singleRound?.format) || ''}
                     onChange={(e) =>
-                      handleEventChange('event_type', e.target.value)
+                      persistSingleRound({ format: e.target.value || null })
                     }
                     className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                   >
@@ -2040,9 +2126,9 @@ const handleDeleteEvent = async () => {
                     Start type
                   </label>
                   <select
-                    value={event.start_format || 'shotgun'}
+                    value={singleStartType}
                     onChange={(e) =>
-                      handleEventChange('start_format', e.target.value)
+                      persistSingleRound({ start_type: e.target.value })
                     }
                     className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                   >
@@ -2051,18 +2137,17 @@ const handleDeleteEvent = async () => {
                     <option value="double_tee">Double tee</option>
                   </select>
                 </div>
-                {(event.start_format || 'shotgun') === 'tee_times' && (
+                {singleStartType === 'tee_times' && (
                   <div>
                     <label className="block text-sm text-gray-400 mb-2">
                       Starting hole
                     </label>
                     <select
-                      value={event.starting_hole || 1}
+                      value={singleRound?.starting_hole || 1}
                       onChange={(e) =>
-                        handleEventChange(
-                          'starting_hole',
-                          parseInt(e.target.value)
-                        )
+                        persistSingleRound({
+                          starting_hole: parseInt(e.target.value, 10),
+                        })
                       }
                       className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                     >
@@ -2074,19 +2159,18 @@ const handleDeleteEvent = async () => {
                     </select>
                   </div>
                 )}
-                {(event.start_format || 'shotgun') === 'double_tee' && (
+                {singleStartType === 'double_tee' && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <label className="block text-sm text-gray-400 mb-2">
                         Starting hole 1
                       </label>
                       <select
-                        value={event.starting_hole || 1}
+                        value={singleRound?.starting_hole || 1}
                         onChange={(e) =>
-                          handleEventChange(
-                            'starting_hole',
-                            parseInt(e.target.value)
-                          )
+                          persistSingleRound({
+                            starting_hole: parseInt(e.target.value, 10),
+                          })
                         }
                         className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                       >
@@ -2102,9 +2186,11 @@ const handleDeleteEvent = async () => {
                         Starting hole 2
                       </label>
                       <select
-                        value={doubleTeeHole2 || 10}
+                        value={singleRound?.starting_hole_2 || 10}
                         onChange={(e) =>
-                          setDoubleTeeHole2(parseInt(e.target.value) || 10)
+                          persistSingleRound({
+                            starting_hole_2: parseInt(e.target.value, 10) || 10,
+                          })
                         }
                         className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                       >
@@ -2121,7 +2207,7 @@ const handleDeleteEvent = async () => {
             ) : (
               <div className="space-y-4">
                 {rounds.map((round) => {
-                  const startType = round.start_format || 'shotgun';
+                  const startType = roundStartType(round);
                   const key = String(round.id);
                   const courseValue =
                     roundCourseQuery[key] ??
@@ -2132,6 +2218,9 @@ const handleDeleteEvent = async () => {
                   const expanded = expandedRoundId === round.id;
                   const unitWord =
                     Number(event.roster_max) > 1 ? 'team' : 'player';
+                  const entryPrice = roundEntryPrice(round);
+                  const includedInEventFee =
+                    !isPerRoundPricing && !hasFilledAmount(entryPrice);
                   const summary = [
                     round.name || 'Round',
                     round.course || courseLabel,
@@ -2139,9 +2228,11 @@ const handleDeleteEvent = async () => {
                     startTypeLabel(startType),
                     formatEventDate(round.date || event.date),
                     formatRoundClock(round.start_time),
-                    hasFilledAmount(round.price)
-                      ? `$${Number(round.price).toFixed(2)} per ${unitWord}`
-                      : null,
+                    includedInEventFee
+                      ? 'Included in event fee'
+                      : hasFilledAmount(entryPrice)
+                        ? `$${Number(entryPrice).toFixed(2)} per ${unitWord}`
+                        : null,
                     hasFilledAmount(round.greens_fee)
                       ? `Greens $${Number(round.greens_fee).toFixed(2)}/person`
                       : null,
@@ -2174,6 +2265,15 @@ const handleDeleteEvent = async () => {
                         <input
                           value={round.name || ''}
                           onChange={(e) =>
+                            setRounds((prev) =>
+                              prev.map((r) =>
+                                r.id === round.id
+                                  ? { ...r, name: e.target.value }
+                                  : r
+                              )
+                            )
+                          }
+                          onBlur={(e) =>
                             persistRound(round.id, { name: e.target.value })
                           }
                           className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
@@ -2188,6 +2288,15 @@ const handleDeleteEvent = async () => {
                             type="date"
                             value={round.date || event.date || ''}
                             onChange={(e) =>
+                              setRounds((prev) =>
+                                prev.map((r) =>
+                                  r.id === round.id
+                                    ? { ...r, date: e.target.value }
+                                    : r
+                                )
+                              )
+                            }
+                            onBlur={(e) =>
                               persistRound(round.id, { date: e.target.value })
                             }
                             className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
@@ -2201,6 +2310,18 @@ const handleDeleteEvent = async () => {
                             type="time"
                             value={formatRoundClock(round.start_time)}
                             onChange={(e) =>
+                              setRounds((prev) =>
+                                prev.map((r) =>
+                                  r.id === round.id
+                                    ? {
+                                        ...r,
+                                        start_time: e.target.value || null,
+                                      }
+                                    : r
+                                )
+                              )
+                            }
+                            onBlur={(e) =>
                               persistRound(round.id, {
                                 start_time: e.target.value || null,
                               })
@@ -2219,10 +2340,19 @@ const handleDeleteEvent = async () => {
                             value={courseValue}
                             onChange={(e) => {
                               searchRoundCourses(key, e.target.value);
+                              setRounds((prev) =>
+                                prev.map((r) =>
+                                  r.id === round.id
+                                    ? { ...r, course: e.target.value }
+                                    : r
+                                )
+                              );
+                            }}
+                            onBlur={(e) =>
                               persistRound(round.id, {
                                 course: e.target.value,
-                              });
-                            }}
+                              })
+                            }
                             placeholder={courseLabel || 'Search course…'}
                             className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
                           />
@@ -2272,12 +2402,32 @@ const handleDeleteEvent = async () => {
                             min={1}
                             value={round.max_teams ?? ''}
                             onChange={(e) => {
-                              const maxTeams =
-                                parseInt(e.target.value, 10) || 0;
+                              const maxTeams = optionalInt(e.target.value);
+                              const maxPlayers =
+                                maxTeams != null
+                                  ? maxTeams * (Number(event.roster_max) || 4)
+                                  : null;
+                              setRounds((prev) =>
+                                prev.map((r) =>
+                                  r.id === round.id
+                                    ? {
+                                        ...r,
+                                        max_teams: maxTeams,
+                                        max_players: maxPlayers,
+                                      }
+                                    : r
+                                )
+                              );
+                            }}
+                            onBlur={(e) => {
+                              const maxTeams = optionalInt(e.target.value);
                               persistRound(round.id, {
                                 max_teams: maxTeams,
                                 max_players:
-                                  maxTeams * (Number(event.roster_max) || 4),
+                                  maxTeams != null
+                                    ? maxTeams *
+                                      (Number(event.roster_max) || 4)
+                                    : null,
                               });
                             }}
                             className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
@@ -2288,9 +2438,22 @@ const handleDeleteEvent = async () => {
                             min={1}
                             value={round.max_players ?? ''}
                             onChange={(e) =>
+                              setRounds((prev) =>
+                                prev.map((r) =>
+                                  r.id === round.id
+                                    ? {
+                                        ...r,
+                                        max_players: optionalInt(
+                                          e.target.value
+                                        ),
+                                      }
+                                    : r
+                                )
+                              )
+                            }
+                            onBlur={(e) =>
                               persistRound(round.id, {
-                                max_players:
-                                  parseInt(e.target.value, 10) || 0,
+                                max_players: optionalInt(e.target.value),
                               })
                             }
                             className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
@@ -2307,15 +2470,35 @@ const handleDeleteEvent = async () => {
                           type="number"
                           step="0.01"
                           min="0"
-                          value={amountInputValue(round.price)}
+                          value={amountInputValue(entryPrice)}
                           onChange={(e) => {
                             const n = parseAmountOrNull(e.target.value);
+                            setRounds((prev) =>
+                              prev.map((r) =>
+                                r.id === round.id
+                                  ? {
+                                      ...r,
+                                      entry_price: n,
+                                      price: n,
+                                      pay_separately: hasFilledAmount(n),
+                                    }
+                                  : r
+                              )
+                            );
+                          }}
+                          onBlur={(e) => {
+                            const n = parseAmountOrNull(e.target.value);
                             persistRound(round.id, {
+                              entry_price: n,
                               price: n,
-                              pay_separately: n != null,
+                              pay_separately: hasFilledAmount(n),
                             });
                           }}
-                          placeholder="Use event price"
+                          placeholder={
+                            isPerRoundPricing
+                              ? 'Round price'
+                              : 'Included in event fee'
+                          }
                           className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
                         />
                       </div>
@@ -2329,15 +2512,25 @@ const handleDeleteEvent = async () => {
                           min="0"
                           value={amountInputValue(round.greens_fee)}
                           onChange={(e) => {
+                            const n = parseAmountOrNull(e.target.value);
+                            setRounds((prev) =>
+                              prev.map((r) =>
+                                r.id === round.id
+                                  ? { ...r, greens_fee: n }
+                                  : r
+                              )
+                            );
+                          }}
+                          onBlur={(e) =>
                             persistRound(round.id, {
                               greens_fee: parseAmountOrNull(e.target.value),
-                            });
-                          }}
+                            })
+                          }
                           placeholder="None"
                           className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
                         />
                       </div>
-                      {hasFilledAmount(round.price) && (
+                      {hasFilledAmount(entryPrice) && (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
                             <label className="block text-sm text-gray-400 mb-2">
@@ -2446,7 +2639,7 @@ const handleDeleteEvent = async () => {
                           value={startType}
                           onChange={(e) =>
                             persistRound(round.id, {
-                              start_format: e.target.value,
+                              start_type: e.target.value,
                             })
                           }
                           className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
@@ -2637,11 +2830,12 @@ const handleDeleteEvent = async () => {
                       <input
                         type="number"
                         min={1}
-                        value={newRound.max_teams}
+                        value={newRound.max_teams ?? ''}
                         onChange={(e) =>
                           setNewRound({
                             ...newRound,
-                            max_teams: parseInt(e.target.value) || 0,
+                            max_teams: (optionalInt(e.target.value) ??
+                              '') as number | '',
                           })
                         }
                         className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
@@ -2650,11 +2844,12 @@ const handleDeleteEvent = async () => {
                       <input
                         type="number"
                         min={1}
-                        value={newRound.max_players}
+                        value={newRound.max_players ?? ''}
                         onChange={(e) =>
                           setNewRound({
                             ...newRound,
-                            max_players: parseInt(e.target.value) || 0,
+                            max_players: (optionalInt(e.target.value) ??
+                              '') as number | '',
                           })
                         }
                         className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
@@ -2797,9 +2992,9 @@ const handleDeleteEvent = async () => {
                     ))}
                   </select>
                   <select
-                    value={newRound.start_format}
+                    value={newRound.start_type}
                     onChange={(e) =>
-                      setNewRound({ ...newRound, start_format: e.target.value })
+                      setNewRound({ ...newRound, start_type: e.target.value })
                     }
                     className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-4"
                   >
@@ -2807,7 +3002,7 @@ const handleDeleteEvent = async () => {
                     <option value="tee_times">Tee times</option>
                     <option value="double_tee">Double tee</option>
                   </select>
-                  {newRound.start_format === 'tee_times' && (
+                  {newRound.start_type === 'tee_times' && (
                     <select
                       value={newRound.starting_hole}
                       onChange={(e) =>
@@ -2825,7 +3020,7 @@ const handleDeleteEvent = async () => {
                       ))}
                     </select>
                   )}
-                  {newRound.start_format === 'double_tee' && (
+                  {newRound.start_type === 'double_tee' && (
                     <div className="grid grid-cols-2 gap-4">
                       <select
                         value={newRound.starting_hole}
