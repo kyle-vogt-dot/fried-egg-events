@@ -22,6 +22,15 @@ const teamSizeFromEventType = (type: string) => {
   return 1; // other / unknown
 };
 
+function tomorrowDateStr() {
+  const d = new Date();
+  d.setDate(d.getDate() + 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 export default function EventManagePage() {
   const params = useParams();
   const router = useRouter();
@@ -57,6 +66,7 @@ export default function EventManagePage() {
   const [showRounds, setShowRounds] = useState(false);
   const [saving, setSaving] = useState(false);
 const [deleting, setDeleting] = useState(false); // ← here with the rest
+  const [duplicating, setDuplicating] = useState(false);
 
   const [newFlight, setNewFlight] = useState({ name: '', range: '' });
   const [newAddon, setNewAddon] = useState({
@@ -846,6 +856,101 @@ const handleSaveEvent = async () => {
   };
 
 
+
+const handleDuplicateEvent = async () => {
+  if (!event) return;
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    alert('Please log in to duplicate this event.');
+    return;
+  }
+
+  const ok = confirm(
+    `Duplicate “${event.name}”? Copies settings, rounds, add-ons, course, pricing, and image. Does not copy players, scores, check-ins, emails, or books.`
+  );
+  if (!ok) return;
+
+  setDuplicating(true);
+  try {
+    const rest = { ...event };
+    delete rest.id;
+    delete rest.created_at;
+    delete rest.updated_at;
+
+    const { data: newEvent, error: insertError } = await supabase
+      .from('tournaments')
+      .insert({
+        ...rest,
+        name: `Copy of ${event.name || 'Event'}`,
+        date: tomorrowDateStr(),
+        is_demo: false,
+        created_by: user.id,
+        is_active: true,
+      })
+      .select('id')
+      .single();
+
+    if (insertError || !newEvent?.id) {
+      throw new Error(insertError?.message || 'Could not create the copy');
+    }
+
+    const newId = newEvent.id;
+    const warnings: string[] = [];
+
+    if (rounds.length > 0) {
+      const roundRows = rounds.map((r: any, i: number) => ({
+        event_id: newId,
+        name: r.name,
+        start_time: r.start_time || null,
+        max_teams: r.max_teams,
+        max_players: r.max_players,
+        pay_separately: !!r.pay_separately,
+        price: r.price,
+        greens_fee: r.greens_fee,
+        sort_order: r.sort_order ?? i,
+      }));
+      const { error: roundsErr } = await supabase
+        .from('event_rounds')
+        .insert(roundRows);
+      if (roundsErr) {
+        console.error('Duplicate rounds failed:', roundsErr);
+        warnings.push('rounds');
+      }
+    }
+
+    if (addons.length > 0) {
+      const addonRows = addons.map((a: any) => ({
+        event_id: newId,
+        name: a.name,
+        quantity_available: a.quantity_available,
+        price_per_unit: a.price_per_unit,
+      }));
+      const { error: addonsErr } = await supabase
+        .from('event_addons')
+        .insert(addonRows);
+      if (addonsErr) {
+        console.error('Duplicate add-ons failed:', addonsErr);
+        warnings.push('add-ons');
+      }
+    }
+
+    if (warnings.length > 0) {
+      alert(
+        `Event copied, but ${warnings.join(' and ')} did not copy. You can add them on the new manage page.`
+      );
+    }
+
+    router.push(`/event/${newId}/manage`);
+  } catch (e: any) {
+    console.error(e);
+    alert(e.message || 'Failed to duplicate event');
+  } finally {
+    setDuplicating(false);
+  }
+};
 
 const handleDeleteEvent = async () => {
   if (!event) return;
@@ -2196,26 +2301,35 @@ const handleDeleteEvent = async () => {
           </div>
         </div>
 
-        {/* Save / Postpone / Delete */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-12">
+        {/* Save / Duplicate / Postpone / Delete */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-12">
           <button
             onClick={handleSaveEvent}
-            disabled={saving}
+            disabled={saving || duplicating || deleting}
             className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg"
           >
             {saving ? 'Saving...' : 'Save Changes'}
           </button>
           <button
+            type="button"
+            onClick={handleDuplicateEvent}
+            disabled={saving || duplicating || deleting}
+            className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg"
+          >
+            {duplicating ? 'Duplicating…' : 'Duplicate Event'}
+          </button>
+          <button
             onClick={() =>
               alert('Update the date and save to postpone the event')
             }
-            className="bg-amber-600 hover:bg-amber-700 py-5 rounded-3xl font-semibold text-lg"
+            disabled={saving || duplicating || deleting}
+            className="bg-amber-600 hover:bg-amber-700 disabled:bg-gray-600 py-5 rounded-3xl font-semibold text-lg"
           >
             Postpone Event
           </button>
           <button
             onClick={handleDeleteEvent}
-            disabled={saving}
+            disabled={saving || duplicating || deleting}
             className="px-8 py-4 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 rounded-3xl font-medium text-lg transition-colors flex items-center justify-center gap-2"
           >
             🗑️ Delete Event
