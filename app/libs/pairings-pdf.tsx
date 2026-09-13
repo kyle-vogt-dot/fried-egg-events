@@ -1,4 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
+import { isListable } from '@/app/libs/event-emails';
 
 type Slot = 'A' | 'B' | 'C' | 'D';
 
@@ -40,20 +41,6 @@ function getRoundPairing(reg: any, roundId: number | null) {
   }
   return { hole: null, slot: null, tee_time: null };
 }
-
-const isListable = (r: any) => {
-  if (r.refunded === true) return false;
-  if (r.paid === true) return true;
-  const m = String(r.payment_method || '').toLowerCase();
-  return [
-    'comp',
-    'complimentary',
-    'cash',
-    'manual',
-    'checkin',
-    'payment_link',
-  ].includes(m);
-};
 
 function isTeamEvent(event: any) {
   const mt = Number(event?.max_teammates || 0);

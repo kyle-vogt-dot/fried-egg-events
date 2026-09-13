@@ -23,6 +23,71 @@ type SkinRow = {
   amount: number;
 };
 
+function defaultHoles(numHoles: number) {
+  return Array.from({ length: numHoles }, (_, i) => ({
+    hole: i + 1,
+    par: 4,
+    yardage: 400,
+    handicap: i + 1,
+  }));
+}
+
+function yardsFromScorecardHole(h: any): number {
+  if (h.yardage != null || h.yards != null) {
+    return Number(h.yardage ?? h.yards) || 0;
+  }
+  const tees = h.tees;
+  if (!tees || typeof tees !== 'object') return 0;
+
+  for (const key of Object.keys(tees)) {
+    const y = Number(tees[key]?.yards ?? tees[key]?.yardage ?? 0);
+    if (y > 0) return y;
+  }
+  return 0;
+}
+
+function getHolesFromCourseData(courseData: any, numHoles: number = 18) {
+  if (!courseData) return defaultHoles(numHoles);
+
+  const root = courseData.course || courseData.data || courseData;
+  let raw: any[] = [];
+
+  if (Array.isArray(root.scorecard) && root.scorecard.length > 0) {
+    raw = root.scorecard;
+  } else if (Array.isArray(root.holes) && root.holes.length > 0) {
+    raw = root.holes;
+  } else if (root.tees) {
+    const tees = root.tees;
+    const male = tees.male || tees.Men || tees.men;
+    const list = Array.isArray(male)
+      ? male
+      : Array.isArray(tees)
+        ? tees
+        : [];
+    const tee = list[0];
+    if (tee?.holes) raw = tee.holes;
+    else if (tee?.scorecard) raw = tee.scorecard;
+  }
+
+  if (!raw.length) return defaultHoles(numHoles);
+
+  const holes = raw.map((h: any, i: number) => {
+    const par = Number(h.par ?? h.Par ?? 0);
+    const handicap = Number(h.handicap ?? h.Handicap ?? 0);
+    const yardage = yardsFromScorecardHole(h);
+
+    return {
+      hole: Number(h.hole ?? h.Hole ?? i + 1),
+      par: par > 0 ? par : 4,
+      yardage: yardage > 0 ? yardage : 400,
+      handicap: handicap > 0 ? handicap : i + 1,
+    };
+  });
+
+  const sliced = holes.slice(0, numHoles);
+  return sliced.length ? sliced : defaultHoles(numHoles);
+}
+
 function computeBirdieSkins(opts: {
   participants: { key: string; scores: Record<number, number> }[];
   parMap: Record<number, number>;
@@ -86,6 +151,7 @@ function getPairingLabel(reg: any, roundId: number | 'all') {
   return '';
 }
 
+
 function getFlightFromHandicap(handicap: number, flights: any[]) {
   if (!flights || flights.length === 0) return '';
 
@@ -113,22 +179,61 @@ function formatToPar(toPar: number | null | undefined) {
   return String(toPar);
 }
 
+function holesFromCourse(courseData: any): any[] {
+  const root = courseData?.course || courseData?.data || courseData;
+  if (!root) return [];
+
+  if (Array.isArray(root.scorecard) && root.scorecard.length) return root.scorecard;
+  if (Array.isArray(root.holes) && root.holes.length) return root.holes;
+
+  const male = root.tees?.male || root.tees?.Men || root.tees?.men;
+  const tee = Array.isArray(male) ? male[0] : null;
+  if (Array.isArray(tee?.holes) && tee.holes.length) return tee.holes;
+  if (Array.isArray(tee?.scorecard) && tee.scorecard.length) return tee.scorecard;
+  return [];
+}
+
 function getParForHole(courseData: any, hole: number): number {
-  const cd = courseData;
-  if (!cd) return 4;
+  const raw = holesFromCourse(courseData);
+  const h =
+    raw.find((x: any) => Number(x.Hole ?? x.hole) === hole) || raw[hole - 1];
+  const par = Number(h?.Par ?? h?.par ?? 0);
+  return par > 0 ? par : 4;
+}
 
-  let holes: any[] = [];
-  if (Array.isArray(cd.scorecard)) holes = cd.scorecard;
-  else if (cd.course?.scorecard) holes = cd.course.scorecard;
-  else if (cd.holes) holes = cd.holes;
+function getHandicapForHole(courseData: any, hole: number): number {
+  const raw = holesFromCourse(courseData);
+  const h =
+    raw.find((x: any) => Number(x.Hole ?? x.hole) === hole) || raw[hole - 1];
+  const n = Number(
+    h?.handicap ??
+      h?.Handicap ??
+      h?.stroke_index ??
+      h?.si ??
+      h?.hcp ??
+      0
+  );
+  return n > 0 && n <= 18 ? n : 0;
+}
+/** Lower score on the lowest-handicap hole that they both have posted wins. */
+function scorecardPlayoff(
+  a: Record<number, number>,
+  b: Record<number, number>,
+  courseData: any,
+  numHoles: number
+): number {
+  const holes = Array.from({ length: numHoles }, (_, i) => i + 1).sort(
+    (h1, h2) =>
+      getHandicapForHole(courseData, h1) - getHandicapForHole(courseData, h2)
+  );
 
-  if (!holes.length) return 4;
-
-  const holeData =
-    holes.find((x: any) => Number(x.Hole || x.hole) === hole) ||
-    holes[hole - 1];
-
-  return Number(holeData?.Par || holeData?.par) || 4;
+  for (const hole of holes) {
+    const sa = Number(a[hole] || 0);
+    const sb = Number(b[hole] || 0);
+    if (sa <= 0 || sb <= 0) continue;
+    if (sa !== sb) return sa - sb;
+  }
+  return 0;
 }
 
 function ScoreMark({
@@ -227,6 +332,11 @@ export default function EventLeaderboardPage() {
     return n === 9 ? 9 : 18;
   }, [event]);
 
+    const courseHoles = useMemo(
+    () => getHolesFromCourseData(event?.course_data, numHoles),
+    [event?.course_data, numHoles]
+  );
+
   const selectedRound = useMemo(() => {
     if (selectedRoundId === 'all') return null;
     return rounds.find((r) => r.id === selectedRoundId) || null;
@@ -236,9 +346,13 @@ export default function EventLeaderboardPage() {
     return registrations.filter((r) => {
       if (!isCheckedInForRound(r, selectedRoundId)) return false;
       if (selectedRoundId === 'all') return true;
-      const ids: number[] = r.selected_round_ids || [];
+      const ids = Array.isArray(r.selected_round_ids)
+        ? r.selected_round_ids.map(Number)
+        : r.round_id
+          ? [Number(r.round_id)]
+          : [];
       if (!ids.length) return rounds.length <= 1;
-      return ids.includes(selectedRoundId as number);
+      return ids.includes(Number(selectedRoundId));
     });
   }, [registrations, selectedRoundId, rounds.length]);
 
@@ -259,6 +373,10 @@ export default function EventLeaderboardPage() {
       } else {
         setBlurHoleInput('');
       }
+            const cd = eventData?.course_data;
+      const root = cd?.course || cd?.data || cd;
+      console.log('scorecard0', root?.scorecard?.[0] || root?.holes?.[0]);
+      console.log('tees', root?.tees);
 
       const {
         data: { user },
@@ -399,13 +517,7 @@ export default function EventLeaderboardPage() {
       return acc;
     }, {});
 
-    const courseHoles = (() => {
-      const cd = event?.course_data;
-      if (!cd) return null;
-      if (Array.isArray(cd.scorecard)) return cd.scorecard;
-      if (cd.course?.scorecard) return cd.course.scorecard;
-      return null;
-    })();
+
 
     const rows = Object.keys(grouped).map((teamName) => {
       const teamMembers = grouped[teamName];
@@ -455,16 +567,7 @@ export default function EventLeaderboardPage() {
       let parPlayed = 0;
       for (let h = 1; h <= numHoles; h++) {
         if (scores[h] != null && Number(scores[h]) > 0) {
-          if (courseHoles && Array.isArray(courseHoles)) {
-            const holeData =
-              courseHoles[h - 1] ||
-              courseHoles.find(
-                (x: any) => Number(x.Hole || x.hole) === h
-              );
-            parPlayed += Number(holeData?.Par || holeData?.par) || 4;
-          } else {
-            parPlayed += 4;
-          }
+          parPlayed += getParForHole(event?.course_data, h);
         }
       }
 
@@ -490,6 +593,13 @@ export default function EventLeaderboardPage() {
         return a.toPar - b.toPar;
       }
       if (a.total !== b.total) return a.total - b.total;
+      const po = scorecardPlayoff(
+        a.scores,
+        b.scores,
+        event?.course_data,
+        numHoles
+      );
+      if (po !== 0) return po;
       return a.teamName.localeCompare(b.teamName);
     });
 
@@ -960,27 +1070,77 @@ const isPlayingSkins = (reg: any) => {
             >
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-900">
-                  <th className="text-left py-4 px-6 font-medium w-16">Pos</th>
-                  <th className="text-left py-4 px-6 font-medium">Team</th>
-                  {Array.from({ length: numHoles }, (_, i) => (
+                  <th
+                    rowSpan={3}
+                    className="text-left py-3 px-4 font-medium w-14 align-middle"
+                  >
+                    Pos
+                  </th>
+                  <th
+                    rowSpan={3}
+                    className="text-left py-3 px-4 font-medium align-middle"
+                  >
+                    Team
+                    
+                  </th>
+                  <th className="text-right py-2 px-2 text-xs text-gray-500 font-normal w-14">
+                    Hole
+                  </th>
+                  
+                  {courseHoles.map((h) => (
                     <th
-                      key={i}
-                      className="text-center py-4 px-3 font-medium text-sm w-10"
+                      key={`h-${h.hole}`}
+                      className="text-center py-2 px-1 text-sm font-semibold text-white w-10"
                     >
-                      {i + 1}
+                      {h.hole}
                     </th>
                   ))}
-                  <th className="text-center py-4 px-6 font-medium text-emerald-400">
+                  <th
+                    rowSpan={3}
+                    className="text-center py-3 px-4 font-medium text-emerald-400 align-middle"
+                  >
                     {numHoles > 9 ? 'Out' : 'Thru'}
                   </th>
                   {numHoles > 9 && (
-                    <th className="text-center py-4 px-6 font-medium text-emerald-400">
+                    <th
+                      rowSpan={3}
+                      className="text-center py-3 px-4 font-medium text-emerald-400 align-middle"
+                    >
                       In
                     </th>
                   )}
-                  <th className="text-center py-4 px-6 font-medium">
+                  <th
+                    rowSpan={3}
+                    className="text-center py-3 px-4 font-medium align-middle"
+                  >
                     {showNet ? 'Net vs par' : 'vs par'}
                   </th>
+                </tr>
+                <tr className="bg-gray-900">
+                  <th className="text-right py-1 px-2 text-xs font-normal text-gray-400">
+                    Par
+                  </th>
+                  {courseHoles.map((h) => (
+                    <th
+                      key={`p-${h.hole}`}
+                      className="text-center py-1 px-1 text-xs font-normal text-gray-400"
+                    >
+                      {h.par}
+                    </th>
+                  ))}
+                </tr>
+                <tr className="border-b border-gray-700 bg-gray-900">
+                  <th className="text-right py-1 px-2 text-xs font-normal text-teal-400">
+                    Index
+                  </th>
+                  {courseHoles.map((h) => (
+                    <th
+                      key={`i-${h.hole}`}
+                      className="text-center py-1 px-1 text-xs font-normal text-teal-400"
+                    >
+                      {h.handicap || '—'}
+                    </th>
+                  ))}
                 </tr>
               </thead>
 
@@ -991,6 +1151,7 @@ const isPlayingSkins = (reg: any) => {
                     const prevToPar =
                       index > 0 ? leaderboardRows[index - 1].toPar : null;
                     if (row.toPar !== prevToPar) rank = index + 1;
+                    
 
                     const position =
                       row.holesPlayed === 0
@@ -1000,6 +1161,7 @@ const isPlayingSkins = (reg: any) => {
                           : leaderboardRows[index - 1]?.toPar === row.toPar
                             ? `T${rank}`
                             : String(rank);
+                            
 
                     return (
                       <tr
@@ -1024,21 +1186,18 @@ const isPlayingSkins = (reg: any) => {
                             </div>
                           )}
                         </td>
+                                                <td aria-hidden className="w-14 p-0" />
 
-                        {Array.from({ length: numHoles }, (_, i) => {
-                          const hole = i + 1;
-                          const par = getParForHole(event?.course_data, hole);
-                          return (
-                            <td key={hole} className="text-center py-3 px-1">
-                              <div className="flex justify-center">
-                                <ScoreMark
-                                  score={row.scores[hole]}
-                                  par={par}
-                                />
-                              </div>
-                            </td>
-                          );
-                        })}
+                        {courseHoles.map((h) => (
+                          <td key={h.hole} className="text-center py-3 px-1">
+                            <div className="flex justify-center">
+                              <ScoreMark
+                                score={row.scores[h.hole]}
+                                par={h.par}
+                              />
+                            </div>
+                          </td>
+                        ))}
 
                         <td className="text-center py-5 px-6 font-semibold text-emerald-400 text-lg">
                           {row.front9 || '—'}
@@ -1108,24 +1267,22 @@ const isPlayingSkins = (reg: any) => {
             </div>
 
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-6">
-              {Array.from({ length: numHoles }, (_, i) => {
-                const hole = i + 1;
-                const s = scorecardRow.scores[hole];
-                const par = getParForHole(event?.course_data, hole);
-                return (
-                  <div
-                    key={hole}
-                    className="bg-gray-900 rounded-xl p-3 text-center"
-                  >
-                    <div className="text-xs text-gray-500">
-                      H{hole} · p{par}
-                    </div>
-                    <div className="mt-1 flex justify-center min-h-[2.25rem] items-center">
-                      <ScoreMark score={s} par={par} />
-                    </div>
-                  </div>
-                );
-              })}
+                  {Array.from({ length: numHoles }, (_, i) => {
+                    const hole = i + 1;
+                    const par = getParForHole(event?.course_data, hole);
+                    const hcp = getHandicapForHole(event?.course_data, hole);
+                    return (
+                      <th
+                        key={hole}
+                        className="text-center py-3 px-2 font-medium text-sm w-12"
+                      >
+                        <div>{hole}</div>
+                        <div className="text-[10px] text-gray-500 font-normal">
+                          p{par} · {hcp}
+                        </div>
+                      </th>
+                    );
+                  })}
             </div>
 
             <div className="flex justify-between text-sm text-gray-400 border-t border-gray-700 pt-4">

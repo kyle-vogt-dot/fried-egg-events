@@ -11,6 +11,7 @@ import {
   StyleSheet,
   PDFDownloadLink,
 } from '@react-pdf/renderer';
+import { isListableReg } from '@/app/libs/event-emails';
 
 type Slot = 'A' | 'B' | 'C' | 'D';
 type StartFormat = 'shotgun' | 'tee_times' | 'double_tee';
@@ -438,19 +439,7 @@ export default function EventPairingsPage() {
       .eq('event_id', id)
       .order('created_at', { ascending: true });
 
-    const listable = (regs || []).filter((r: any) => {
-      if (r.refunded === true) return false;
-      if (r.paid === true) return true;
-      const m = String(r.payment_method || '').toLowerCase();
-      return [
-        'comp',
-        'complimentary',
-        'cash',
-        'manual',
-        'checkin',
-        'payment_link',
-      ].includes(m);
-    });
+    const listable = (regs || []).filter(isListableReg);
 
     setAllRegs(listable);
 

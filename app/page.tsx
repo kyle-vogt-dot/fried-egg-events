@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { createBrowserClient } from '@supabase/ssr';
 import { useRouter } from 'next/navigation';
+import { isListableReg } from '@/app/libs/event-emails';
 
 export default function EventsPage() {
   const [events, setEvents] = useState<any[]>([]);
@@ -18,13 +19,11 @@ export default function EventsPage() {
 
   const router = useRouter();
 
-  function isListableReg(r: any) {
-  if (r.refunded === true) return false;
-  if (r.paid === true) return true;
-  const m = String(r.payment_method || '').toLowerCase();
-  return ['comp', 'complimentary', 'cash', 'manual', 'checkin', 'payment_link'].includes(
-    m
-  );
+function isPublicHomepageEvent(event: any) {
+  if (event?.is_demo === true) return false;
+  const name = String(event?.name || '');
+  if (/\b(demo|test|sandbox)\b/i.test(name)) return false;
+  return true;
 }
 
 function getEventRegWindow(event: any) {
@@ -51,28 +50,6 @@ function getEventRegWindow(event: any) {
   return { notYetOpen, closed, isOpen };
 }
 
-  useEffect(() => {
-    const fetchEvents = async () => {
-      const { data } = await supabase
-        .from('tournaments')
-        .select('*')
-        .eq('is_active', true)
-        .eq('is_locked', false)
-        .order('date', { ascending: true });
-
-      setEvents(data || []);
-      setLoading(false);
-    };
-
-    fetchEvents();
-}, []);   // ← Keep empty array for now
-
-  const filteredEvents = events.filter(event =>
-    event.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    event.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    event.course?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
   const [regCounts, setRegCounts] = useState<Record<number, number>>({});
 
   useEffect(() => {
@@ -84,7 +61,7 @@ function getEventRegWindow(event: any) {
         .eq('is_locked', false)
         .order('date', { ascending: true });
 
-      const list = data || [];
+      const list = (data || []).filter(isPublicHomepageEvent);
       setEvents(list);
 
       const ids = list.map((e: any) => e.id);
@@ -108,6 +85,13 @@ function getEventRegWindow(event: any) {
 
     fetchEvents();
   }, []);
+
+  const filteredEvents = events.filter(
+    (event) =>
+      event.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      event.location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      event.course?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   const handleCreateEvent = async () => {
     setCreating(true);

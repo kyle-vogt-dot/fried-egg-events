@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { isListable } from '@/app/libs/event-emails';
 
 function admin() {
   return createClient(
@@ -7,20 +8,6 @@ function admin() {
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 }
-
-const isListable = (r: any) => {
-  if (r.refunded === true) return false;
-  if (r.paid === true) return true;
-  const m = String(r.payment_method || '').toLowerCase();
-  return [
-    'comp',
-    'complimentary',
-    'cash',
-    'manual',
-    'checkin',
-    'payment_link',
-  ].includes(m);
-};
 
 export async function POST(req: NextRequest) {
   try {

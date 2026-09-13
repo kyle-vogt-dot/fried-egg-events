@@ -24,6 +24,7 @@ function isCheckedInForRound(reg: any, roundId: number | 'all') {
   return !!reg.checked_in;
 }
 
+
 function lockKey(roundId: number | 'all') {
   return roundId === 'all' ? 'all' : String(roundId);
 }
@@ -109,6 +110,7 @@ function getPairingLabel(reg: any, roundId: number | 'all') {
   }
   return '';
 }
+
 
 function ScoreMark({
   score,
@@ -216,9 +218,13 @@ export default function EventScoringPage() {
       if (!isCheckedInForRound(r, selectedRoundId)) return false;
 
       if (selectedRoundId === 'all') return true;
-      const ids: number[] = r.selected_round_ids || [];
+      const ids = Array.isArray(r.selected_round_ids)
+        ? r.selected_round_ids.map(Number)
+        : r.round_id
+          ? [Number(r.round_id)]
+          : [];
       if (!ids.length) return rounds.length <= 1;
-      return ids.includes(selectedRoundId as number);
+      return ids.includes(Number(selectedRoundId));
     });
   }, [registrations, selectedRoundId, rounds.length]);
 
@@ -392,6 +398,11 @@ export default function EventScoringPage() {
       alert('No scores entered for this team.');
       return;
     }
+        if (selectedRoundId === 'all') {
+      alert('Pick a specific round before submitting scores.');
+      setSavingKey(null);
+      return;
+    }
 
     setSavingKey(teamKey);
     const key = lockKey(selectedRoundId);
@@ -399,25 +410,23 @@ export default function EventScoringPage() {
     try {
       for (const regId of memberIds) {
         // Clear existing holes for this reg (+ round when scoped)
+        const roundId = Number(selectedRoundId);
+
         for (const [hole] of holeEntries) {
-          let del = supabase
+          const { error: delErr } = await supabase
             .from('scores')
             .delete()
             .eq('registration_id', regId)
-            .eq('hole', parseInt(hole, 10));
-
-          if (selectedRoundId !== 'all') {
-            del = del.eq('round_id', selectedRoundId);
-          }
-
-          await del;
+            .eq('hole', parseInt(hole, 10))
+            .eq('round_id', roundId);
+          if (delErr) throw delErr;
         }
 
         const rows = holeEntries.map(([hole, score]) => ({
           registration_id: regId,
           hole: parseInt(hole, 10),
           score: Number(score),
-          ...(selectedRoundId !== 'all' ? { round_id: selectedRoundId } : {}),
+          round_id: roundId,
         }));
 
         const { error: insErr } = await supabase.from('scores').insert(rows);
@@ -467,56 +476,7 @@ export default function EventScoringPage() {
     }
   };
 
-  const saveEvent = async () => {
-    if (event?.is_locked) return;
 
-    const ok = window.confirm(
-      'Save this event? Scores and results will be locked for players. Unlock later from Platform / support.'
-    );
-    if (!ok) return;
-
-    setSavingEvent(true);
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      const { error } = await supabase
-        .from('tournaments')
-        .update({
-          is_locked: true,
-          locked_at: new Date().toISOString(),
-          locked_by: user?.id ?? null,
-        })
-        .eq('id', parseInt(eventId));
-
-      if (error) {
-        alert(error.message);
-        return;
-      }
-
-      setEvent((prev: any) =>
-        prev
-          ? {
-              ...prev,
-              is_locked: true,
-              locked_at: new Date().toISOString(),
-              locked_by: user?.id ?? null,
-            }
-          : prev
-      );
-    } finally {
-      setSavingEvent(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
-        Loading scoring...
-      </div>
-    );
-  }
 
   const headerTeeTime = selectedRound
     ? formatRoundTime(selectedRound.start_time)
@@ -577,15 +537,9 @@ export default function EventScoringPage() {
           <div>
             <div className="flex flex-wrap items-center gap-3 mb-1">
               <h1 className="text-4xl font-bold">{event?.name}</h1>
-              {event?.is_locked && (
-                <span className="text-xs px-3 py-1 rounded-full bg-emerald-900/50 text-emerald-400 border border-emerald-500/40">
-                  Saved
-                </span>
-              )}
             </div>
             <p className="text-gray-400 mt-1">
-              {event?.is_locked ? 'Final Scoring' : 'Live Scoring'} · {numHoles}{' '}
-              holes
+              Live Scoring · {numHoles} holes
               {event?.course ? ` · ${event.course}` : ''}
               {headerTeeTime ? ` · ${headerTeeTime}` : ''}
             </p>
@@ -596,23 +550,8 @@ export default function EventScoringPage() {
               </p>
             )}
             <p className="text-xs text-gray-500 mt-1">
-              ○ under par · ▢ over par · Submitted stays locked after leave /
-              refresh
+              Pick a flight, then Submit. Round 2 does not use round 1 scores.
             </p>
-            {!event?.is_locked ? (
-              <button
-                type="button"
-                onClick={saveEvent}
-                disabled={savingEvent}
-                className="mt-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-gray-600 px-5 py-2.5 rounded-2xl text-sm font-semibold"
-              >
-                {savingEvent ? 'Saving…' : 'Save Event'}
-              </button>
-            ) : (
-              <p className="mt-3 text-sm text-gray-500">
-                Event is saved. Contact support or use Platform to unlock.
-              </p>
-            )}
           </div>
 
           {rounds.length > 0 && (

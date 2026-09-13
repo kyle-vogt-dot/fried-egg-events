@@ -14,6 +14,7 @@ import {
   PDFDownloadLink,
   Image,
 } from '@react-pdf/renderer';
+import { isListableReg } from '@/app/libs/event-emails';
 
 const flyerStyles = StyleSheet.create({
   page: {
@@ -384,19 +385,6 @@ const [waitlistDone, setWaitlistDone] = useState(false);
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned);
   };
 
-  const isListableReg = (r: any) => {
-    if (r.refunded === true) return false;
-    if (r.paid === true) return true;
-    const m = String(r.payment_method || '').toLowerCase();
-    return [
-      'comp',
-      'complimentary',
-      'cash',
-      'manual',
-      'checkin',
-      'payment_link',
-    ].includes(m);
-  };
     const normalizeName = (name: string) =>
     String(name || '')
       .trim()

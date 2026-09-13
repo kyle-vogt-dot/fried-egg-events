@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import { PDFDownloadLink } from '@react-pdf/renderer';
 import { RegistrationRosterPDF } from '@/app/components/RegistrationRosterPDF';
+import { isListableReg } from '@/app/libs/event-emails';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -117,15 +118,6 @@ export default function RegisteredPlayersPage() {
         .select('*')
         .eq('event_id', id)
         .order('created_at', { ascending: true });
-
-      const isListableReg = (r: any) => {
-        if (r.refunded === true) return false;
-        if (r.paid === true) return true;
-        const m = String(r.payment_method || '').toLowerCase();
-        return ['comp', 'complimentary', 'cash', 'manual', 'checkin'].includes(
-          m
-        );
-      };
 
       setRegistrations((regData || []).filter(isListableReg));
       setLoading(false);

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import Link from 'next/link';
+import { isListable } from '@/app/libs/event-emails';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -29,20 +30,6 @@ function formatDate(dateStr: string) {
 
 const isValidEmail = (email: string) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || '').trim());
-
-const isListable = (r: any) => {
-  if (r.refunded === true) return false;
-  if (r.paid === true) return true;
-  const m = String(r.payment_method || '').toLowerCase();
-  return [
-    'comp',
-    'complimentary',
-    'cash',
-    'manual',
-    'checkin',
-    'payment_link',
-  ].includes(m);
-};
 
 const roundIdsOf = (r: any): number[] => {
   const ids: number[] = Array.isArray(r.selected_round_ids)

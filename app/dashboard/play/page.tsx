@@ -5,23 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import QRCode from 'qrcode';
-
-
-function isListable(r: any) {
-  if (r.refunded === true) return false;
-  if (r.paid === true) return true;
-  const m = String(r.payment_method || '').toLowerCase();
-  return [
-    'comp',
-    'complimentary',
-    'cash',
-    'manual',
-    'checkin',
-    'payment_link',
-    'stripe',
-    'team',
-  ].includes(m);
-}
+import { isListable } from '@/app/libs/event-emails';
 
 function formatToPar(toPar: number | null | undefined) {
   if (toPar == null) return '—';
@@ -236,22 +220,6 @@ const { data: regs } = await supabase
   .from('event_registrations')
   .select('*')
   .or(`user_id.eq.${user.id},player_email.eq.${user.email}`);
-
-const isListable = (r: any) => {
-  if (r.refunded === true) return false;
-  if (r.paid === true) return true;
-  const m = String(r.payment_method || '').toLowerCase();
-  return [
-    'comp',
-    'complimentary',
-    'cash',
-    'manual',
-    'checkin',
-    'payment_link',
-    'stripe',
-    'team',
-  ].includes(m);
-};
 
 const userRegs = (regs || []).filter(isListable);
 setRegistrations(userRegs);
@@ -629,22 +597,6 @@ const openDetail = async (id: number) => {
   setAppliedDiscount(null);
   setDiscountCode('');
   setDiscountError('');
-
-  const isListable = (r: any) => {
-    if (r.refunded === true) return false;
-    if (r.paid === true) return true;
-    const m = String(r.payment_method || '').toLowerCase();
-    return [
-      'comp',
-      'complimentary',
-      'cash',
-      'manual',
-      'checkin',
-      'payment_link',
-      'stripe',
-      'team',
-    ].includes(m);
-  };
 
   // Fresh roster for this event
   const { data: allRegs } = await supabase

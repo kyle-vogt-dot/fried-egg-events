@@ -1,9 +1,23 @@
+const LISTABLE_METHODS = new Set([
+  'paid',
+  'cash',
+  'comp',
+  'complimentary',
+  'stripe',
+  'team',
+  'manual',
+  'checkin',
+  'payment_link',
+]);
+
 export const isListableReg = (r: any) => {
-  if (r.refunded === true) return false;
-  if (r.paid === true) return true;
-  const m = String(r.payment_method || '').toLowerCase();
-  return ['comp', 'complimentary', 'cash', 'manual', 'checkin', 'payment_link'].includes(m);
+  if (r?.refunded === true) return false;
+  if (r?.paid === true) return true;
+  const m = String(r?.payment_method || '').toLowerCase();
+  return LISTABLE_METHODS.has(m);
 };
+
+export const isListable = isListableReg;
 
 export const normalizeEmail = (e: string) => String(e || '').trim().toLowerCase();
 

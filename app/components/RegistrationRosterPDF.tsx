@@ -1,4 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
+import { isListableReg } from '@/app/libs/event-emails';
 
 const styles = StyleSheet.create({
   page: {
@@ -166,14 +167,7 @@ export function RegistrationRosterPDF({
       })
     : '';
 
-  const listable = (registrations || []).filter((r) => {
-    if (r.refunded === true) return false;
-    if (r.paid === true) return true;
-    const m = String(r.payment_method || '').toLowerCase();
-    return ['comp', 'complimentary', 'cash', 'manual', 'checkin', 'payment_link'].includes(
-      m
-    );
-  });
+  const listable = (registrations || []).filter(isListableReg);
 
   const byRound: Record<
     string,

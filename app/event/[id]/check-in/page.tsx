@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import { loadEventAccess, canUse } from '@/app/libs/event-admin';
+import { isListableReg } from '@/app/libs/event-emails';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -223,12 +225,25 @@ export default function EventCheckInPage() {
       setLoading(true);
       const id = parseInt(eventId);
 
-      const { data: eventData } = await supabase
-        .from('tournaments')
-        .select('*')
-        .eq('id', id)
-        .single();
-      setEvent(eventData);
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.push(
+          '/login?redirect=' + encodeURIComponent(`/event/${eventId}/check-in`)
+        );
+        return;
+      }
+
+      const access = await loadEventAccess(supabase, id, user);
+
+      if (!access.allowed || !canUse(access.perms, 'checkin')) {
+        router.push(`/event/${eventId}`);
+        return;
+      }
+
+      setEvent(access.event);
 
       const { data: roundsData } = await supabase
         .from('event_rounds')
@@ -261,7 +276,7 @@ export default function EventCheckInPage() {
     };
 
     fetchData();
-  }, [eventId, supabase]);
+  }, [eventId, supabase, router]);
 
   const fetchRegistrations = async () => {
     const { data } = await supabase
@@ -269,22 +284,7 @@ export default function EventCheckInPage() {
       .select('*')
       .eq('event_id', parseInt(eventId));
 
-    setRegistrations(
-      (data || []).filter((r) => {
-        if (r.refunded === true) return false;
-        if (r.paid === true) return true;
-        const m = String(r.payment_method || '').toLowerCase();
-        // intentional unpaid only — not abandoned Stripe drafts
-        return [
-          'comp',
-          'complimentary',
-          'cash',
-          'manual',
-          'checkin',
-          'payment_link',
-        ].includes(m);
-      })
-    );
+    setRegistrations((data || []).filter(isListableReg));
   };
 
   useEffect(() => {
