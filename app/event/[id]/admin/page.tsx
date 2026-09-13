@@ -705,7 +705,7 @@ const savePlayerScores = async (registrationId: number) => {
       if (error) throw error;
 
       alert("✅ Event hidden successfully!");
-      window.location.href = '/dashboard';
+      window.location.href = '/events';
 
     } catch (err: any) {
       alert("Failed: " + err.message);

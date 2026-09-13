@@ -35,7 +35,7 @@ export default function SponsorsContent() {
   // ==================== FETCH DATA ====================
   useEffect(() => {
     if (!eventId) {
-      router.push('/dashboard');
+      router.push('/events');
       return;
     }
     setLoading(false);
@@ -133,10 +133,14 @@ export default function SponsorsContent() {
         <div className="flex justify-between items-center mb-10">
           <h1 className="text-4xl font-bold">Sponsors Management</h1>
           <button 
-            onClick={() => router.push('/dashboard')}
+            onClick={() =>
+              router.push(
+                eventId ? `/event/${eventId}/manage` : '/events'
+              )
+            }
             className="text-gray-400 hover:text-white flex items-center gap-2"
           >
-            ← Back to Dashboard
+            ← Back
           </button>
         </div>
 
