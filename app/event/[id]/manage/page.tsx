@@ -24,12 +24,82 @@ const teamSizeFromEventType = (type: string) => {
 };
 
 const ROUND_FORMATS = [
-  { value: 'stroke', label: 'Stroke' },
   { value: 'scramble', label: 'Scramble' },
   { value: 'shamble', label: 'Shamble' },
-  { value: 'alt_shot', label: 'Alt shot' },
   { value: 'best_ball', label: 'Best ball' },
+  { value: 'alt_shot', label: 'Alternate shot' },
+  { value: 'stroke', label: 'Stroke' },
 ] as const;
+
+const INDIVIDUAL_FORMATS = [
+  { value: 'stroke', label: 'Stroke play' },
+  { value: 'match_play', label: 'Match play' },
+  { value: 'stableford', label: 'Stableford' },
+  { value: 'nassau', label: 'Nassau' },
+  { value: 'other_individual', label: 'Other individual' },
+] as const;
+
+const TEAM_FORMATS = [
+  { value: 'scramble', label: 'Scramble' },
+  { value: 'shamble', label: 'Shamble' },
+  { value: 'best_ball', label: 'Best ball' },
+  { value: 'alt_shot', label: 'Alternate shot' },
+  { value: 'stroke', label: 'Stroke (team total)' },
+] as const;
+
+const FORMAT_LABELS: Record<string, string> = {
+  stroke: 'Stroke play',
+  match_play: 'Match play',
+  stableford: 'Stableford',
+  nassau: 'Nassau',
+  other_individual: 'Other individual',
+  scramble: 'Scramble',
+  shamble: 'Shamble',
+  best_ball: 'Best ball',
+  alt_shot: 'Alternate shot',
+};
+
+function scoringBlurb(format?: string | null, isTeam?: boolean): string {
+  const v = normalizeRoundFormat(format);
+  if (v === 'stroke') {
+    return isTeam
+      ? 'Each player records strokes. The team score is the total of those scores. Lowest team total wins.'
+      : 'Each player records their own strokes. Lowest total wins.';
+  }
+  if (v === 'match_play') {
+    return 'Win holes, not the medal total. Most holes won wins the match. Hole scores are still entered as strokes for now; match board comes later.';
+  }
+  if (v === 'stableford') {
+    return 'Points per hole vs par (standard Stableford). Highest points wins. Hole scores are still entered as strokes for now.';
+  }
+  if (v === 'nassau') {
+    return 'Three contests: front 9, back 9, and 18. Hole scores are still entered as strokes for now; Nassau board comes later.';
+  }
+  if (v === 'other_individual') {
+    return 'Individual scoring. Hole scores are entered as strokes.';
+  }
+  if (v === 'scramble') {
+    return 'Everyone hits, pick the best shot, all play from there. One team score per hole.';
+  }
+  if (v === 'shamble') {
+    return 'Everyone tees off, pick the best drive, then each player plays their own ball in.';
+  }
+  if (v === 'best_ball') {
+    return 'Everyone plays their own ball. The best score on each hole counts for the team.';
+  }
+  if (v === 'alt_shot') {
+    return 'Partners play one ball and alternate shots (foursomes).';
+  }
+  return '';
+}
+
+function isTournamentKind(kind?: string | null) {
+  return kind === 'tournament';
+}
+
+function isLeagueOrTourKind(kind?: string | null) {
+  return kind === 'league' || kind === 'tour';
+}
 
 function startTypeLabel(type?: string | null) {
   if (type === 'tee_times') return 'Tee times';
@@ -39,15 +109,25 @@ function startTypeLabel(type?: string | null) {
 
 function formatLabel(type?: string | null) {
   const v = normalizeRoundFormat(type);
-  return ROUND_FORMATS.find((f) => f.value === v)?.label || v || '';
+  return FORMAT_LABELS[v] || ROUND_FORMATS.find((f) => f.value === v)?.label || v || '';
+}
+
+function eventFormatValue(event: any, round?: any) {
+  return normalizeRoundFormat(
+    event?.format || round?.format || event?.event_type
+  );
 }
 
 function normalizeRoundFormat(type?: string | null) {
-  const t = String(type || '').toLowerCase();
+  const t = String(type || '').toLowerCase().replace(/[\s-]+/g, '_');
   if (t.includes('shamble')) return 'shamble';
   if (t.includes('scramble')) return 'scramble';
   if (t.includes('best')) return 'best_ball';
   if (t.includes('alt')) return 'alt_shot';
+  if (t.includes('match')) return 'match_play';
+  if (t.includes('stable')) return 'stableford';
+  if (t.includes('nassau')) return 'nassau';
+  if (t.includes('other')) return 'other_individual';
   if (
     t === 'stroke' ||
     t === 'individual' ||
@@ -55,6 +135,7 @@ function normalizeRoundFormat(type?: string | null) {
   ) {
     return 'stroke';
   }
+  if (t && FORMAT_LABELS[t]) return t;
   return t && ROUND_FORMATS.some((f) => f.value === t) ? t : '';
 }
 
@@ -205,6 +286,64 @@ function AccordionSection({
         <span className="text-gray-400 shrink-0">{open ? 'Hide' : 'Show'}</span>
       </button>
       {open ? <div className="px-6 pb-6 space-y-6">{children}</div> : null}
+    </div>
+  );
+}
+
+function NestedAccordion({
+  title,
+  children,
+  startOpen = false,
+}: {
+  title: string;
+  children: React.ReactNode;
+  startOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(startOpen);
+  return (
+    <div className="rounded-2xl border border-gray-700 bg-gray-900 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left"
+      >
+        <span className="text-lg font-medium">{title}</span>
+        <span className="text-gray-400 text-sm shrink-0">
+          {open ? 'Hide' : 'Show'}
+        </span>
+      </button>
+      {open ? <div className="px-5 pb-5 space-y-4">{children}</div> : null}
+    </div>
+  );
+}
+
+function CollapsedRow({
+  summary,
+  children,
+  startOpen = false,
+}: {
+  summary: string;
+  children: React.ReactNode;
+  startOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(startOpen);
+  return (
+    <div className="bg-gray-800 rounded-2xl overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full text-left px-5 py-4 flex items-center justify-between gap-3"
+      >
+        <span className="font-medium truncate">{summary}</span>
+        <span className="text-gray-400 text-sm shrink-0">
+          {open ? 'Hide' : 'Edit'}
+        </span>
+      </button>
+      {open ? (
+        <div className="px-5 pb-5 space-y-3 border-t border-gray-700 pt-4">
+          {children}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -386,6 +525,12 @@ const [adminPerms, setAdminPerms] = useState({
             ? eventData.course_data.location
             : ''),
         max_teammates: teamSizeFromEventType(eventData.event_type || ''),
+        greens_fee:
+          eventData.greens_fee == null ||
+          eventData.greens_fee === '' ||
+          Number(eventData.greens_fee) === 0
+            ? null
+            : eventData.greens_fee,
       };
       setEvent(synced);
       setCourseSearch(courseName);
@@ -435,7 +580,13 @@ const [adminPerms, setAdminPerms] = useState({
         console.error('Rounds load error:', roundsError);
       }
       setRounds(roundsData || []);
-      setRoundMode((roundsData || []).length > 1 ? 'multi' : 'single');
+      setRoundMode(
+        isTournamentKind(eventData.event_kind)
+          ? 'single'
+          : (roundsData || []).length > 1
+            ? 'multi'
+            : 'single'
+      );
 
       const { data: feeData } = await supabase
         .from('platform_settings')
@@ -681,6 +832,10 @@ const handleSaveEvent = async () => {
       Number(event.default_competing) ||
       Number(event.roster_max) ||
       teamSizeFromEventType(event.event_type || ''),
+    greens_fee:
+      event.greens_fee === '' || event.greens_fee == null
+        ? null
+        : event.greens_fee,
   };
 
   const { error } = await supabase
@@ -870,6 +1025,24 @@ const handleSaveEvent = async () => {
     }
   };
 
+  const persistAddon = async (id: number, patch: Record<string, any>) => {
+    setAddons((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, ...patch } : a))
+    );
+    const { error } = await supabase
+      .from('event_addons')
+      .update(patch)
+      .eq('id', id);
+    if (error) {
+      alert('Failed to save add-on: ' + error.message);
+      const { data } = await supabase
+        .from('event_addons')
+        .select('*')
+        .eq('event_id', parseInt(eventId));
+      setAddons(data || []);
+    }
+  };
+
   const handleDeleteAddon = async (id: number) => {
     if (!confirm('Remove this add-on?')) return;
     await supabase.from('event_addons').delete().eq('id', id);
@@ -934,6 +1107,25 @@ const handleSaveEvent = async () => {
     setSponsorPackages((prev) =>
       prev.map((p) => (p.id === id ? { ...p, active: !active } : p))
     );
+  };
+
+  const persistPackage = async (id: number, patch: Record<string, any>) => {
+    setSponsorPackages((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, ...patch } : p))
+    );
+    const { error } = await supabase
+      .from('event_sponsor_packages')
+      .update(patch)
+      .eq('id', id);
+    if (error) {
+      alert('Failed to save package: ' + error.message);
+      const { data } = await supabase
+        .from('event_sponsor_packages')
+        .select('*')
+        .eq('event_id', parseInt(eventId))
+        .order('sort_order', { ascending: true });
+      setSponsorPackages(data || []);
+    }
   };
 
   const handleDeleteSponsorPackage = async (id: number) => {
@@ -1043,7 +1235,7 @@ const handleSaveEvent = async () => {
     const emptyNewRound = (caps = defaultRoundCaps()) => ({
     name: '',
     course: event?.course || '',
-    format: 'stroke',
+    format: eventFormatValue(event) || 'stroke',
     start_type: 'shotgun',
     starting_hole: 1,
     starting_hole_2: 10,
@@ -1144,6 +1336,13 @@ const handleSaveEvent = async () => {
       await reloadRounds();
       return;
     }
+    if ('format' in mapped && rounds[0]?.id === id) {
+      handleEventChange('format', mapped.format || null);
+      await supabase
+        .from('tournaments')
+        .update({ format: mapped.format || null })
+        .eq('id', parseInt(eventId));
+    }
     await reloadRounds();
   };
 
@@ -1164,7 +1363,10 @@ const handleSaveEvent = async () => {
       start_time: existing?.start_time || null,
       course: existing?.course || event?.course || null,
       course_data: existing?.course_data || event?.course_data || null,
-      format: existing?.format || null,
+      format:
+        existing?.format ||
+        eventFormatValue(event) ||
+        null,
       start_type: existing?.start_type || 'shotgun',
       starting_hole: existing?.starting_hole ?? 1,
       starting_hole_2: existing?.starting_hole_2 ?? 10,
@@ -1214,7 +1416,33 @@ const handleSaveEvent = async () => {
         return;
       }
     }
+    if ('format' in mapped) {
+      handleEventChange('format', merged.format || null);
+      await supabase
+        .from('tournaments')
+        .update({ format: merged.format || null })
+        .eq('id', parseInt(eventId));
+    }
     await reloadRounds();
+  };
+
+  const persistPlayFormat = async (format: string) => {
+    const value = format || null;
+    handleEventChange('format', value);
+    const { error } = await supabase
+      .from('tournaments')
+      .update({ format: value })
+      .eq('id', parseInt(eventId));
+    if (error) {
+      alert('Failed to save format: ' + error.message);
+      return;
+    }
+    const first = rounds[0];
+    if (first?.id && first.id > 0) {
+      await persistRound(first.id, { format: value });
+    } else {
+      await persistSingleRound({ format: value });
+    }
   };
 
   const searchRoundCourses = (key: string, query: string) => {
@@ -1457,10 +1685,20 @@ const handleDeleteEvent = async () => {
   }
 };
 
-  const teamSize = teamSizeFromEventType(event.event_type || '');
+  const teamSize =
+    Number(event?.roster_max) >= 2
+      ? Number(event.roster_max)
+      : teamSizeFromEventType(event.event_type || '');
   const isTeamEvent = Number(event?.roster_max) >= 2;
+  const isTournament = isTournamentKind(event?.event_kind);
+  const allowedFormats = isTeamEvent ? TEAM_FORMATS : INDIVIDUAL_FORMATS;
   const holeCount = Number(event?.number_of_holes) || 18;
   const singleRound = rounds[0];
+  const playFormatValue = eventFormatValue(event, singleRound);
+  const playFormatBlurb = scoringBlurb(
+    playFormatValue,
+    Number(event?.roster_max) >= 2
+  );
   const singleStartType = roundStartType(singleRound);
   const isPerRoundPricing = (event?.pricing_mode || 'event') === 'per_round';
 
@@ -1825,39 +2063,60 @@ const handleDeleteEvent = async () => {
             summary={fieldSummary}
             startOpen={!fieldComplete}
           >
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <button
-                type="button"
-                onClick={() => {
-                  handleEventChange('roster_max', 1);
-                  handleEventChange('default_competing', 1);
-                }}
-                className={`text-left p-6 rounded-2xl border-2 ${
-                  Number(event.roster_max) === 1
-                    ? 'border-emerald-500 bg-emerald-900/30'
-                    : 'border-gray-700 bg-gray-800'
-                }`}
-              >
-                <div className="font-semibold text-lg">Individual</div>
-                <p className="text-sm text-gray-400 mt-1">One person.</p>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const n = Math.max(2, Number(event.roster_max) || 4);
-                  handleEventChange('roster_max', n);
-                  handleEventChange('default_competing', n);
-                }}
-                className={`text-left p-6 rounded-2xl border-2 ${
-                  Number(event.roster_max) >= 2
-                    ? 'border-emerald-500 bg-emerald-900/30'
-                    : 'border-gray-700 bg-gray-800'
-                }`}
-              >
-                <div className="font-semibold text-lg">Team</div>
-                <p className="text-sm text-gray-400 mt-1">Roster of 2 or more.</p>
-              </button>
-            </div>
+            {isTournament ? (
+              <div className="grid grid-cols-2 gap-3 items-stretch">
+                <div
+                  className={`p-4 rounded-2xl border-2 h-full flex items-center justify-center text-center ${
+                    !isTeamEvent
+                      ? 'border-emerald-500 bg-emerald-900/30'
+                      : 'border-gray-700 bg-gray-800 opacity-50'
+                  }`}
+                >
+                  <div className="font-semibold text-lg">Individual</div>
+                </div>
+                <div
+                  className={`p-4 rounded-2xl border-2 h-full flex items-center justify-center text-center ${
+                    isTeamEvent
+                      ? 'border-emerald-500 bg-emerald-900/30'
+                      : 'border-gray-700 bg-gray-800 opacity-50'
+                  }`}
+                >
+                  <div className="font-semibold text-lg">Team</div>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-3 items-stretch">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleEventChange('roster_max', 1);
+                    handleEventChange('default_competing', 1);
+                  }}
+                  className={`p-4 rounded-2xl border-2 h-full flex items-center justify-center text-center ${
+                    Number(event.roster_max) === 1
+                      ? 'border-emerald-500 bg-emerald-900/30'
+                      : 'border-gray-700 bg-gray-800'
+                  }`}
+                >
+                  <div className="font-semibold text-lg">Individual</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const n = Math.max(2, Number(event.roster_max) || 4);
+                    handleEventChange('roster_max', n);
+                    handleEventChange('default_competing', n);
+                  }}
+                  className={`p-4 rounded-2xl border-2 h-full flex items-center justify-center text-center ${
+                    Number(event.roster_max) >= 2
+                      ? 'border-emerald-500 bg-emerald-900/30'
+                      : 'border-gray-700 bg-gray-800'
+                  }`}
+                >
+                  <div className="font-semibold text-lg">Team</div>
+                </button>
+              </div>
+            )}
             {Number(event.roster_max) >= 2 && (
               <div>
                 <label className="block text-sm text-gray-400 mb-2">
@@ -1879,6 +2138,38 @@ const handleDeleteEvent = async () => {
                 />
               </div>
             )}
+            <div>
+              <label className="block text-sm text-gray-400 mb-3">Format</label>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {allowedFormats.map((f) => {
+                  const selected = playFormatValue === f.value;
+                  return (
+                    <button
+                      key={f.value}
+                      type="button"
+                      onClick={() => persistPlayFormat(f.value)}
+                      className={`px-4 py-4 rounded-2xl border-2 text-left font-medium transition-colors ${
+                        selected
+                          ? 'border-emerald-500 bg-emerald-900/30'
+                          : 'border-gray-700 bg-gray-800 hover:border-gray-500'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {playFormatBlurb ? (
+                <div className="mt-4 rounded-2xl border border-gray-700 bg-gray-900 px-5 py-4">
+                  <p className="text-sm font-medium text-gray-200">
+                    How scoring works
+                  </p>
+                  <p className="text-sm text-gray-400 mt-1 leading-relaxed">
+                    {playFormatBlurb}
+                  </p>
+                </div>
+              ) : null}
+            </div>
             <div>
               <label className="block text-sm text-gray-400 mb-2">
                 Field cap
@@ -2013,30 +2304,39 @@ const handleDeleteEvent = async () => {
             summary={roundsSummary}
             startOpen={!roundsComplete}
           >
-            <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
-              <button
-                type="button"
-                onClick={() => setRoundMode('single')}
-                className={`flex-1 py-4 rounded-3xl font-medium ${
-                  roundMode === 'single'
-                    ? 'bg-blue-600 text-white'
-                    : 'hover:bg-gray-600 text-gray-300'
-                }`}
-              >
-                Single round
-              </button>
-              <button
-                type="button"
-                onClick={() => setRoundMode('multi')}
-                className={`flex-1 py-4 rounded-3xl font-medium ${
-                  roundMode === 'multi'
-                    ? 'bg-blue-600 text-white'
-                    : 'hover:bg-gray-600 text-gray-300'
-                }`}
-              >
-                Multi-round
-              </button>
-            </div>
+            {!isTournamentKind(event?.event_kind) ? (
+              <>
+                <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
+                  <button
+                    type="button"
+                    onClick={() => setRoundMode('single')}
+                    className={`flex-1 py-4 rounded-3xl font-medium ${
+                      roundMode === 'single'
+                        ? 'bg-blue-600 text-white'
+                        : 'hover:bg-gray-600 text-gray-300'
+                    }`}
+                  >
+                    Single round
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRoundMode('multi')}
+                    className={`flex-1 py-4 rounded-3xl font-medium ${
+                      roundMode === 'multi'
+                        ? 'bg-blue-600 text-white'
+                        : 'hover:bg-gray-600 text-gray-300'
+                    }`}
+                  >
+                    Multi-round
+                  </button>
+                </div>
+                {isLeagueOrTourKind(event?.event_kind) ? (
+                  <p className="text-sm text-gray-400">
+                    Traditional schedule (brackets later)
+                  </p>
+                ) : null}
+              </>
+            ) : null}
 
             {roundMode === 'single' ? (
               <div className="space-y-6">
@@ -2049,6 +2349,8 @@ const handleDeleteEvent = async () => {
                     : ''}
                   .
                 </p>
+                {!isTournament ? (
+                  <>
                 <div>
                   <label className="block text-sm text-gray-400 mb-2">
                     {Number(event.roster_max) > 1
@@ -2107,20 +2409,22 @@ const handleDeleteEvent = async () => {
                     Format
                   </label>
                   <select
-                    value={normalizeRoundFormat(singleRound?.format) || ''}
+                    value={playFormatValue || ''}
                     onChange={(e) =>
                       persistSingleRound({ format: e.target.value || null })
                     }
                     className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
                   >
                     <option value="">Select format</option>
-                    {ROUND_FORMATS.map((f) => (
+                    {allowedFormats.map((f) => (
                       <option key={f.value} value={f.value}>
                         {f.label}
                       </option>
                     ))}
                   </select>
                 </div>
+                  </>
+                ) : null}
                 <div>
                   <label className="block text-sm text-gray-400 mb-2">
                     Start type
@@ -3083,7 +3387,7 @@ const handleDeleteEvent = async () => {
             summary={moneySummary}
             startOpen={!moneyComplete}
           >
-                    {/* Pricing Mode */}
+            {!isTournament ? (
 <div className="bg-gray-900 border border-gray-700 rounded-2xl px-5 py-4 mt-8 mb-2">
   <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
     {/* Toggle */}
@@ -3138,16 +3442,21 @@ const handleDeleteEvent = async () => {
     </p>
   </div>
 </div>
+            ) : null}
 
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
             <label className="block text-sm text-gray-400 mb-2">
-              {(event.pricing_mode || 'event') === 'per_round'
-                ? 'Base Event Price (ignored in per-round mode)'
-                : teamSize > 1
+              {isTournament
+                ? teamSize > 1
                   ? 'Price per team'
-                  : 'Price per player'}
+                  : 'Price per player'
+                : (event.pricing_mode || 'event') === 'per_round'
+                  ? 'Base Event Price (ignored in per-round mode)'
+                  : teamSize > 1
+                    ? 'Price per team'
+                    : 'Price per player'}
             </label>
             
             <input
@@ -3157,9 +3466,14 @@ const handleDeleteEvent = async () => {
                 handleEventChange('price', parseFloat(e.target.value) || 0)
               }
               className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
-              disabled={(event.pricing_mode || 'event') === 'per_round'}
+              disabled={
+                !isTournament &&
+                (event.pricing_mode || 'event') === 'per_round'
+              }
             />
-                        {teamSize > 1 && (event.pricing_mode || 'event') !== 'per_round' && (
+                        {teamSize > 1 &&
+              (isTournament ||
+                (event.pricing_mode || 'event') !== 'per_round') && (
               <p className="text-xs text-gray-500 mt-2">
                 Captain pays this once at checkout. Teammates are added after
                 payment (or later in My Events).
@@ -3174,10 +3488,20 @@ const handleDeleteEvent = async () => {
               type="number"
               step="0.01"
               min="0"
-              value={event?.greens_fee ?? 0}
-              onChange={(e) =>
-                handleEventChange('greens_fee', Number(e.target.value) || 0)
+              value={
+                event?.greens_fee == null ||
+                event?.greens_fee === '' ||
+                Number(event.greens_fee) === 0
+                  ? ''
+                  : String(event.greens_fee)
               }
+              onChange={(e) =>
+                handleEventChange(
+                  'greens_fee',
+                  parseAmountOrNull(e.target.value)
+                )
+              }
+              placeholder="None"
               className="w-full bg-gray-700 border border-gray-600 rounded-3xl px-6 py-5"
             />
             <p className="text-xs text-gray-500 mt-2">
@@ -3220,8 +3544,7 @@ const handleDeleteEvent = async () => {
     </div>
   )}
 </div>
-            <div className="bg-gray-900 border border-yellow-500/30 rounded-3xl p-8 mt-8">
-            <h3 className="text-xl font-medium mb-6">Manage Add-ons</h3>
+            <NestedAccordion title="Add-ons">
 
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end mb-8">
               <div className="md:col-span-5">
@@ -3272,37 +3595,107 @@ const handleDeleteEvent = async () => {
               </div>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-3">
               {addons.map((addon: any) => (
-                <div
+                <CollapsedRow
                   key={addon.id}
-                  className="bg-gray-800 p-6 rounded-3xl flex justify-between items-center"
+                  summary={`${addon.name} · $${addon.price_per_unit} · ${addon.quantity_available} available`}
                 >
-                  <div>
-                    <div className="font-medium">{addon.name}</div>
-                    <div className="text-sm text-gray-400">
-                      ${addon.price_per_unit} each • {addon.quantity_available}{' '}
-                      available
+                  <input
+                    value={addon.name || ''}
+                    onChange={(e) =>
+                      setAddons((prev) =>
+                        prev.map((a) =>
+                          a.id === addon.id ? { ...a, name: e.target.value } : a
+                        )
+                      )
+                    }
+                    onBlur={(e) =>
+                      persistAddon(addon.id, { name: e.target.value.trim() })
+                    }
+                    placeholder="Add-on name"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3"
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Price
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={addon.price_per_unit ?? ''}
+                        onChange={(e) =>
+                          setAddons((prev) =>
+                            prev.map((a) =>
+                              a.id === addon.id
+                                ? {
+                                    ...a,
+                                    price_per_unit:
+                                      parseFloat(e.target.value) || 0,
+                                  }
+                                : a
+                            )
+                          )
+                        }
+                        onBlur={(e) =>
+                          persistAddon(addon.id, {
+                            price_per_unit: parseFloat(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Qty available
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={addon.quantity_available ?? ''}
+                        onChange={(e) =>
+                          setAddons((prev) =>
+                            prev.map((a) =>
+                              a.id === addon.id
+                                ? {
+                                    ...a,
+                                    quantity_available:
+                                      parseInt(e.target.value, 10) || 0,
+                                  }
+                                : a
+                            )
+                          )
+                        }
+                        onBlur={(e) =>
+                          persistAddon(addon.id, {
+                            quantity_available:
+                              parseInt(e.target.value, 10) || 0,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3"
+                      />
                     </div>
                   </div>
                   <button
+                    type="button"
                     onClick={() => handleDeleteAddon(addon.id)}
-                    className="text-red-500 hover:text-red-600 px-4 py-2"
+                    className="text-red-500 hover:text-red-600 text-sm"
                   >
                     Remove
                   </button>
-                </div>
+                </CollapsedRow>
               ))}
             </div>
 
             {addons.length === 0 && (
               <p className="text-gray-400 text-center py-8">No add-ons added yet.</p>
             )}
-          </div>
+            </NestedAccordion>
 
-            <div className="bg-gray-900 border border-emerald-500/30 rounded-3xl p-8 mt-8">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-              <h3 className="text-xl font-medium">Sponsor Packages</h3>
+            <NestedAccordion title="Sponsor packages">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <button
                 type="button"
                 onClick={handleLoadDefaultPackages}
@@ -3402,29 +3795,112 @@ const handleDeleteEvent = async () => {
 
             <div className="space-y-3 mb-10">
               {sponsorPackages.map((pkg) => (
-                <div
+                <CollapsedRow
                   key={pkg.id}
-                  className="bg-gray-800 p-5 rounded-3xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                  summary={`${pkg.name} · $${Number(pkg.price).toFixed(2)}${
+                    pkg.max_quantity != null ? ` · max ${pkg.max_quantity}` : ''
+                  }`}
                 >
-                  <div className="min-w-0">
-                    <div className="font-medium">
-                      {pkg.name}{' '}
-                      <span className="text-emerald-400">
-                        ${Number(pkg.price).toFixed(2)}
-                      </span>
+                  <input
+                    value={pkg.name || ''}
+                    onChange={(e) =>
+                      setSponsorPackages((prev) =>
+                        prev.map((p) =>
+                          p.id === pkg.id ? { ...p, name: e.target.value } : p
+                        )
+                      )
+                    }
+                    onBlur={(e) =>
+                      persistPackage(pkg.id, { name: e.target.value.trim() })
+                    }
+                    placeholder="Package name"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3"
+                  />
+                  <input
+                    value={pkg.description || ''}
+                    onChange={(e) =>
+                      setSponsorPackages((prev) =>
+                        prev.map((p) =>
+                          p.id === pkg.id
+                            ? { ...p, description: e.target.value }
+                            : p
+                        )
+                      )
+                    }
+                    onBlur={(e) =>
+                      persistPackage(pkg.id, {
+                        description: e.target.value.trim() || null,
+                      })
+                    }
+                    placeholder="Description / benefits"
+                    className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3"
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Price
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={pkg.price ?? ''}
+                        onChange={(e) =>
+                          setSponsorPackages((prev) =>
+                            prev.map((p) =>
+                              p.id === pkg.id
+                                ? {
+                                    ...p,
+                                    price: parseFloat(e.target.value) || 0,
+                                  }
+                                : p
+                            )
+                          )
+                        }
+                        onBlur={(e) =>
+                          persistPackage(pkg.id, {
+                            price: parseFloat(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3"
+                      />
                     </div>
-                    <div className="text-sm text-gray-400">
-                      {pkg.description || '—'}
-                    </div>
-                    <div className="text-xs text-gray-500 mt-1">
-                      Sold {pkg.times_sold}
-                      {pkg.max_quantity != null ? ` / ${pkg.max_quantity}` : ''}
-                      {pkg.includes_players > 0
-                        ? ` · includes ${pkg.includes_players} players`
-                        : ''}
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        Max qty (blank = ∞)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={pkg.max_quantity ?? ''}
+                        onChange={(e) =>
+                          setSponsorPackages((prev) =>
+                            prev.map((p) =>
+                              p.id === pkg.id
+                                ? {
+                                    ...p,
+                                    max_quantity:
+                                      e.target.value === ''
+                                        ? null
+                                        : parseInt(e.target.value, 10) || null,
+                                  }
+                                : p
+                            )
+                          )
+                        }
+                        onBlur={(e) =>
+                          persistPackage(pkg.id, {
+                            max_quantity:
+                              e.target.value === ''
+                                ? null
+                                : parseInt(e.target.value, 10) || null,
+                          })
+                        }
+                        className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-3"
+                      />
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-3">
                     <button
                       type="button"
                       onClick={() =>
@@ -3446,7 +3922,7 @@ const handleDeleteEvent = async () => {
                       Remove
                     </button>
                   </div>
-                </div>
+                </CollapsedRow>
               ))}
               {sponsorPackages.length === 0 && (
                 <p className="text-gray-500 text-center py-6">
@@ -3454,6 +3930,7 @@ const handleDeleteEvent = async () => {
                 </p>
               )}
             </div>
+            </NestedAccordion>
 
             <h4 className="text-lg font-medium mb-4">Paid sponsors</h4>
             <div className="space-y-3">
@@ -3481,7 +3958,6 @@ const handleDeleteEvent = async () => {
                 </p>
               )}
             </div>
-          </div>
 
             <div className="rounded-2xl border border-amber-500/40 bg-amber-950/40 p-5">
               <h3 className="font-semibold text-amber-300">Payouts</h3>

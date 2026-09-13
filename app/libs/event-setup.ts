@@ -18,6 +18,48 @@ export function onlyAdminStorageKey(eventId: string | number) {
   return `friedegg:only-admin:${eventId}`;
 }
 
+export function isTeamRosterEvent(event: any): boolean {
+  if (event?.roster_max != null && String(event.roster_max).trim() !== '') {
+    return Number(event.roster_max) >= 2;
+  }
+  return Number(event?.max_teammates || 0) > 1;
+}
+
+export function hideRoundSelector(event: any, roundCount: number): boolean {
+  return event?.event_kind === 'tournament' || roundCount <= 1;
+}
+
+const FORMAT_LABELS: Record<string, string> = {
+  stroke: 'Stroke',
+  scramble: 'Scramble',
+  shamble: 'Shamble',
+  best_ball: 'Best ball',
+  alt_shot: 'Alternate shot',
+  match_play: 'Match play',
+  stableford: 'Stableford',
+  nassau: 'Nassau',
+  other_individual: 'Other individual',
+};
+
+export function eventFormatLabel(event: any, round?: any): string {
+  const raw = String(
+    round?.format || event?.format || event?.event_type || ''
+  )
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (!raw) return '';
+  if (raw.includes('stable')) return 'Stableford';
+  if (raw.includes('scramble')) return 'Scramble';
+  if (raw.includes('shamble')) return 'Shamble';
+  if (raw.includes('best')) return 'Best ball';
+  if (raw.includes('alt')) return 'Alternate shot';
+  if (raw.includes('match')) return 'Match play';
+  if (raw.includes('nassau')) return 'Nassau';
+  if (raw.includes('other')) return 'Other individual';
+  if (raw.includes('stroke')) return 'Stroke';
+  return FORMAT_LABELS[raw] || '';
+}
+
 /** Same rules as manage accordion unlock. Does not write accordion state. */
 export function isEventSetupComplete(opts: {
   event: any;

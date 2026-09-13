@@ -6,6 +6,11 @@ import { createBrowserClient } from '@supabase/ssr';
 import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 import EventTabs from '@/app/components/EventTabs';
 import BackButton from '@/app/components/BackButton';
+import {
+  eventFormatLabel,
+  hideRoundSelector,
+  isTeamRosterEvent,
+} from '@/app/libs/event-setup';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -344,6 +349,10 @@ export default function EventLeaderboardPage() {
     return rounds.find((r) => r.id === selectedRoundId) || null;
   }, [rounds, selectedRoundId]);
 
+  const isTeamEvent = isTeamRosterEvent(event);
+  const formatLabel = eventFormatLabel(event, selectedRound);
+  const lockRoundSelector = hideRoundSelector(event, rounds.length);
+
   const checkedInRegs = useMemo(() => {
     return registrations.filter((r) => {
       if (!isCheckedInForRound(r, selectedRoundId)) return false;
@@ -507,7 +516,7 @@ export default function EventLeaderboardPage() {
       });
     }
 
-    const isTeamEvent = (event?.max_teammates || 1) > 1;
+    const isTeamEvent = isTeamRosterEvent(event);
 
     const grouped = filtered.reduce((acc: any, reg) => {
       const teamKey =
@@ -653,7 +662,7 @@ const isPlayingSkins = (reg: any) => {
       };
     }
 
-    const isTeamEvent = (event?.max_teammates || 1) > 1;
+    const isTeamEvent = isTeamRosterEvent(event);
     const grouped: Record<string, any[]> = {};
     for (const reg of skinsRegs) {
       const key =
@@ -807,9 +816,10 @@ const isPlayingSkins = (reg: any) => {
             <p className="text-gray-400 mt-1">
               Leaderboard · {event?.course || 'No course'} ·{' '}
               {event?.is_locked ? 'Final results' : 'Live standings'}
+              {formatLabel ? ` · ${formatLabel}` : ''}
               {headerTeeTime ? ` · ${headerTeeTime}` : ''}
             </p>
-            {selectedRound && (
+            {selectedRound && !lockRoundSelector && (
               <p className="text-sm text-teal-400 mt-1">
                 Round: {selectedRound.name}
                 {headerTeeTime ? ` (${headerTeeTime})` : ''}
@@ -832,7 +842,7 @@ const isPlayingSkins = (reg: any) => {
             )}
           </div>
 
-          {rounds.length > 0 && (
+          {rounds.length > 0 && !lockRoundSelector && (
             <div className="w-full lg:w-72">
               <label className="block text-sm text-gray-400 mb-2">
                 View by round
@@ -1082,8 +1092,8 @@ const isPlayingSkins = (reg: any) => {
                     rowSpan={3}
                     className="text-left py-3 px-4 font-medium align-middle"
                   >
-                    Team
-                    
+                    {isTeamEvent ? 'Team' : 'Player'}
+                     
                   </th>
                   <th className="text-right py-2 px-2 text-xs text-gray-500 font-normal w-14">
                     Hole

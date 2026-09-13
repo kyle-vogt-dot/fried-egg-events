@@ -6,11 +6,52 @@ import { createBrowserClient } from '@supabase/ssr';
 
 type EventKind = 'tournament' | 'league';
 type RosterMode = 'individual' | 'team';
+type PlayFormat =
+  | 'stroke'
+  | 'match_play'
+  | 'stableford'
+  | 'nassau'
+  | 'other_individual'
+  | 'scramble'
+  | 'shamble'
+  | 'best_ball'
+  | 'alt_shot';
+
+const INDIVIDUAL_FORMATS: { value: PlayFormat; label: string }[] = [
+  { value: 'stroke', label: 'Stroke play' },
+  { value: 'match_play', label: 'Match play' },
+  { value: 'stableford', label: 'Stableford' },
+  { value: 'nassau', label: 'Nassau' },
+  { value: 'other_individual', label: 'Other individual' },
+];
+
+const TEAM_FORMATS: { value: PlayFormat; label: string }[] = [
+  { value: 'scramble', label: 'Scramble' },
+  { value: 'shamble', label: 'Shamble' },
+  { value: 'best_ball', label: 'Best ball' },
+  { value: 'alt_shot', label: 'Alternate shot' },
+  { value: 'stroke', label: 'Stroke (team total)' },
+];
+
+const TEAM_ONLY_FORMATS = new Set<PlayFormat>([
+  'scramble',
+  'shamble',
+  'best_ball',
+  'alt_shot',
+]);
 
 function parseTeamRosterSize(value: string): number | null {
   const n = parseInt(value, 10);
   if (!Number.isFinite(n) || n < 2) return null;
   return n;
+}
+
+function todayDateStr() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
 function courseDisplayName(course: any): string {
@@ -30,14 +71,11 @@ export default function CreateTournament() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [eventKind, setEventKind] = useState<EventKind | null>(null);
   const [rosterMode, setRosterMode] = useState<RosterMode | null>(null);
-  const [defaultCompeting, setDefaultCompeting] = useState<number | null>(null);
-  const [rosterMax, setRosterMax] = useState<number | null>(null);
   const [teamRosterSize, setTeamRosterSize] = useState('4');
+  const [playFormat, setPlayFormat] = useState<PlayFormat | null>(null);
+  const [numberOfHoles, setNumberOfHoles] = useState<9 | 18>(18);
 
   const [name, setName] = useState('');
-  const [dateStr, setDateStr] = useState('');
-  const [price, setPrice] = useState('');
-  const [description, setDescription] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -46,8 +84,6 @@ export default function CreateTournament() {
   const [selectedCourse, setSelectedCourse] = useState<any>(null);
   const [location, setLocation] = useState('');
   const [agreedToTerms, setAgreedToTerms] = useState(false);
-  const [isDemo, setIsDemo] = useState(false);
-  const [demoPassword, setDemoPassword] = useState('');
 
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const router = useRouter();
@@ -146,10 +182,10 @@ export default function CreateTournament() {
 
   const selectIndividual = () => {
     setRosterMode('individual');
-    setDefaultCompeting(1);
-    setRosterMax(1);
+    if (playFormat && TEAM_ONLY_FORMATS.has(playFormat)) {
+      setPlayFormat(null);
+    }
     setError(null);
-    setStep(3);
   };
 
   const selectTeam = () => {
@@ -179,8 +215,10 @@ export default function CreateTournament() {
       setError(resolved.error);
       return;
     }
-    setDefaultCompeting(resolved.play);
-    setRosterMax(resolved.roster);
+    if (!playFormat) {
+      setError('Choose a format.');
+      return;
+    }
     setError(null);
     setStep(3);
   };
@@ -189,7 +227,7 @@ export default function CreateTournament() {
     e.preventDefault();
 
     if (!eventKind) {
-      setError('Choose Tournament or League');
+      setError('Choose Tournament or League / Tour');
       setStep(1);
       return;
     }
@@ -197,6 +235,12 @@ export default function CreateTournament() {
     const resolved = resolveRoster();
     if ('error' in resolved) {
       setError(resolved.error);
+      setStep(2);
+      return;
+    }
+
+    if (!playFormat) {
+      setError('Choose a format.');
       setStep(2);
       return;
     }
@@ -213,28 +257,6 @@ export default function CreateTournament() {
       return;
     }
 
-    if (isDemo) {
-      if (!demoPassword.trim()) {
-        setError('Enter the demo passcode');
-        return;
-      }
-      try {
-        const res = await fetch('/api/verify-demo-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: demoPassword.trim() }),
-        });
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-          setError(data.error || 'Invalid demo passcode');
-          return;
-        }
-      } catch {
-        setError('Could not verify demo passcode');
-        return;
-      }
-    }
-
     setLoading(true);
     setError(null);
 
@@ -247,25 +269,22 @@ export default function CreateTournament() {
       return;
     }
 
-    const priceValue = price.trim() === '' ? null : parseFloat(price);
     const insertPayload = {
       name: name.trim(),
-      date: dateStr,
+      date: todayDateStr(),
       location: location.trim() || getCourseLocation(selectedCourse),
       course:
         courseDisplayName(selectedCourse) || courseSearch.trim() || '',
       course_data: selectedCourse,
-      description: description.trim() || null,
       created_by: user.id,
       is_active: true,
-      is_demo: isDemo,
       event_kind: eventKind,
+      format: playFormat,
       roster_max: resolved.roster,
       default_competing: resolved.play,
       max_teammates: resolved.play,
       max_players: 72,
-      price:
-        priceValue != null && Number.isFinite(priceValue) ? priceValue : null,
+      number_of_holes: numberOfHoles,
     };
 
     const { data: newEvent, error: insertError } = await supabase
@@ -281,12 +300,19 @@ export default function CreateTournament() {
       return;
     }
 
-    setLoading(false);
-
-    if (isDemo) {
-      router.push(`/event/${newEvent.id}/manage`);
-      return;
+    const { error: roundError } = await supabase.from('event_rounds').insert({
+      event_id: newEvent.id,
+      sort_order: 0,
+      name: 'Round 1',
+      format: playFormat,
+      course: insertPayload.course || null,
+      course_data: selectedCourse,
+    });
+    if (roundError) {
+      console.error('First round format save failed:', roundError);
     }
+
+    setLoading(false);
 
     let needsPayoutSetup = true;
     try {
@@ -313,8 +339,11 @@ export default function CreateTournament() {
     router.push(`/event/${newEvent.id}/manage`);
   };
 
-  const createLabel =
-    eventKind === 'league' ? 'Create League' : 'Create Tournament';
+  const isLeagueOrTour = eventKind === 'league';
+  const createLabel = isLeagueOrTour
+    ? 'Create League / Tour'
+    : 'Create Tournament';
+  const nameLabel = isLeagueOrTour ? 'League / Tour Name' : 'Tournament Name';
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
@@ -363,8 +392,7 @@ export default function CreateTournament() {
             >
               <div className="text-2xl font-bold mb-3">Tournament</div>
               <p className="text-gray-400 leading-relaxed">
-                One event or weekend. Rounds can be different days, courses, or
-                formats.
+                One-round event (one day, one format).
               </p>
             </button>
             <button
@@ -376,10 +404,9 @@ export default function CreateTournament() {
                   : 'border-gray-700 bg-gray-800 hover:border-gray-500'
               }`}
             >
-              <div className="text-2xl font-bold mb-3">League</div>
+              <div className="text-2xl font-bold mb-3">League / Tour</div>
               <p className="text-gray-400 leading-relaxed">
-                Same group over multiple weeks. Usually one course and one
-                format.
+                Repeating weeks, multiple rounds.
               </p>
             </button>
           </div>
@@ -387,29 +414,28 @@ export default function CreateTournament() {
 
         {step === 2 && (
           <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-2 gap-3 items-stretch">
               <button
                 type="button"
                 onClick={selectIndividual}
-                className={`text-left p-8 min-h-48 rounded-2xl border-2 transition-colors ${
+                className={`p-4 rounded-2xl border-2 h-full flex items-center justify-center text-center transition-colors ${
                   rosterMode === 'individual'
                     ? 'border-emerald-500 bg-emerald-900/30'
                     : 'border-gray-700 bg-gray-800 hover:border-gray-500'
                 }`}
               >
-                <div className="text-2xl font-bold mb-3">Individual</div>
-                <p className="text-gray-400 leading-relaxed">One person.</p>
+                <div className="text-lg sm:text-xl font-bold">Individual</div>
               </button>
               <button
                 type="button"
                 onClick={selectTeam}
-                className={`text-left p-8 min-h-48 rounded-2xl border-2 transition-colors ${
+                className={`p-4 rounded-2xl border-2 h-full flex items-center justify-center text-center transition-colors ${
                   rosterMode === 'team'
                     ? 'border-emerald-500 bg-emerald-900/30'
                     : 'border-gray-700 bg-gray-800 hover:border-gray-500'
                 }`}
               >
-                <div className="text-2xl font-bold mb-3">Team</div>
+                <div className="text-lg sm:text-xl font-bold">Team</div>
               </button>
             </div>
 
@@ -419,10 +445,8 @@ export default function CreateTournament() {
                   Team roster size
                 </label>
                 <p className="text-sm text-gray-400 leading-relaxed">
-                  Roster is how many names belong to the team (the list you
-                  manage). Play is how many of those names are in a group for a
-                  given round. Those can differ later (e.g. 5 on the roster, 4
-                  play a scramble).
+                  How many names on the team. Can differ from how many play a
+                  round later.
                 </p>
                 <input
                   type="number"
@@ -432,6 +456,34 @@ export default function CreateTournament() {
                   onChange={(e) => setTeamRosterSize(e.target.value)}
                   className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl no-spinner"
                 />
+              </div>
+            )}
+
+            {rosterMode && (
+              <div className="space-y-3">
+                <label className="block text-sm font-medium">Format</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  {(rosterMode === 'team'
+                    ? TEAM_FORMATS
+                    : INDIVIDUAL_FORMATS
+                  ).map((f) => (
+                    <button
+                      key={f.value}
+                      type="button"
+                      onClick={() => {
+                        setPlayFormat(f.value);
+                        setError(null);
+                      }}
+                      className={`px-4 py-4 rounded-2xl border-2 text-left font-medium transition-colors ${
+                        playFormat === f.value
+                          ? 'border-emerald-500 bg-emerald-900/30'
+                          : 'border-gray-700 bg-gray-800 hover:border-gray-500'
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -448,7 +500,7 @@ export default function CreateTournament() {
               >
                 Back
               </button>
-              {rosterMode === 'team' && (
+              {rosterMode && (
                 <button
                   type="button"
                   onClick={goToDetails}
@@ -465,7 +517,7 @@ export default function CreateTournament() {
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
               <label className="block text-sm font-medium mb-2">
-                {eventKind === 'league' ? 'League Name' : 'Tournament Name'}
+                {nameLabel}
               </label>
               <input
                 name="name"
@@ -475,38 +527,9 @@ export default function CreateTournament() {
                 onChange={(e) => setName(e.target.value)}
                 className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl focus:outline-none focus:border-blue-500"
                 placeholder={
-                  eventKind === 'league' ? 'Wednesday Night League' : 'Summer Classic'
+                  isLeagueOrTour ? 'Wednesday Night League' : 'Summer Classic'
                 }
               />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  {eventKind === 'league' ? 'First week' : 'Event date'}
-                </label>
-                <input
-                  name="date"
-                  type="date"
-                  required
-                  value={dateStr}
-                  onChange={(e) => setDateStr(e.target.value)}
-                  className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">Price</label>
-                <input
-                  name="price"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl no-spinner"
-                  placeholder="0.00"
-                />
-              </div>
             </div>
 
             <div>
@@ -586,50 +609,33 @@ export default function CreateTournament() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-2">
-                Description (optional)
+              <label className="block text-sm font-medium mb-3">
+                Number of holes
               </label>
-              <textarea
-                name="description"
-                rows={4}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl"
-                placeholder="18-hole stroke play..."
-              />
-            </div>
-
-            <div className="bg-gray-800 border border-gray-700 rounded-2xl p-5 space-y-4">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isDemo}
-                  onChange={(e) => {
-                    setIsDemo(e.target.checked);
-                    if (!e.target.checked) setDemoPassword('');
-                  }}
-                  className="mt-1 w-5 h-5 accent-amber-500"
-                />
-                <span>
-                  <span className="font-medium text-amber-400">
-                    Demo / training event
-                  </span>
-                  <span className="block text-sm text-gray-400 mt-1">
-                    Uses Stripe test mode only. No real charges. Passcode
-                    required.
-                  </span>
-                </span>
-              </label>
-              {isDemo && (
-                <input
-                  type="password"
-                  value={demoPassword}
-                  onChange={(e) => setDemoPassword(e.target.value)}
-                  placeholder="Demo passcode"
-                  className="w-full px-5 py-4 bg-gray-700 border border-amber-600/50 rounded-2xl"
-                  autoComplete="off"
-                />
-              )}
+              <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-2xl p-1">
+                <button
+                  type="button"
+                  onClick={() => setNumberOfHoles(9)}
+                  className={`flex-1 py-4 rounded-2xl font-medium ${
+                    numberOfHoles === 9
+                      ? 'bg-blue-600 text-white'
+                      : 'hover:bg-gray-600 text-gray-300'
+                  }`}
+                >
+                  9 Holes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNumberOfHoles(18)}
+                  className={`flex-1 py-4 rounded-2xl font-medium ${
+                    numberOfHoles === 18
+                      ? 'bg-blue-600 text-white'
+                      : 'hover:bg-gray-600 text-gray-300'
+                  }`}
+                >
+                  18 Holes
+                </button>
+              </div>
             </div>
 
             {error && <p className="text-red-500 text-center">{error}</p>}

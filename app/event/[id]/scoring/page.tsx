@@ -5,6 +5,11 @@ import { useParams, useRouter } from 'next/navigation';
 import EventTabs from '@/app/components/EventTabs';
 import BackButton from '@/app/components/BackButton';
 import { createBrowserClient } from '@supabase/ssr';
+import {
+  eventFormatLabel,
+  hideRoundSelector,
+  isTeamRosterEvent,
+} from '@/app/libs/event-setup';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -213,7 +218,9 @@ export default function EventScoringPage() {
     return rounds.find((r) => r.id === selectedRoundId) || null;
   }, [rounds, selectedRoundId]);
 
-  const isTeamEvent = (event?.max_teammates || 1) > 1;
+  const isTeamEvent = isTeamRosterEvent(event);
+  const formatLabel = eventFormatLabel(event, selectedRound);
+  const lockRoundSelector = hideRoundSelector(event, rounds.length);
 
   const scoredRegs = useMemo(() => {
     return registrations.filter((r) => {
@@ -543,9 +550,10 @@ export default function EventScoringPage() {
             <p className="text-gray-400 mt-1">
               Live Scoring · {numHoles} holes
               {event?.course ? ` · ${event.course}` : ''}
+              {formatLabel ? ` · ${formatLabel}` : ''}
               {headerTeeTime ? ` · ${headerTeeTime}` : ''}
             </p>
-            {selectedRound && (
+            {selectedRound && !lockRoundSelector && (
               <p className="text-sm text-teal-400 mt-1">
                 Round: {selectedRound.name}
                 {headerTeeTime ? ` (${headerTeeTime})` : ''}
@@ -556,7 +564,7 @@ export default function EventScoringPage() {
             </p>
           </div>
 
-          {rounds.length > 0 && (
+          {rounds.length > 0 && !lockRoundSelector && (
             <div className="w-full lg:w-72">
               <label className="block text-sm text-gray-400 mb-2">
                 Score by round
@@ -601,7 +609,7 @@ export default function EventScoringPage() {
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-900">
                   <th className="text-left py-4 px-6 font-medium w-52">
-                    Team / Player
+                    {isTeamEvent ? 'Team' : 'Player'}
                   </th>
                   {Array.from({ length: frontCount }, (_, i) => (
                     <th

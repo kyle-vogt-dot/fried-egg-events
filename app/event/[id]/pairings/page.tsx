@@ -14,6 +14,11 @@ import {
 import { isListableReg } from '@/app/libs/event-emails';
 import EventTabs from '@/app/components/EventTabs';
 import BackButton from '@/app/components/BackButton';
+import {
+  eventFormatLabel,
+  hideRoundSelector,
+  isTeamRosterEvent,
+} from '@/app/libs/event-setup';
 
 type Slot = 'A' | 'B' | 'C' | 'D';
 type StartFormat = 'shotgun' | 'tee_times' | 'double_tee';
@@ -265,25 +270,13 @@ export default function EventPairingsPage() {
     return n === 9 ? 9 : 18;
   }, [event]);
 
-  const isTeamEvent = useMemo(() => {
-    const mt = Number(event?.max_teammates || 0);
-    if (mt > 1) return true;
-    const t = String(event?.event_type || '').toLowerCase();
-    if (
-      t.includes('scramble') ||
-      t.includes('best ball') ||
-      t.includes('team')
-    )
-      return true;
-    if (
-      t.includes('stroke') ||
-      t.includes('individual') ||
-      t.includes('medal')
-    )
-      return false;
-    // Fallback: any multi-player team_name used often → team
-    return mt > 1;
-  }, [event]);
+  const isTeamEvent = isTeamRosterEvent(event);
+  const selectedRound = useMemo(
+    () => rounds.find((r) => r.id === selectedRoundId) || null,
+    [rounds, selectedRoundId]
+  );
+  const formatLabel = eventFormatLabel(event, selectedRound);
+  const lockRoundSelector = hideRoundSelector(event, rounds.length);
 
   const slotsPerHole = isTeamEvent ? 2 : 4;
   const slotLetters: Slot[] = isTeamEvent
@@ -299,11 +292,6 @@ export default function EventPairingsPage() {
     }
     return slots;
   }, [numHoles, slotLetters]);
-
-  const selectedRound = useMemo(
-    () => rounds.find((r) => r.id === selectedRoundId) || null,
-    [rounds, selectedRoundId]
-  );
 
   const pdfRows = useMemo(() => {
     const rows = teams.map((t) => {
@@ -359,11 +347,6 @@ export default function EventPairingsPage() {
     const byTeam: Record<string, any[]> = {};
     for (const r of filtered) {
       // Individual events: one row per player
-      const key =
-        isTeamEvent || (r.team_name && r.team_name.trim())
-          ? r.team_name || `Individual:${r.id}`
-          : `Individual:${r.id}`;
-      // Force per-player when individual event
       const groupKey = isTeamEvent
         ? r.team_name || `Individual:${r.id}`
         : `Individual:${r.id}`;
@@ -807,7 +790,8 @@ export default function EventPairingsPage() {
               {isTeamEvent
                 ? `teams · ${slotsPerHole} per hole (A/B)`
                 : `individual · ${slotsPerHole} players per tee box`}
-              {selectedRound
+              {formatLabel ? ` · ${formatLabel}` : ''}
+              {selectedRound && !lockRoundSelector
                 ? ` · ${selectedRound.name}${
                     selectedRound.start_time
                       ? ` (${formatRoundTime(selectedRound.start_time)})`
@@ -818,7 +802,7 @@ export default function EventPairingsPage() {
           </div>
 
           <div className="flex flex-wrap gap-3 items-center">
-            {rounds.length > 0 && (
+            {rounds.length > 0 && !lockRoundSelector && (
               <select
                 value={selectedRoundId ?? ''}
                 onChange={(e) => {
@@ -1035,9 +1019,11 @@ export default function EventPairingsPage() {
                     <th className="py-4 px-6">
                       {isTeamEvent ? 'Team' : 'Player'}
                     </th>
+                    {isTeamEvent && (
                     <th className="py-4 px-6">
-                      {isTeamEvent ? 'Players' : '—'}
+                      Players
                     </th>
+                    )}
                     <th className="py-4 px-6 w-40">Hole / slot</th>
                     <th className="py-4 px-6 w-36">Tee time</th>
                     <th className="py-4 px-6">Quick pick</th>
@@ -1057,9 +1043,11 @@ export default function EventPairingsPage() {
                           </div>
                         )}
                       </td>
+                      {isTeamEvent && (
                       <td className="py-4 px-6 text-gray-400">
-                        {isTeamEvent ? team.player_count : '—'}
+                        {team.player_count}
                       </td>
+                      )}
                       <td className="py-4 px-6">
                         <input
                           value={draft[team.team_name] ?? ''}
