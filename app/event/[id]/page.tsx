@@ -15,6 +15,11 @@ import {
   Image,
 } from '@react-pdf/renderer';
 import { isListableReg } from '@/app/libs/event-emails';
+import {
+  amountWithPlatformFee,
+  DEFAULT_PLATFORM_FEE_PERCENT,
+  resolvePlatformFeePercent,
+} from '@/app/libs/platform-fee';
 
 const flyerStyles = StyleSheet.create({
   page: {
@@ -307,7 +312,9 @@ export default function EventDetailPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const eventId = params.id as string;
-  const [platformFee, setPlatformFee] = useState(3.0);
+  const [platformFeePercent, setPlatformFeePercent] = useState(
+    DEFAULT_PLATFORM_FEE_PERCENT
+  );
 const [flyerImageDataUrl, setFlyerImageDataUrl] = useState<string | null>(null);
 const [flyerImageSize, setFlyerImageSize] = useState<{ w: number; h: number } | null>(null);
 const [flyerImageReady, setFlyerImageReady] = useState(true); // true when no image needed
@@ -487,13 +494,13 @@ const [waitlistDone, setWaitlistDone] = useState(false);
 
   const { data: feeData } = await supabase
     .from('platform_settings')
-    .select('platform_fee')
+    .select('platform_fee_percent')
     .eq('id', 1)
     .single();
 
-  if (feeData?.platform_fee !== undefined && feeData?.platform_fee !== null) {
-    setPlatformFee(Number(feeData.platform_fee));
-  }
+  setPlatformFeePercent(
+    resolvePlatformFeePercent(feeData?.platform_fee_percent)
+  );
 
   const {
     data: { user },
@@ -1164,13 +1171,13 @@ const myRegisteredRoundNames = useMemo(() => {
 
         const { data: feeData } = await supabase
           .from('platform_settings')
-          .select('platform_fee')
+          .select('platform_fee_percent')
           .eq('id', 1)
           .single();
 
-        if (feeData?.platform_fee) {
-          setPlatformFee(Number(feeData.platform_fee));
-        }
+        setPlatformFeePercent(
+          resolvePlatformFeePercent(feeData?.platform_fee_percent)
+        );
 
         setShowSuccessMessage(true);
           
@@ -1208,11 +1215,13 @@ const myRegisteredRoundNames = useMemo(() => {
 
           const { data: liveFeeData } = await supabase
             .from('platform_settings')
-            .select('platform_fee')
+            .select('platform_fee_percent')
             .eq('id', 1)
             .single();
 
-          const feePerPlayer = Number(liveFeeData?.platform_fee) || 0;
+          const feePercent = resolvePlatformFeePercent(
+            liveFeeData?.platform_fee_percent
+          );
           const isPerRoundMode =
             (eventData.pricing_mode || 'event') === 'per_round';
 
@@ -1225,24 +1234,22 @@ const myRegisteredRoundNames = useMemo(() => {
 
           if (netAmount <= 0) {
             if (isPerRoundMode) {
-              netAmount = signedUpRounds.reduce((sum, r) => {
-                return (
-                  sum +
-                  (Number(r.price || 0) + feePerPlayer) * playerCountThisPayment
-                );
-               
+              const subtotal = signedUpRounds.reduce((sum, r) => {
+                return sum + Number(r.price || 0) * playerCountThisPayment;
               }, 0);
+              netAmount = amountWithPlatformFee(subtotal, feePercent);
             } else {
-              const baseWithFee = (Number(eventData.price) || 0) + feePerPlayer;
               const optionalRounds = signedUpRounds.filter(
                 (r) => r.pay_separately
               );
               const optionalPerPlayer = optionalRounds.reduce(
-                (sum, r) => sum + Number(r.price || 0) + feePerPlayer,
+                (sum, r) => sum + Number(r.price || 0),
                 0
               );
-              netAmount =
-                (baseWithFee + optionalPerPlayer) * playerCountThisPayment;
+              const subtotal =
+                ((Number(eventData.price) || 0) + optionalPerPlayer) *
+                playerCountThisPayment;
+              netAmount = amountWithPlatformFee(subtotal, feePercent);
             }
           }
 
@@ -1251,8 +1258,7 @@ const myRegisteredRoundNames = useMemo(() => {
             if (isPerRoundMode || r.pay_separately) {
               return {
                 label: `${r.name}${time ? ` at ${time}` : ''}`,
-                price:
-                  (Number(r.price || 0) + feePerPlayer) * playerCountThisPayment,
+                price: Number(r.price || 0) * playerCountThisPayment,
               };
             }
             return `${r.name}${time ? ` at ${time}` : ''} (included)`;
@@ -1520,7 +1526,6 @@ const spotsLeft =
     : rounds.filter((r) => r.pay_separately);
 
   const pricePerPlayer = isPerRound ? 0 : Number(event?.price) || 0;
-  const feePerPlayer = platformFee;
 
   const hasIncompleteAdditionalPlayers = additionalPlayers.some(
     (p) => !(p.name || '').trim() || !isValidEmail(p.email || '')
@@ -1656,7 +1661,7 @@ const spotsLeft =
         selectableRounds.find((r) => r.id === id) ||
         rounds.find((r) => r.id === id);
       if (!round) return sum;
-      return sum + Number(round.price || 0) + feePerPlayer;
+      return sum + Number(round.price || 0);
     },
     0
   );
@@ -1678,7 +1683,7 @@ const spotsLeft =
       selectableRounds.find((r) => r.id === id) ||
       rounds.find((r) => r.id === id);
     if (!round) return sum;
-    const raw = Number(round.price || 0) + feePerPlayer - discountPerPlayer;
+    const raw = Number(round.price || 0) - discountPerPlayer;
     return sum + Math.max(0, raw);
   }, 0);
 
@@ -1686,7 +1691,7 @@ const spotsLeft =
 
   const isTeamEvent = maxTeamSize > 1;
 
-  const totalCost = isPerRound
+  const registrationSubtotal = isPerRound
     ? isTeamEvent
       ? costAllSelectedRounds
       : (countingSelf ? costNewRoundsOnly : 0) +
@@ -1694,21 +1699,20 @@ const spotsLeft =
     : isTeamEvent
       ? Math.max(
           0,
-          pricePerPlayer +
-            feePerPlayer +
-            selectedRoundsCostPerPlayer -
-            discountPerPlayer
+          pricePerPlayer + selectedRoundsCostPerPlayer - discountPerPlayer
         )
       : (countingSelf ? 1 : 0) + additionalCount > 0
         ? ((countingSelf ? 1 : 0) + additionalCount) *
           Math.max(
             0,
-            pricePerPlayer +
-              feePerPlayer +
-              selectedRoundsCostPerPlayer -
-              discountPerPlayer
+            pricePerPlayer + selectedRoundsCostPerPlayer - discountPerPlayer
           )
         : 0;
+
+  const totalCost = amountWithPlatformFee(
+    registrationSubtotal,
+    platformFeePercent
+  );
 
   const getSelectedRoundIds = () => {
     if (isPerRound) return [...selectedPaidRoundIds];
@@ -1848,7 +1852,7 @@ const spotsLeft =
     try {
       const basePerPlayer = isPerRound
         ? selectedRoundsCostPerPlayer
-        : pricePerPlayer + feePerPlayer + selectedRoundsCostPerPlayer;
+        : pricePerPlayer + selectedRoundsCostPerPlayer;
 
       const res = await fetch('/api/discount-codes/validate', {
         method: 'POST',
@@ -2363,18 +2367,23 @@ paid: false,
               <p className="text-gray-500 text-sm mb-1">
                 {(event.pricing_mode || 'event') === 'per_round'
                   ? ' PER PLAYER'
-                  : 'Price per Player'}
+                  : Number(event.max_teammates) > 1
+                    ? 'Price per team'
+                    : 'Price per Player'}
               </p>
               <p className="text-xl font-medium">
                 {(event.pricing_mode || 'event') === 'per_round'
                   ? rounds.length > 0
-                    ? `$${(
-                        Math.min(...rounds.map((r) => Number(r.price) || 0)) +
-                        platformFee
+                    ? `$${amountWithPlatformFee(
+                        Math.min(...rounds.map((r) => Number(r.price) || 0)),
+                        platformFeePercent
                       ).toFixed(2)}`
                     : 'TBD'
                   : event.price
-                    ? `$${(Number(event.price) + platformFee).toFixed(2)}`
+                    ? `$${amountWithPlatformFee(
+                        Number(event.price),
+                        platformFeePercent
+                      ).toFixed(2)}`
                     : 'TBD'}
               </p>
             </div>
@@ -2409,7 +2418,10 @@ paid: false,
                       Max {round.max_players} players
                       {(event.pricing_mode || 'event') === 'per_round' ||
                       round.pay_separately
-                        ? ` · $${(Number(round.price || 0) + platformFee).toFixed(2)}`
+                        ? ` · $${amountWithPlatformFee(
+                            Number(round.price || 0),
+                            platformFeePercent
+                          ).toFixed(2)}`
                         : ' · Included'}
                     </div>
                   </div>
@@ -2899,7 +2911,10 @@ paid: false,
       <div className="text-sm font-medium text-teal-300">
         {alreadyOn || teamFullOnThisRound
           ? '—'
-          : `$${(Number(round.price || 0) + platformFee).toFixed(2)}`}
+          : `$${amountWithPlatformFee(
+              Number(round.price || 0),
+              platformFeePercent
+            ).toFixed(2)}`}
       </div>
     </label>
   );

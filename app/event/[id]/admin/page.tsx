@@ -6,6 +6,11 @@ import { createBrowserClient } from '@supabase/ssr';
 import ReactEasyCrop from 'react-easy-crop';
 import { QRCodeCanvas } from 'qrcode.react';
 import { Document, Page, Text, View, StyleSheet, PDFDownloadLink, Image } from '@react-pdf/renderer';
+import {
+  amountWithPlatformFee,
+  DEFAULT_PLATFORM_FEE_PERCENT,
+  resolvePlatformFeePercent,
+} from '@/app/libs/platform-fee';
 
 
 export default function EventAdminPage() {
@@ -63,6 +68,9 @@ export default function EventAdminPage() {
 
   // Selected add-on quantities
   const [selectedQuantities, setSelectedQuantities] = useState<Record<number, Record<number, number>>>({});
+  const [platformFeePercent, setPlatformFeePercent] = useState(
+    DEFAULT_PLATFORM_FEE_PERCENT
+  );
 
   // Course search
   const [courseSearch, setCourseSearch] = useState('');
@@ -149,6 +157,15 @@ export default function EventAdminPage() {
         .select('*')
         .eq('event_id', parseInt(eventId));
       setAddons(addonData || []);
+
+      const { data: feeData } = await supabase
+        .from('platform_settings')
+        .select('platform_fee_percent')
+        .eq('id', 1)
+        .single();
+      setPlatformFeePercent(
+        resolvePlatformFeePercent(feeData?.platform_fee_percent)
+      );
     };
 
     fetchData();
@@ -243,10 +260,11 @@ export default function EventAdminPage() {
   if (!currentPayReg) return;
 
   const addonTotals = selectedQuantities[currentPayReg.id] || {};
-  const addonCost = addons.reduce((sum: number, addon: any) => {
+  const addonSubtotal = addons.reduce((sum: number, addon: any) => {
     const qty = addonTotals[addon.id] || 0;
     return sum + qty * (addon.price_per_unit || 0);
   }, 0);
+  const addonCost = amountWithPlatformFee(addonSubtotal, platformFeePercent);
 
   if (addonCost <= 0) return alert("No add-ons selected");
 
@@ -454,10 +472,11 @@ const handleCheckout = async () => {
   if (!currentPayReg) return;
 
   const addonTotals = selectedQuantities[currentPayReg.id] || {};
-  const addonCost = addons.reduce((sum: number, addon: any) => {
+  const addonSubtotal = addons.reduce((sum: number, addon: any) => {
     const qty = addonTotals[addon.id] || 0;
     return sum + qty * (addon.price_per_unit || 0);
   }, 0);
+  const addonCost = amountWithPlatformFee(addonSubtotal, platformFeePercent);
 
   if (addonCost <= 0) return;
 
@@ -1697,10 +1716,14 @@ const selectCourse = async (basicCourse: any) => {
                 const isPaidForAddons = reg.paid_addons || false;     // ← This must say paid_addons
                 const addonTotals = reg.addon_quantities || selectedQuantities[reg.id] || {};
 
-                const addonCost = addons.reduce((sum: number, addon: any) => {
+                const addonSubtotal = addons.reduce((sum: number, addon: any) => {
                   const qty = addonTotals[addon.id] || 0;
                   return sum + qty * (addon.price_per_unit || 0);
                 }, 0);
+                const addonCost = amountWithPlatformFee(
+                  addonSubtotal,
+                  platformFeePercent
+                );
 
 const hasPaidAddons = isPaidForAddons && Object.keys(addonTotals).length > 0;
 

@@ -59,7 +59,6 @@ export default function JoinFromInvitePage() {
   const [event, setEvent] = useState<any>(null);
   const [rounds, setRounds] = useState<any[]>([]);
   const [options, setOptions] = useState<JoinOption[]>([]);
-  const [platformFee, setPlatformFee] = useState(3);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [inviter, setInviter] = useState<{
     name: string;
@@ -113,15 +112,6 @@ export default function JoinFromInvitePage() {
         .eq('event_id', id)
         .order('sort_order', { ascending: true });
       setRounds(roundsData || []);
-
-      const { data: feeData } = await supabase
-        .from('platform_settings')
-        .select('platform_fee')
-        .eq('id', 1)
-        .single();
-      if (feeData?.platform_fee != null) {
-        setPlatformFee(Number(feeData.platform_fee));
-      }
 
       const {
         data: { user },
@@ -268,15 +258,12 @@ export default function JoinFromInvitePage() {
   );
 
   const total = useMemo(() => {
-    const base = selectedOptions.reduce(
-      (sum, o) => sum + o.price + platformFee,
-      0
-    );
+    const base = selectedOptions.reduce((sum, o) => sum + o.price, 0);
     const discount = appliedDiscount
       ? Number(appliedDiscount.amount_saved) || 0
       : 0;
     return Math.max(0, base - discount);
-  }, [selectedOptions, platformFee, appliedDiscount]);
+  }, [selectedOptions, appliedDiscount]);
 
   const toggle = (key: string) => {
     setSelected((prev) => {
@@ -291,9 +278,7 @@ export default function JoinFromInvitePage() {
     if (!discountCode.trim() || !event) return;
     setDiscountError('');
     try {
-      const basePer =
-        selectedOptions.reduce((s, o) => s + o.price + platformFee, 0) ||
-        platformFee;
+      const basePer = selectedOptions.reduce((s, o) => s + o.price, 0);
       const res = await fetch('/api/discount-codes/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

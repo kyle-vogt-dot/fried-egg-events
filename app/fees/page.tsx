@@ -54,13 +54,14 @@ export default function FeePolicyPage() {
             </h2>
             <ul className="list-disc pl-6 space-y-2">
               <li>
-                Fried Egg Events charges a platform fee per paid player
-                registration (and, where applicable, per paid add-on checkout as
-                configured).
+                Fried Egg Events charges a platform fee as a percent of the card
+                subtotal on paid player registration (and, where applicable, per
+                paid add-on checkout as configured). Cash, comp, and team-invite
+                rows are not charged a platform fee.
               </li>
               <li>
                 Current standard platform fee:{' '}
-                <strong className="text-white">$3.00 USD per player</strong>{' '}
+                <strong className="text-white">5% of the card subtotal</strong>{' '}
                 (or the amount shown at checkout / in platform settings).
               </li>
               <li>The platform fee is disclosed before payment.</li>
@@ -92,12 +93,12 @@ export default function FeePolicyPage() {
             <div className="mt-4 bg-gray-800 rounded-2xl p-5 text-sm">
               <p className="font-medium text-white mb-2">Example (illustration)</p>
               <p>
-                Player pays $50 entry + $3 platform fee = $53 (before any
+                Player pays $50 entry + 5% platform fee = $52.50 (before any
                 separate processing line item).
               </p>
               <ul className="list-disc pl-6 mt-2 space-y-1">
                 <li>Organizer: $50</li>
-                <li>Fried Egg Events: $3</li>
+                <li>Fried Egg Events: $2.50</li>
                 <li>Stripe processing: per Stripe’s rates (see section 4)</li>
               </ul>
             </div>
@@ -213,7 +214,7 @@ export default function FeePolicyPage() {
         <div className="mt-12 pt-8 border-t border-gray-800 text-sm text-gray-500">
           <p>
             Short version: Event price goes to the organizer. Fried Egg Events
-            charges a platform fee per player. Card payments are processed by
+            charges a percent platform fee on card checkouts. Card payments are processed by
             Stripe. Bank payouts are handled by Stripe. Fried Egg Events never
             stores your bank details.
           </p>

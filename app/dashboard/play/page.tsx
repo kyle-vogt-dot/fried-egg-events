@@ -185,7 +185,6 @@ const [editEmail, setEditEmail] = useState('');
   const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
 
   const [teamRoster, setTeamRoster] = useState<any[]>([]);
-const [platformFee, setPlatformFee] = useState(3);
 const [addPlayersOpen, setAddPlayersOpen] = useState(false);
 const [addPlayersContext, setAddPlayersContext] = useState<{
   teamName: string;
@@ -456,7 +455,7 @@ const applyDiscountCode = async () => {
   setDiscountError('');
   try {
     const price = Number(selectedItem.event.price) || 0;
-    const basePerPlayer = price + platformFee;
+    const basePerPlayer = price;
 
     const res = await fetch('/api/discount-codes/validate', {
       method: 'POST',
@@ -625,14 +624,6 @@ const openDetail = async (id: number) => {
     });
   }
 
-  const { data: feeData } = await supabase
-    .from('platform_settings')
-    .select('platform_fee')
-    .eq('id', 1)
-    .single();
-  if (feeData?.platform_fee != null) {
-    setPlatformFee(Number(feeData.platform_fee));
-  }
 };
 
   if (loading) {

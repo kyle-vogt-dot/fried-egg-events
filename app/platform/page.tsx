@@ -3,6 +3,11 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import {
+  amountWithPlatformFee,
+  formatPlatformFeePercent,
+  resolvePlatformFeePercent,
+} from '@/app/libs/platform-fee';
 
 export default function PlatformAdminPage() {
   const router = useRouter();
@@ -13,7 +18,7 @@ export default function PlatformAdminPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [feeInput, setFeeInput] = useState('3.00');
+  const [feeInput, setFeeInput] = useState('5');
   const [message, setMessage] = useState('');
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
@@ -70,13 +75,15 @@ export default function PlatformAdminPage() {
       // Platform fee
       const { data: feeData } = await supabase
         .from('platform_settings')
-        .select('platform_fee')
+        .select('platform_fee_percent')
         .eq('id', 1)
         .single();
 
-      if (feeData?.platform_fee !== undefined && feeData?.platform_fee !== null) {
-        setFeeInput(Number(feeData.platform_fee).toFixed(2));
-      }
+      setFeeInput(
+        formatPlatformFeePercent(
+          resolvePlatformFeePercent(feeData?.platform_fee_percent)
+        )
+      );
 
       // Events list
       const { data: eventsData } = await supabase
@@ -135,12 +142,17 @@ export default function PlatformAdminPage() {
     setSaving(true);
     setMessage('');
 
-    const fee = Number(feeInput) || 0;
+    const fee = Number(feeInput);
+    if (!Number.isFinite(fee) || fee < 0) {
+      setMessage('Enter a valid percent');
+      setSaving(false);
+      return;
+    }
 
     const { error } = await supabase
       .from('platform_settings')
       .update({
-        platform_fee: fee,
+        platform_fee_percent: fee,
         updated_at: new Date().toISOString(),
       })
       .eq('id', 1);
@@ -213,23 +225,25 @@ export default function PlatformAdminPage() {
         return;
       }
 
-      // Calculate amount if charging
+      // Calculate amount if charging (percent of card subtotal)
       let amountToCharge = 0;
 
       if (chargeType === 'charge') {
+        let subtotal = 0;
         if (customAmount.trim() !== '') {
-          amountToCharge = Number(customAmount) || 0;
+          subtotal = Number(customAmount) || 0;
         } else if (isPerRound) {
-          // Sum selected rounds + platform fee
-          const fee = Number(feeInput) || 0;
-          amountToCharge = selectedRoundIds.reduce((sum, id) => {
+          subtotal = selectedRoundIds.reduce((sum, id) => {
             const r = rounds.find((x) => x.id === id);
-            return sum + (Number(r?.price || 0) + fee);
+            return sum + Number(r?.price || 0);
           }, 0);
         } else {
-          const fee = Number(feeInput) || 0;
-          amountToCharge = (Number(selectedEvent?.price) || 0) + fee;
+          subtotal = Number(selectedEvent?.price) || 0;
         }
+        amountToCharge = amountWithPlatformFee(
+          subtotal,
+          resolvePlatformFeePercent(feeInput)
+        );
       }
 
       // Insert registration
@@ -403,7 +417,7 @@ export default function PlatformAdminPage() {
 
           <div>
             <label className="block text-sm font-medium mb-2">
-              Platform Fee (in dollars)
+              Platform fee (percent of card subtotal)
             </label>
             <input
               type="number"
@@ -414,7 +428,10 @@ export default function PlatformAdminPage() {
               className="w-full bg-gray-700 border border-gray-600 rounded-2xl px-5 py-4 text-lg"
             />
             <p className="text-sm text-gray-400 mt-2">
-              Current fee: ${Number(feeInput || 0).toFixed(2)} per player
+              {formatPlatformFeePercent(
+                resolvePlatformFeePercent(feeInput)
+              )}
+              % platform fee included at checkout
             </p>
           </div>
 

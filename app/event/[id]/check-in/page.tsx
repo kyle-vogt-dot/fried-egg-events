@@ -5,6 +5,12 @@ import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 import { isListableReg } from '@/app/libs/event-emails';
+import {
+  amountWithPlatformFee,
+  DEFAULT_PLATFORM_FEE_PERCENT,
+  formatPlatformFeePercent,
+  resolvePlatformFeePercent,
+} from '@/app/libs/platform-fee';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -82,7 +88,9 @@ export default function EventCheckInPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
   const [editingAddonRegId, setEditingAddonRegId] = useState<number | null>(null);
-  const [platformFee, setPlatformFee] = useState(0);
+  const [platformFeePercent, setPlatformFeePercent] = useState(
+    DEFAULT_PLATFORM_FEE_PERCENT
+  );
 
   const [showAddPlayerModal, setShowAddPlayerModal] = useState(false);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -128,18 +136,23 @@ export default function EventCheckInPage() {
   const isPerRound = (event?.pricing_mode || 'event') === 'per_round';
 
   // Estimate registration charge for admin-add (event or selected round)
-  const estimateRegCharge = () => {
-    const fee = platformFee || 0;
+  const estimateRegSubtotal = () => {
     if (isPerRound) {
       if (selectedRoundId !== 'all' && selectedRound) {
-        return Number(selectedRound.price || 0) + fee;
+        return Number(selectedRound.price || 0);
       }
-      // all rounds selected → sum round prices + fee per round
       if (rounds.length > 0) {
-        return rounds.reduce((s, r) => s + Number(r.price || 0) + fee, 0);
+        return rounds.reduce((s, r) => s + Number(r.price || 0), 0);
       }
     }
-    return Number(event?.price || 0) + fee;
+    return Number(event?.price || 0);
+  };
+
+  const estimateRegCharge = () => {
+    const subtotal = estimateRegSubtotal();
+    if (addChargeType === 'free') return 0;
+    if (addChargeType === 'cash') return Math.round(subtotal * 100) / 100;
+    return amountWithPlatformFee(subtotal, platformFeePercent);
   };
 
   const filteredRegistrations = useMemo(() => {
@@ -264,12 +277,12 @@ export default function EventCheckInPage() {
 
       const { data: feeData } = await supabase
         .from('platform_settings')
-        .select('platform_fee')
+        .select('platform_fee_percent')
         .eq('id', 1)
         .single();
-      if (feeData?.platform_fee != null) {
-        setPlatformFee(Number(feeData.platform_fee));
-      }
+      setPlatformFeePercent(
+        resolvePlatformFeePercent(feeData?.platform_fee_percent)
+      );
 
       await fetchRegistrations();
       setLoading(false);
@@ -608,10 +621,14 @@ export default function EventCheckInPage() {
       currentPayReg.addon_quantities ||
       {};
 
-    const addonCost = addons.reduce((sum: number, addon: any) => {
+    const addonSubtotal = addons.reduce((sum: number, addon: any) => {
       const qty = addonTotals[addon.id] || 0;
       return sum + qty * (addon.price_per_unit || 0);
     }, 0);
+    const addonCost = amountWithPlatformFee(
+      addonSubtotal,
+      platformFeePercent
+    );
 
     if (addonCost <= 0) {
       alert('No add-on total to charge.');
@@ -981,6 +998,10 @@ export default function EventCheckInPage() {
                     const qty = addonTotals[addon.id] || 0;
                     return sum + qty * (addon.price_per_unit || 0);
                   }, 0);
+                  const addonCheckout = amountWithPlatformFee(
+                    addonCost,
+                    platformFeePercent
+                  );
 
                   const startingHole = getPairingLabel(reg, selectedRoundId);
 
@@ -1148,7 +1169,7 @@ export default function EventCheckInPage() {
                                 onClick={() => openPaymentModal(reg)}
                                 className="bg-amber-600 hover:bg-amber-700 px-2.5 py-1.5 rounded-xl text-xs font-medium text-white whitespace-nowrap"
                               >
-                                Pay ${addonCost.toFixed(2)}
+                                Pay ${addonCheckout.toFixed(2)}
                               </button>
                             ))}
 
@@ -1355,10 +1376,15 @@ export default function EventCheckInPage() {
               <span className="text-emerald-400 font-medium">
                 ${addChargePreview.toFixed(2)}
               </span>
-              <span className="text-gray-500">
-                {' '}
-                (includes ${platformFee.toFixed(2)} platform fee)
-              </span>
+              {addChargeType === 'link' ? (
+                <span className="text-gray-500">
+                  {' '}
+                  ({formatPlatformFeePercent(platformFeePercent)}% platform fee
+                  included at checkout)
+                </span>
+              ) : addChargeType === 'cash' ? (
+                <span className="text-gray-500"> (cash — no platform fee)</span>
+              ) : null}
             </p>
             <div className="space-y-4">
               <input

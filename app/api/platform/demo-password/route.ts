@@ -84,6 +84,7 @@ export async function POST(req: NextRequest) {
       id: 1,
       demo_event_password: value,
       platform_fee: 3,
+      platform_fee_percent: 5,
     });
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

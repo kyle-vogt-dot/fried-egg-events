@@ -6,6 +6,11 @@ import { createBrowserClient } from '@supabase/ssr';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import EventEmailsPanel from '@/app/components/EventEmailsPanel';
 import { loadEventAccess, canUse } from '@/app/libs/event-admin';
+import {
+  DEFAULT_PLATFORM_FEE_PERCENT,
+  formatPlatformFeePercent,
+  resolvePlatformFeePercent,
+} from '@/app/libs/platform-fee';
 
 
 
@@ -38,7 +43,9 @@ export default function EventManagePage() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [platformFee, setPlatformFee] = useState(3.0);
+  const [platformFeePercent, setPlatformFeePercent] = useState(
+    DEFAULT_PLATFORM_FEE_PERCENT
+  );
 
   const [courseSearch, setCourseSearch] = useState('');
   const [courseResults, setCourseResults] = useState<any[]>([]);
@@ -213,13 +220,13 @@ const [adminPerms, setAdminPerms] = useState({
 
       const { data: feeData } = await supabase
         .from('platform_settings')
-        .select('platform_fee')
+        .select('platform_fee_percent')
         .eq('id', 1)
         .single();
 
-      if (feeData?.platform_fee) {
-        setPlatformFee(Number(feeData.platform_fee));
-      }
+      setPlatformFeePercent(
+        resolvePlatformFeePercent(feeData?.platform_fee_percent)
+      );
 
       setLoading(false);
     };
@@ -1899,7 +1906,8 @@ const handleDeleteEvent = async () => {
               disabled={(event.pricing_mode || 'event') === 'per_round'}
             />
             <p className="text-sm text-gray-400 mt-2">
-              ${platformFee.toFixed(2)} platform fee is included in checkout totals
+              {formatPlatformFeePercent(platformFeePercent)}% platform fee
+              included at checkout
             </p>
                         {teamSize > 1 && (event.pricing_mode || 'event') !== 'per_round' && (
               <p className="text-xs text-gray-500 mt-2">
