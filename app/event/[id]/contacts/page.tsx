@@ -3,6 +3,201 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import { Document, Page, Text, View, StyleSheet, PDFDownloadLink } from '@react-pdf/renderer';
+
+const pdfStyles = StyleSheet.create({
+  page: {
+    paddingTop: 32,
+    paddingBottom: 36,
+    paddingHorizontal: 28,
+    fontFamily: 'Helvetica',
+    fontSize: 8,
+    color: '#111827',
+    backgroundColor: '#ffffff',
+  },
+  title: {
+    fontSize: 16,
+    fontFamily: 'Helvetica-Bold',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  subtitle: {
+    fontSize: 9,
+    color: '#374151',
+    marginBottom: 12,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#111827',
+    paddingBottom: 4,
+    marginBottom: 4,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#d1d5db',
+    paddingVertical: 4,
+  },
+  colName: { width: '18%' },
+  colEmail: { width: '24%' },
+  colPhone: { width: '14%' },
+  colTeam: { width: '16%' },
+  colRounds: { width: '16%' },
+  colPaid: { width: '12%' },
+  headerText: {
+    fontFamily: 'Helvetica-Bold',
+    fontSize: 8,
+    color: '#111827',
+  },
+  cell: {
+    fontSize: 8,
+    color: '#111827',
+    paddingRight: 6,
+  },
+  empty: {
+    fontSize: 10,
+    color: '#374151',
+    marginTop: 16,
+  },
+  footer: {
+    position: 'absolute',
+    bottom: 16,
+    left: 28,
+    right: 28,
+    fontSize: 8,
+    color: '#4b5563',
+    textAlign: 'center',
+  },
+});
+
+function roundIdsFor(r: any): number[] {
+  const ids: number[] = Array.isArray(r?.selected_round_ids)
+    ? (r.selected_round_ids as any[])
+        .map(Number)
+        .filter((n: number) => Number.isFinite(n))
+    : [];
+  return Array.from(new Set(ids));
+}
+
+function paymentStatus(r: any): string {
+  const m = String(r?.payment_method || '').toLowerCase();
+  if (m === 'cash') return 'Cash';
+  if (m === 'comp' || m === 'complimentary') return 'Comp';
+  if (r?.paid) return 'Paid';
+  return '—';
+}
+
+function mergePaymentMethod(a: any, b: any): string {
+  const methods = [a?.payment_method, b?.payment_method].map((m) =>
+    String(m || '').toLowerCase()
+  );
+  if (methods.includes('cash')) return 'cash';
+  if (methods.includes('comp') || methods.includes('complimentary')) {
+    return 'comp';
+  }
+  return a?.payment_method || b?.payment_method || '';
+}
+
+function roundsLabel(r: any, rounds: any[]): string {
+  const ids = roundIdsFor(r);
+  if (!ids.length) return 'Event';
+  return ids
+    .map((id) => {
+      const round = (rounds || []).find((x) => Number(x.id) === id);
+      return round?.name || `Round ${id}`;
+    })
+    .join(', ');
+}
+
+function ContactsListPDF({
+  event,
+  rounds,
+  players,
+}: {
+  event: any;
+  rounds: any[];
+  players: any[];
+}) {
+  const dateStr = event?.date
+    ? new Date(event.date + 'T12:00:00').toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    : '';
+
+  return (
+    <Document>
+      <Page size="LETTER" orientation="landscape" style={pdfStyles.page}>
+        <Text style={pdfStyles.title}>
+          {event?.name || 'Event'} — Player contacts
+        </Text>
+        <Text style={pdfStyles.subtitle}>
+          {[dateStr, event?.course, `${players.length} player${players.length === 1 ? '' : 's'}`]
+            .filter(Boolean)
+            .join('  ·  ')}
+        </Text>
+
+        {players.length === 0 ? (
+          <Text style={pdfStyles.empty}>No players found for this event.</Text>
+        ) : (
+          <>
+            <View style={pdfStyles.tableHeader} fixed>
+              <Text style={[pdfStyles.colName, pdfStyles.headerText]}>
+                Player name
+              </Text>
+              <Text style={[pdfStyles.colEmail, pdfStyles.headerText]}>
+                Email
+              </Text>
+              <Text style={[pdfStyles.colPhone, pdfStyles.headerText]}>
+                Phone
+              </Text>
+              <Text style={[pdfStyles.colTeam, pdfStyles.headerText]}>Team</Text>
+              <Text style={[pdfStyles.colRounds, pdfStyles.headerText]}>
+                Rounds
+              </Text>
+              <Text style={[pdfStyles.colPaid, pdfStyles.headerText]}>
+                Paid / Cash / Comp
+              </Text>
+            </View>
+            {players.map((r, i) => (
+              <View key={r.id || i} style={pdfStyles.tableRow} wrap={false}>
+                <Text style={[pdfStyles.colName, pdfStyles.cell]}>
+                  {r.player_name || '—'}
+                </Text>
+                <Text style={[pdfStyles.colEmail, pdfStyles.cell]}>
+                  {r.player_email || '—'}
+                </Text>
+                <Text style={[pdfStyles.colPhone, pdfStyles.cell]}>
+                  {r.phone || '—'}
+                </Text>
+                <Text style={[pdfStyles.colTeam, pdfStyles.cell]}>
+                  {r.team_name || '—'}
+                </Text>
+                <Text style={[pdfStyles.colRounds, pdfStyles.cell]}>
+                  {roundsLabel(r, rounds)}
+                </Text>
+                <Text style={[pdfStyles.colPaid, pdfStyles.cell]}>
+                  {paymentStatus(r)}
+                </Text>
+              </View>
+            ))}
+          </>
+        )}
+
+        <Text
+          style={pdfStyles.footer}
+          render={({ pageNumber, totalPages }) =>
+            `friedeggevents.app  ·  ${pageNumber}/${totalPages}`
+          }
+          fixed
+        />
+      </Page>
+    </Document>
+  );
+}
 
 export default function EventContactsPage() {
   const params = useParams();
@@ -17,6 +212,7 @@ export default function EventContactsPage() {
   const [loading, setLoading] = useState(true);
   const [event, setEvent] = useState<any>(null);
   const [registrations, setRegistrations] = useState<any[]>([]);
+  const [rounds, setRounds] = useState<any[]>([]);
   const [waitlist, setWaitlist] = useState<any[]>([]);
   const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -39,10 +235,17 @@ export default function EventContactsPage() {
       }
       setEvent(ev);
 
+      const { data: roundsData } = await supabase
+        .from('event_rounds')
+        .select('id, name, start_time, sort_order')
+        .eq('event_id', id)
+        .order('sort_order', { ascending: true });
+      setRounds(roundsData || []);
+
       const { data: regs, error: regErr } = await supabase
         .from('event_registrations')
         .select(
-          'id, player_name, player_email, team_name, paid, checked_in, user_id, discount_code, discount_amount'
+          'id, player_name, player_email, team_name, paid, checked_in, user_id, discount_code, discount_amount, payment_method, selected_round_ids'
         )
         .eq('event_id', id)
         .order('player_name', { ascending: true });
@@ -106,6 +309,10 @@ export default function EventContactsPage() {
             team_name: existing.team_name || r.team_name,
             paid: !!(existing.paid || r.paid),
             checked_in: !!(existing.checked_in || r.checked_in),
+            payment_method: mergePaymentMethod(existing, r),
+            selected_round_ids: Array.from(
+              new Set([...roundIdsFor(existing), ...roundIdsFor(r)])
+            ),
             discount_code: existing.discount_code || r.discount_code,
             discount_amount:
               Number(existing.discount_amount || 0) >=
@@ -261,6 +468,23 @@ export default function EventContactsPage() {
           >
             💬 Copy phones (text list)
           </button>
+          <PDFDownloadLink
+            document={
+              <ContactsListPDF
+                event={event}
+                rounds={rounds}
+                players={filtered}
+              />
+            }
+            fileName={`${(event?.name || 'event')
+              .replace(/\s+/g, '-')
+              .toLowerCase()}-contacts.pdf`}
+            className="bg-gray-100 hover:bg-white text-gray-900 px-6 py-4 rounded-2xl font-semibold text-center"
+          >
+            {({ loading: pdfLoading }) =>
+              pdfLoading ? 'Preparing PDF…' : '📄 Download PDF'
+            }
+          </PDFDownloadLink>
         </div>
 
         <input
