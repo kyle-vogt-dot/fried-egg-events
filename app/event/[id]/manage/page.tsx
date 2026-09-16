@@ -359,6 +359,10 @@ export default function EventManagePage() {
   const [needsPayoutSetup, setNeedsPayoutSetup] = useState(false);
   const [stripeConnecting, setStripeConnecting] = useState(false);
   const [payoutBannerDismissed, setPayoutBannerDismissed] = useState(false);
+  const [connectReady, setConnectReady] = useState(false);
+  const [connectAccountSuffix, setConnectAccountSuffix] = useState<
+    string | null
+  >(null);
 
 
   const supabase = createBrowserClient(
@@ -415,6 +419,7 @@ const [deleting, setDeleting] = useState(false); // ← here with the rest
   const [expandedRoundId, setExpandedRoundId] = useState<number | 'new' | null>(
     null
   );
+  const [deletingRoundId, setDeletingRoundId] = useState<number | null>(null);
     const [newRound, setNewRound] = useState({
     name: '',
     course: '',
@@ -535,6 +540,39 @@ const [adminPerms, setAdminPerms] = useState({
       setEvent(synced);
       setCourseSearch(courseName);
       setSelectedCourse(eventData.course_data || null);
+
+      const isDemoEvent = !!eventData.is_demo;
+      const existingAccountId = String(
+        (isDemoEvent
+          ? eventData.stripe_connect_account_id_test
+          : eventData.stripe_connect_account_id) || ''
+      ).trim();
+      setConnectReady(
+        isDemoEvent
+          ? !!eventData.stripe_connect_ready_test
+          : !!eventData.stripe_connect_ready
+      );
+      setConnectAccountSuffix(
+        existingAccountId
+          ? existingAccountId.slice(-4)
+          : null
+      );
+
+      const connectParam = searchParams.get('connect');
+      if (connectParam === 'return' || connectParam === 'refresh') {
+        try {
+          const res = await fetch(
+            `/api/stripe/connect/status?event_id=${encodeURIComponent(eventId)}`
+          );
+          const data = await res.json();
+          if (res.ok) {
+            setConnectReady(!!data.ready);
+            setConnectAccountSuffix(data.account_id_suffix || null);
+          }
+        } catch (e) {
+          console.error('Connect status failed', e);
+        }
+      }
 
       const access = await loadEventAccess(
         supabase,
@@ -803,10 +841,10 @@ const [adminPerms, setAdminPerms] = useState({
     const handleConnectPayouts = async () => {
     setStripeConnecting(true);
     try {
-      const res = await fetch('/api/stripe/connect', {
+      const res = await fetch('/api/stripe/connect/account-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ eventId: parseInt(eventId, 10) }),
+        body: JSON.stringify({ event_id: parseInt(eventId, 10) }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1344,6 +1382,75 @@ const handleSaveEvent = async () => {
         .eq('id', parseInt(eventId));
     }
     await reloadRounds();
+  };
+
+  const handleDeleteRound = async (round: any) => {
+    const roundId = Number(round?.id);
+    if (!Number.isFinite(roundId) || roundId <= 0) return;
+    if (rounds.length <= 1) return;
+
+    const ok = confirm(
+      'Remove this round? Pairings and scores for this round will be removed. Registrations stay on the event.'
+    );
+    if (!ok) return;
+
+    setDeletingRoundId(roundId);
+    const eventNumericId = parseInt(eventId, 10);
+    const roundKey = String(roundId);
+
+    try {
+      const { error: scoresErr } = await supabase
+        .from('scores')
+        .delete()
+        .eq('round_id', roundId);
+      if (scoresErr) {
+        console.warn('Best-effort scores delete for round:', scoresErr.message);
+      }
+
+      const { data: regs, error: regsErr } = await supabase
+        .from('event_registrations')
+        .select('id, round_pairings')
+        .eq('event_id', eventNumericId);
+      if (regsErr) {
+        console.warn('Best-effort pairings load for round:', regsErr.message);
+      } else {
+        for (const reg of regs || []) {
+          const map = reg.round_pairings;
+          if (!map || typeof map !== 'object' || Array.isArray(map)) continue;
+          if (!(roundKey in map)) continue;
+          const next = { ...map };
+          delete next[roundKey];
+          const { error: pairingErr } = await supabase
+            .from('event_registrations')
+            .update({ round_pairings: next })
+            .eq('id', reg.id);
+          if (pairingErr) {
+            console.warn(
+              'Best-effort pairing strip for round:',
+              pairingErr.message
+            );
+          }
+        }
+      }
+
+      const { error } = await supabase
+        .from('event_rounds')
+        .delete()
+        .eq('id', roundId)
+        .eq('event_id', eventNumericId);
+      if (error) {
+        alert('Failed to remove round: ' + error.message);
+        return;
+      }
+
+      if (expandedRoundId === roundId) setExpandedRoundId(null);
+      await reloadRounds();
+    } catch (e: any) {
+      console.error(e);
+      alert(e.message || 'Failed to remove round');
+    } finally {
+      setDeletingRoundId(null);
+    }
   };
 
   const persistSingleRound = async (patch: Record<string, any> = {}) => {
@@ -2548,18 +2655,42 @@ const handleDeleteEvent = async () => {
                       key={round.id}
                       className="bg-gray-900 border border-gray-700 rounded-3xl overflow-hidden"
                     >
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setExpandedRoundId(expanded ? null : round.id)
-                        }
-                        className="w-full text-left px-6 py-4 flex items-center justify-between gap-3"
-                      >
-                        <span className="font-medium truncate">{summary}</span>
-                        <span className="text-gray-400 text-sm shrink-0">
-                          {expanded ? 'Hide' : 'Edit'}
-                        </span>
-                      </button>
+                      <div className="px-6 py-4 flex items-center justify-between gap-3">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedRoundId(expanded ? null : round.id)
+                          }
+                          className="flex-1 min-w-0 text-left"
+                        >
+                          <span className="font-medium truncate block">
+                            {summary}
+                          </span>
+                        </button>
+                        <div className="flex items-center gap-3 shrink-0">
+                          {rounds.length > 1 && (
+                            <button
+                              type="button"
+                              disabled={deletingRoundId === round.id}
+                              onClick={() => handleDeleteRound(round)}
+                              className="text-red-500 hover:text-red-400 text-sm disabled:opacity-50"
+                            >
+                              {deletingRoundId === round.id
+                                ? 'Deleting...'
+                                : 'Delete'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedRoundId(expanded ? null : round.id)
+                            }
+                            className="text-gray-400 text-sm"
+                          >
+                            {expanded ? 'Hide' : 'Edit'}
+                          </button>
+                        </div>
+                      </div>
                       {expanded && (
                         <div className="px-6 pb-6 space-y-4 border-t border-gray-800 pt-4">
                       <div>
@@ -3965,23 +4096,32 @@ const handleDeleteEvent = async () => {
                 Connect Stripe so registration money for this event can be paid
                 out to your bank.
               </p>
-              {needsPayoutSetup ? (
-                <p className="text-sm text-amber-200 mt-2">
-                  Payouts are not set up yet.
+              {connectReady ? (
+                <p className="text-sm text-emerald-400 mt-2">
+                  Ready
+                  {connectAccountSuffix ? ` · …${connectAccountSuffix}` : ''}
                 </p>
               ) : (
-                <p className="text-sm text-emerald-400 mt-2">
-                  Payouts connected.
+                <p className="text-sm text-amber-200 mt-2">
+                  {connectAccountSuffix
+                    ? 'Finish setup'
+                    : 'Payouts are not set up yet.'}
                 </p>
               )}
-              <button
-                type="button"
-                onClick={handleConnectPayouts}
-                disabled={stripeConnecting}
-                className="mt-4 bg-amber-500 hover:bg-amber-400 disabled:bg-gray-600 text-gray-900 font-semibold px-6 py-3 rounded-2xl"
-              >
-                {stripeConnecting ? 'Opening Stripe…' : 'Connect with Stripe'}
-              </button>
+              {!connectReady && (
+                <button
+                  type="button"
+                  onClick={handleConnectPayouts}
+                  disabled={stripeConnecting}
+                  className="mt-4 bg-amber-500 hover:bg-amber-400 disabled:bg-gray-600 text-gray-900 font-semibold px-6 py-3 rounded-2xl"
+                >
+                  {stripeConnecting
+                    ? 'Opening Stripe…'
+                    : connectAccountSuffix
+                      ? 'Finish setup'
+                      : 'Connect payouts'}
+                </button>
+              )}
             </div>
           </AccordionSection>
 

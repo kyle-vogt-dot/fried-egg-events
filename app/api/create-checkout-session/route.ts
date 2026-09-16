@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { resolvePlatformFeePercent } from '@/app/libs/platform-fee';
+import {
+  storedConnectAccountId,
+  storedConnectReady,
+} from '@/app/api/stripe/connect/lib';
 
 function getStripe(isDemo: boolean) {
   const key = isDemo
@@ -30,6 +35,19 @@ function appendQuery(url: string, key: string, value: string) {
   if (!value) return url;
   if (url.includes(`${key}=`)) return url;
   return `${url}${url.includes('?') ? '&' : '?'}${key}=${value}`;
+}
+
+/** Inverse of amountWithPlatformFee: platform cut in cents from the charged amount. */
+function platformFeeCentsFromChargedAmount(
+  chargedDollars: number,
+  percent: number
+) {
+  const chargedCents = Math.round(Number(chargedDollars) * 100);
+  if (!Number.isFinite(chargedCents) || chargedCents <= 0) return 0;
+  const pct = resolvePlatformFeePercent(percent);
+  if (pct <= 0) return 0;
+  const subtotalCents = Math.round(chargedCents / (1 + pct / 100));
+  return Math.max(0, chargedCents - subtotalCents);
 }
 
 export async function POST(request: NextRequest) {
@@ -64,11 +82,22 @@ export async function POST(request: NextRequest) {
     );
     const { data: ev } = await sb
       .from('tournaments')
-      .select('is_demo')
+      .select(
+        'is_demo, stripe_connect_ready, stripe_connect_account_id, stripe_connect_ready_test, stripe_connect_account_id_test'
+      )
       .eq('id', event_id)
       .single();
     const isDemo = !!ev?.is_demo;
     const stripe = getStripe(isDemo);
+
+    const { data: feeData } = await sb
+      .from('platform_settings')
+      .select('platform_fee_percent')
+      .eq('id', 1)
+      .single();
+    const platformFeePercent = resolvePlatformFeePercent(
+      feeData?.platform_fee_percent
+    );
 
     const baseUrl = (
       process.env.NEXT_PUBLIC_APP_URL ||
@@ -104,6 +133,13 @@ export async function POST(request: NextRequest) {
       cancel_url || `${baseUrl}/event/${event_id}?payment=cancelled`;
 
     const { feeCents, netCents } = calculateAmountWithStripeFee(Number(amount));
+    const applicationFeeAmount = platformFeeCentsFromChargedAmount(
+      Number(amount),
+      platformFeePercent
+    );
+    const connectAccountId = storedConnectAccountId(ev, isDemo);
+    const connectReady = storedConnectReady(ev, isDemo);
+    const useDestination = connectReady && !!connectAccountId;
 
     const meta: Record<string, string> = {
       registration_id: registration_id ? String(registration_id) : '',
@@ -161,6 +197,12 @@ export async function POST(request: NextRequest) {
           email: meta.email,
           type: meta.type,
         },
+        ...(useDestination
+          ? {
+              application_fee_amount: applicationFeeAmount,
+              transfer_data: { destination: connectAccountId },
+            }
+          : {}),
       },
       customer_email: email,
     });
