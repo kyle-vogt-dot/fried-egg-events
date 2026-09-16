@@ -46,6 +46,12 @@ function parseTeamRosterSize(value: string): number | null {
   return n;
 }
 
+function parseTournamentTeamSize(value: string): 2 | 4 | null {
+  const n = parseInt(value, 10);
+  if (n === 2 || n === 4) return n;
+  return null;
+}
+
 function todayDateStr() {
   const d = new Date();
   const y = d.getFullYear();
@@ -76,6 +82,7 @@ export default function CreateTournament() {
   const [numberOfHoles, setNumberOfHoles] = useState<9 | 18>(18);
 
   const [name, setName] = useState('');
+  const [price, setPrice] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -177,6 +184,10 @@ export default function CreateTournament() {
   const selectKind = (kind: EventKind) => {
     setEventKind(kind);
     setError(null);
+    if (kind === 'tournament') {
+      const n = parseInt(teamRosterSize, 10);
+      if (n !== 2 && n !== 4) setTeamRosterSize('4');
+    }
     setStep(2);
   };
 
@@ -200,6 +211,13 @@ export default function CreateTournament() {
       return { play: 1, roster: 1 };
     }
     if (rosterMode === 'team') {
+      if (eventKind === 'tournament') {
+        const size = parseTournamentTeamSize(teamRosterSize);
+        if (size == null) {
+          return { error: 'Team size must be 2 or 4.' };
+        }
+        return { play: size, roster: size };
+      }
       const size = parseTeamRosterSize(teamRosterSize);
       if (size == null) {
         return { error: 'Team roster size must be at least 2.' };
@@ -245,6 +263,14 @@ export default function CreateTournament() {
       return;
     }
 
+    if (eventKind === 'tournament') {
+      const priceValue = price.trim() === '' ? NaN : parseFloat(price);
+      if (!Number.isFinite(priceValue) || priceValue < 0) {
+        setError('Enter a price (0 for free).');
+        return;
+      }
+    }
+
     if (!agreedToTerms) {
       alert(
         'Please agree to the Terms of Service and Fee Policy before creating the event.'
@@ -269,6 +295,7 @@ export default function CreateTournament() {
       return;
     }
 
+    const priceValue = price.trim() === '' ? null : parseFloat(price);
     const insertPayload = {
       name: name.trim(),
       date: todayDateStr(),
@@ -285,6 +312,13 @@ export default function CreateTournament() {
       max_teammates: resolved.play,
       max_players: 72,
       number_of_holes: numberOfHoles,
+      price:
+        eventKind === 'tournament' &&
+        priceValue != null &&
+        Number.isFinite(priceValue) &&
+        priceValue >= 0
+          ? priceValue
+          : null,
     };
 
     const { data: newEvent, error: insertError } = await supabase
@@ -340,21 +374,29 @@ export default function CreateTournament() {
   };
 
   const isLeagueOrTour = eventKind === 'league';
+  const isTournament = eventKind === 'tournament';
   const createLabel = isLeagueOrTour
     ? 'Create League / Tour'
     : 'Create Tournament';
   const nameLabel = isLeagueOrTour ? 'League / Tour Name' : 'Tournament Name';
+  const steps = isLeagueOrTour
+    ? [
+        { n: 1 as const, label: 'Type' },
+        { n: 2 as const, label: 'Roster' },
+        { n: 3 as const, label: 'Details' },
+      ]
+    : [
+        { n: 1 as const, label: 'Type' },
+        { n: 2 as const, label: 'Play' },
+        { n: 3 as const, label: 'Details' },
+      ];
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-5xl font-bold mb-4 text-center">Create Event</h1>
         <div className="flex items-center justify-center gap-2 mb-10 text-sm text-gray-400">
-          {[
-            { n: 1 as const, label: 'Type' },
-            { n: 2 as const, label: 'Roster' },
-            { n: 3 as const, label: 'Details' },
-          ].map((s, i) => (
+          {steps.map((s, i) => (
             <span key={s.n} className="flex items-center gap-2">
               {i > 0 && <span className="text-gray-600">/</span>}
               <button
@@ -439,7 +481,7 @@ export default function CreateTournament() {
               </button>
             </div>
 
-            {rosterMode === 'team' && (
+            {rosterMode === 'team' && isLeagueOrTour && (
               <div className="space-y-3">
                 <label className="block text-sm font-medium">
                   Team roster size
@@ -456,6 +498,31 @@ export default function CreateTournament() {
                   onChange={(e) => setTeamRosterSize(e.target.value)}
                   className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl no-spinner"
                 />
+              </div>
+            )}
+
+            {rosterMode === 'team' && isTournament && (
+              <div className="space-y-3">
+                <label className="block text-sm font-medium">Team size</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {([2, 4] as const).map((size) => (
+                    <button
+                      key={size}
+                      type="button"
+                      onClick={() => {
+                        setTeamRosterSize(String(size));
+                        setError(null);
+                      }}
+                      className={`p-4 rounded-2xl border-2 font-semibold transition-colors ${
+                        teamRosterSize === String(size)
+                          ? 'border-emerald-500 bg-emerald-900/30'
+                          : 'border-gray-700 bg-gray-800 hover:border-gray-500'
+                      }`}
+                    >
+                      {size}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -500,7 +567,7 @@ export default function CreateTournament() {
               >
                 Back
               </button>
-              {rosterMode && (
+              {rosterMode && (isLeagueOrTour || playFormat) && (
                 <button
                   type="button"
                   onClick={goToDetails}
@@ -637,6 +704,25 @@ export default function CreateTournament() {
                 </button>
               </div>
             </div>
+
+            {isTournament && (
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  {rosterMode === 'team' ? 'Price per team' : 'Price per player'}
+                </label>
+                <input
+                  name="price"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  value={price}
+                  onChange={(e) => setPrice(e.target.value)}
+                  className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl no-spinner"
+                  placeholder="0.00"
+                />
+              </div>
+            )}
 
             {error && <p className="text-red-500 text-center">{error}</p>}
 
