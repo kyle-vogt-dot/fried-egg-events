@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  accountIdSuffix,
   getStripe,
   loadTournamentServiceRole,
   parseEventId,
@@ -51,7 +50,7 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json({
         ready: false,
-        account_id_suffix: null,
+        account_id: null,
       });
     }
 
@@ -69,7 +68,7 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json({
         ready: false,
-        account_id_suffix: null,
+        account_id: null,
       });
     }
 
@@ -89,7 +88,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       ready,
-      account_id_suffix: accountIdSuffix(accountId),
+      account_id: accountId,
     });
   } catch (err: any) {
     console.error('Stripe connect status error:', err);

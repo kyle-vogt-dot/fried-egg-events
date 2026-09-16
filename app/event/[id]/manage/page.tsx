@@ -567,7 +567,9 @@ const [adminPerms, setAdminPerms] = useState({
           const data = await res.json();
           if (res.ok) {
             setConnectReady(!!data.ready);
-            setConnectAccountSuffix(data.account_id_suffix || null);
+            setConnectAccountSuffix(
+              data.account_id ? String(data.account_id).slice(-4) : null
+            );
           }
         } catch (e) {
           console.error('Connect status failed', e);

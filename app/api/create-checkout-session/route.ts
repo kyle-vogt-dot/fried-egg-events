@@ -3,6 +3,8 @@ import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 import { resolvePlatformFeePercent } from '@/app/libs/platform-fee';
 import {
+  connectColumns,
+  retrieveAccountInCurrentMode,
   storedConnectAccountId,
   storedConnectReady,
 } from '@/app/api/stripe/connect/lib';
@@ -138,7 +140,23 @@ export async function POST(request: NextRequest) {
       platformFeePercent
     );
     const connectAccountId = storedConnectAccountId(ev, isDemo);
-    const connectReady = storedConnectReady(ev, isDemo);
+    let connectReady = storedConnectReady(ev, isDemo);
+    if (connectAccountId && !connectReady) {
+      const retrieved = await retrieveAccountInCurrentMode(
+        stripe,
+        connectAccountId
+      );
+      if ('account' in retrieved && retrieved.account.charges_enabled) {
+        connectReady = true;
+        const cols = connectColumns(isDemo);
+        await sb
+          .from('tournaments')
+          .update({ [cols.ready]: true })
+          .eq('id', event_id);
+      } else {
+        connectReady = false;
+      }
+    }
     const useDestination = connectReady && !!connectAccountId;
 
     const meta: Record<string, string> = {
