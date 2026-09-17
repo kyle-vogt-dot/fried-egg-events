@@ -23,15 +23,34 @@ import {
 
 const flyerStyles = StyleSheet.create({
   page: {
-    
-    padding: 28,
+    paddingTop: 0,
+    paddingLeft: 40,
+    paddingRight: 40,
+    paddingBottom: 40,
     fontFamily: 'Helvetica',
-    backgroundColor: '#111827',
-    color: '#f3f4f6',
+    backgroundColor: '#D5DCE6',
+    color: '#0F172A',
+  },
+  accentBar: {
+    height: 4,
+    backgroundColor: '#0F766E',
+    marginLeft: -40,
+    marginRight: -40,
+    marginBottom: 16,
+  },
+  photoWrap: {
+    width: '100%',
+    marginBottom: 16,
+    alignItems: 'center',
+  },
+  photo: {
+    width: '100%',
+    height: 180,
+    objectFit: 'cover',
   },
   brand: {
     fontSize: 11,
-    color: '#22c55e',
+    color: '#1E293B',
     marginBottom: 8,
     textTransform: 'uppercase',
     letterSpacing: 1,
@@ -40,51 +59,79 @@ const flyerStyles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     marginBottom: 12,
-    color: '#ffffff',
+    color: '#0F172A',
   },
   row: {
-    fontSize: 12,
+    fontSize: 13,
     marginBottom: 6,
-    color: '#e5e7eb',
+    color: '#0F172A',
   },
   label: {
-    color: '#9ca3af',
+    color: '#1E293B',
+    fontWeight: 'bold',
   },
   box: {
-    marginTop: 20,
+    marginTop: 12,
     padding: 16,
-    backgroundColor: '#1f2937',
-    borderRadius: 8,
+    backgroundColor: '#F7F9FC',
+    borderWidth: 1,
+    borderColor: '#9AA7B8',
+    borderStyle: 'solid',
   },
   desc: {
     fontSize: 11,
     lineHeight: 1.5,
-    color: '#d1d5db',
+    color: '#0F172A',
     marginTop: 16,
+  },
+  sectionTitle: {
+    fontSize: 10,
+    color: '#1E293B',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  body: {
+    fontSize: 10,
+    color: '#0F172A',
+    lineHeight: 1.4,
+  },
+  muted: {
+    fontSize: 8,
+    color: '#1E293B',
+    lineHeight: 1.3,
   },
   qrWrap: {
     marginTop: 20,
     alignItems: 'center',
   },
+  qrCard: {
+    backgroundColor: '#F7F9FC',
+    borderWidth: 1,
+    borderColor: '#9AA7B8',
+    borderStyle: 'solid',
+    padding: 12,
+    alignItems: 'center',
+  },
   qr: {
     width: 120,
     height: 120,
-    backgroundColor: '#fff',
+    backgroundColor: '#FFFFFF',
     padding: 8,
   },
   qrHint: {
-    marginTop: 10,
+    marginTop: 8,
     fontSize: 10,
-    color: '#9ca3af',
+    color: '#0F172A',
     textAlign: 'center',
   },
   footer: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 24,
     left: 40,
     right: 40,
     fontSize: 9,
-    color: '#6b7280',
+    color: '#1E293B',
     textAlign: 'center',
   },
 });
@@ -147,63 +194,62 @@ const imageUrl = resolveImageUrl(event?.image_url);
 
   const packages = (sponsorPackages || []).filter((p) => p.active !== false);
 
+    const photoHeight = imageSize
+      ? Math.min(180, Math.round((532 * imageSize.h) / imageSize.w))
+      : 180;
+
     return (
     <Document>
-      <Page size="LETTER" style={{ ...flyerStyles.page, padding: 22 }}>
-        <Text style={{ ...flyerStyles.brand, marginBottom: 4 }}>
+      <Page size="LETTER" style={flyerStyles.page}>
+        <View style={flyerStyles.accentBar} />
+
+        {imageDataUrl ? (
+          <View style={flyerStyles.photoWrap}>
+            <Image
+              src={imageDataUrl}
+              style={{
+                width: '100%',
+                height: photoHeight,
+                objectFit: 'cover',
+              }}
+            />
+          </View>
+        ) : null}
+
+        <Text style={flyerStyles.brand}>
           Fried Egg Events
         </Text>
-        <Text style={{ ...flyerStyles.title, fontSize: 22, marginBottom: 8 }}>
+        <Text style={flyerStyles.title}>
           {event?.name || 'Golf Event'}
         </Text>
 
-{imageDataUrl ? (
-  <View
-    style={{
-      width: '100%',
-      marginBottom: 10,
-      alignItems: 'center',
-    }}
-  >
-    <Image
-      src={imageDataUrl}
-      style={{
-        width: 320,
-        height: imageSize
-          ? Math.round((320 * imageSize.h) / imageSize.w)
-          : 180,
-      }}
-    />
-  </View>
-) : null}
-
-        <View style={{ ...flyerStyles.box, marginTop: 8, padding: 12 }}>
+        <View style={flyerStyles.box}>
           {dateStr ? (
-            <Text style={{ ...flyerStyles.row, marginBottom: 4 }}>
+            <Text style={flyerStyles.row}>
               <Text style={flyerStyles.label}>Date: </Text>
               {dateStr}
             </Text>
           ) : null}
           {event?.course ? (
-            <Text style={{ ...flyerStyles.row, marginBottom: 4 }}>
+            <Text style={flyerStyles.row}>
               <Text style={flyerStyles.label}>Course: </Text>
               {event.course}
             </Text>
           ) : null}
           {event?.location ? (
-            <Text style={{ ...flyerStyles.row, marginBottom: 4 }}>
+            <Text style={flyerStyles.row}>
               <Text style={flyerStyles.label}>Location: </Text>
               {event.location}
             </Text>
           ) : null}
           {price ? (
-            <Text style={{ ...flyerStyles.row, marginBottom: 4 }}>
+            <Text style={flyerStyles.row}>
               <Text style={flyerStyles.label}>Price: </Text>
               {price}
             </Text>
           ) : null}
           {event?.number_of_holes ? (
-            <Text style={{ ...flyerStyles.row, marginBottom: 0 }}>
+            <Text style={[flyerStyles.row, { marginBottom: 0 }]}>
               <Text style={flyerStyles.label}>Format: </Text>
               {event.number_of_holes}-hole
               {event.event_type ? ` · ${event.event_type}` : ''}
@@ -212,54 +258,31 @@ const imageUrl = resolveImageUrl(event?.image_url);
         </View>
 
         {event?.description ? (
-          <Text
-            style={{
-              ...flyerStyles.desc,
-              marginTop: 10,
-              fontSize: 10,
-              lineHeight: 1.4,
-            }}
-          >
+          <Text style={flyerStyles.desc}>
             {String(event.description).slice(0, 220)}
             {String(event.description).length > 220 ? '…' : ''}
           </Text>
         ) : null}
 
         {sponsorNames.length > 0 ? (
-          <View style={{ marginTop: 10 }}>
-            <Text
-              style={{
-                fontSize: 10,
-                color: '#22c55e',
-                marginBottom: 4,
-                textTransform: 'uppercase',
-                letterSpacing: 1,
-              }}
-            >
+          <View style={flyerStyles.box}>
+            <Text style={flyerStyles.sectionTitle}>
               Sponsors
             </Text>
-            <Text style={{ fontSize: 10, color: '#e5e7eb', lineHeight: 1.4 }}>
+            <Text style={flyerStyles.body}>
               {sponsorNames.join('  ·  ')}
             </Text>
           </View>
         ) : null}
 
 {packages.length > 0 ? (
-  <View style={{ marginTop: 10 }}>
-    <Text
-      style={{
-        fontSize: 10,
-        color: '#22c55e',
-        marginBottom: 6,
-        textTransform: 'uppercase',
-        letterSpacing: 1,
-      }}
-    >
+  <View style={flyerStyles.box}>
+    <Text style={flyerStyles.sectionTitle}>
       Sponsorship Opportunities
     </Text>
     {packages.slice(0, 6).map((pkg) => (
       <View key={pkg.id} style={{ marginBottom: 6 }}>
-        <Text style={{ fontSize: 10, color: '#f9fafb', marginBottom: 1 }}>
+        <Text style={flyerStyles.body}>
           {pkg.name}
           {pkg.price != null ? ` — $${Number(pkg.price).toFixed(2)}` : ''}
           {pkg.includes_players > 0
@@ -269,7 +292,7 @@ const imageUrl = resolveImageUrl(event?.image_url);
             : ''}
         </Text>
         {pkg.description ? (
-          <Text style={{ fontSize: 8, color: '#9ca3af', lineHeight: 1.3 }}>
+          <Text style={flyerStyles.muted}>
             {String(pkg.description).slice(0, 120)}
             {String(pkg.description).length > 120 ? '…' : ''}
           </Text>
@@ -279,28 +302,25 @@ const imageUrl = resolveImageUrl(event?.image_url);
   </View>
 ) : null}
 
-        <View
-          style={{
-            ...flyerStyles.qrWrap,
-            marginTop: 12,
-          }}
-        >
-          {qrDataUrl ? (
-            <Image
-              src={qrDataUrl}
-              style={{ width: 90, height: 90, backgroundColor: '#fff', padding: 6 }}
-            />
-          ) : null}
-          <Text style={{ ...flyerStyles.qrHint, marginTop: 6, fontSize: 9 }}>
-            Scan to register
-          </Text>
-          <Text style={{ ...flyerStyles.qrHint, fontSize: 8 }}>
-            {registerUrl}
-          </Text>
+        <View style={flyerStyles.qrWrap}>
+          <View style={flyerStyles.qrCard}>
+            {qrDataUrl ? (
+              <Image
+                src={qrDataUrl}
+                style={flyerStyles.qr}
+              />
+            ) : null}
+            <Text style={flyerStyles.qrHint}>
+              Scan to register
+            </Text>
+            <Text style={flyerStyles.qrHint}>
+              {registerUrl}
+            </Text>
+          </View>
         </View>
 
-        <Text style={{ ...flyerStyles.footer, fontSize: 8, bottom: 16 }}>
-          friedeggevents.app
+        <Text style={flyerStyles.footer}>
+          Fried Egg Events
         </Text>
       </Page>
     </Document>

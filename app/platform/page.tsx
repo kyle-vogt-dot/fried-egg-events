@@ -24,6 +24,12 @@ export default function PlatformAdminPage() {
 
   // ---------- Events for Add Player ----------
   const [events, setEvents] = useState<any[]>([]);
+  const [cashFees, setCashFees] = useState<
+    Record<
+      string,
+      { outstanding: number; collecting?: boolean; error?: string }
+    >
+  >({});
   const [selectedEventId, setSelectedEventId] = useState('');
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [rounds, setRounds] = useState<any[]>([]);
@@ -94,6 +100,22 @@ export default function PlatformAdminPage() {
 
       setEvents(eventsData || []);
 
+      try {
+        const feeRes = await fetch('/api/platform/collect-cash-fees');
+        const feeJson = await feeRes.json().catch(() => ({}));
+        if (feeRes.ok && Array.isArray(feeJson.fees)) {
+          const next: Record<string, { outstanding: number }> = {};
+          for (const row of feeJson.fees) {
+            next[String(row.event_id)] = {
+              outstanding: Number(row.outstanding) || 0,
+            };
+          }
+          setCashFees(next);
+        }
+      } catch (e) {
+        console.error('Cash fees load failed', e);
+      }
+
       // Existing global discount codes
       await loadDiscountCodes();
 
@@ -102,6 +124,55 @@ export default function PlatformAdminPage() {
 
     init();
   }, [supabase, router]);
+
+  const collectCashFees = async (eventId: number, amount: number) => {
+    const key = String(eventId);
+    setCashFees((prev) => ({
+      ...prev,
+      [key]: { ...prev[key], collecting: true, error: undefined, outstanding: amount },
+    }));
+    try {
+      const res = await fetch('/api/platform/collect-cash-fees', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.error === 'insufficient_balance') {
+        setCashFees((prev) => ({
+          ...prev,
+          [key]: {
+            outstanding: amount,
+            error: `Insufficient Express balance (available $${Number(
+              data.available || 0
+            ).toFixed(2)})`,
+          },
+        }));
+        return;
+      }
+      if (!res.ok) {
+        const msg =
+          data.error === 'Connect payouts are not set up for this event' ||
+          /connect/i.test(String(data.error || ''))
+            ? 'Connect missing'
+            : data.error || 'Collect failed';
+        setCashFees((prev) => ({
+          ...prev,
+          [key]: { outstanding: amount, error: msg },
+        }));
+        return;
+      }
+      setCashFees((prev) => ({
+        ...prev,
+        [key]: { outstanding: 0 },
+      }));
+    } catch (e: any) {
+      setCashFees((prev) => ({
+        ...prev,
+        [key]: { outstanding: amount, error: e.message || 'Collect failed' },
+      }));
+    }
+  };
 
   const loadDiscountCodes = async () => {
     const { data } = await supabase
@@ -486,26 +557,54 @@ export default function PlatformAdminPage() {
             {events.length === 0 && (
               <p className="text-gray-500 text-sm">No active events.</p>
             )}
-            {events.map((ev) => (
-              <div
-                key={ev.id}
-                className="flex items-center justify-between gap-3 bg-gray-900 rounded-xl px-4 py-3"
-              >
-                <div className="min-w-0">
-                  <p className="font-medium truncate">{ev.name}</p>
-                  <p className="text-xs text-gray-500">
-                    {ev.date ? String(ev.date).slice(0, 10) : 'TBD'}
-                    {ev.course ? ` · ${ev.course}` : ''}
-                  </p>
-                </div>
-                <a
-                  href={`/event/${ev.id}/manage`}
-                  className="shrink-0 text-sm bg-teal-700 hover:bg-teal-600 px-3 py-2 rounded-xl"
+            {events.map((ev) => {
+              const fee = cashFees[String(ev.id)] || { outstanding: 0 };
+              const outstanding = Number(fee.outstanding) || 0;
+              return (
+                <div
+                  key={ev.id}
+                  className="flex flex-col gap-2 bg-gray-900 rounded-xl px-4 py-3"
                 >
-                  Manage
-                </a>
-              </div>
-            ))}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-medium truncate">{ev.name}</p>
+                      <p className="text-xs text-gray-500">
+                        {ev.date ? String(ev.date).slice(0, 10) : 'TBD'}
+                        {ev.course ? ` · ${ev.course}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {outstanding > 0 && (
+                        <>
+                          <span className="text-amber-400 text-sm font-medium">
+                            ${outstanding.toFixed(2)}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={!!fee.collecting}
+                            onClick={() => collectCashFees(ev.id, outstanding)}
+                            className="text-sm bg-amber-500 hover:bg-amber-400 disabled:bg-gray-600 text-gray-900 disabled:text-gray-400 font-semibold px-3 py-2 rounded-xl"
+                          >
+                            {fee.collecting
+                              ? 'Collecting…'
+                              : `Collect $${outstanding.toFixed(2)}`}
+                          </button>
+                        </>
+                      )}
+                      <a
+                        href={`/event/${ev.id}/manage`}
+                        className="text-sm bg-teal-700 hover:bg-teal-600 px-3 py-2 rounded-xl"
+                      >
+                        Manage
+                      </a>
+                    </div>
+                  </div>
+                  {fee.error && (
+                    <p className="text-red-400 text-xs">{fee.error}</p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 

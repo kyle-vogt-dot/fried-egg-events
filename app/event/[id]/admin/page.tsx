@@ -11,6 +11,7 @@ import {
   DEFAULT_PLATFORM_FEE_PERCENT,
   resolvePlatformFeePercent,
 } from '@/app/libs/platform-fee';
+import { reverseRegistrationIncome } from '@/app/libs/reverse-income';
 
 
 export default function EventAdminPage() {
@@ -539,6 +540,14 @@ const [showAdmins, setShowAdmins] = useState(false);
       alert('Failed to remove: ' + error.message);
       return;
     }
+
+    await reverseRegistrationIncome(supabase, {
+      eventId: parseInt(eventId, 10),
+      registrationId: reg.id,
+      playerName: reg.player_name,
+      playerEmail: reg.player_email,
+      amount: reg.amount_paid != null ? Number(reg.amount_paid) : null,
+    });
 
     fetchRegistrations();
   };

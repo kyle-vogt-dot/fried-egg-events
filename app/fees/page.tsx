@@ -67,10 +67,7 @@ export default function FeePolicyPage() {
               <li>The platform fee is disclosed before payment.</li>
               <li>The platform fee is retained by Fried Egg Events.</li>
               <li>
-                The platform fee is generally{' '}
-                <strong className="text-white">non-refundable</strong>,
-                including when an organizer cancels, postpones, or refunds an
-                event, unless required by law or expressly agreed in writing.
+                Refunds of the platform fee follow the Refunds section below.
               </li>
             </ul>
           </section>
@@ -163,9 +160,21 @@ export default function FeePolicyPage() {
                 reasons.
               </li>
               <li>
-                If a refund is issued, card processing fees charged by Stripe may
-                be non-recoverable. The Fried Egg Events platform fee is
-                non-refundable unless required by law or agreed in writing.
+                Card payments: the platform fee on a completed checkout is not
+                refunded if the player or team cancels.
+              </li>
+              <li>
+                If the organizer cancels the event, or the charge was an error
+                or duplicate, the platform fee is refunded too.
+              </li>
+              <li>
+                Cash entries: if the organizer refunds a cash player, the
+                platform fee due on that cash spot is removed unless the event
+                already happened.
+              </li>
+              <li>
+                Stripe processing costs on a player-cancelled card refund are
+                not reimbursed by Fried Egg Events.
               </li>
               <li>
                 Chargebacks / disputes: if a player disputes a charge, Stripe may

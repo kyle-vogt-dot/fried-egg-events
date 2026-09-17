@@ -28,3 +28,16 @@ export function amountWithPlatformFee(
   return Math.round(cents * (1 + rate / 100)) / 100;
 }
 
+/** Platform cut in dollars from a charged amount that already includes the percent. */
+export function platformFeeFromChargedAmount(
+  chargedDollars: number,
+  percent: number
+): number {
+  const chargedCents = Math.round(Number(chargedDollars) * 100);
+  if (!Number.isFinite(chargedCents) || chargedCents <= 0) return 0;
+  const pct = resolvePlatformFeePercent(percent);
+  if (pct <= 0) return 0;
+  const subtotalCents = Math.round(chargedCents / (1 + pct / 100));
+  return Math.max(0, chargedCents - subtotalCents) / 100;
+}
+

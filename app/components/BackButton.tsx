@@ -21,7 +21,17 @@ export default function BackButton({
   }
 
   return (
-    <button type="button" onClick={() => router.back()} className={className}>
+    <button
+      type="button"
+      onClick={() => {
+        if (typeof window !== 'undefined' && window.history.length > 1) {
+          router.back();
+        } else {
+          router.push('/');
+        }
+      }}
+      className={className}
+    >
       ← Back
     </button>
   );

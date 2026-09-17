@@ -95,6 +95,29 @@ export async function saveConnectAccount(
     .eq('id', eventId);
 }
 
+export async function saveConnectReady(
+  admin: { from: (relation: string) => any },
+  eventId: number,
+  isDemo: boolean,
+  ready: boolean
+) {
+  const cols = connectColumns(isDemo);
+  const { data, error } = await admin
+    .from('tournaments')
+    .update({ [cols.ready]: ready })
+    .eq('id', eventId)
+    .select('id');
+  const rowCount = data?.length ?? 0;
+  if (error) {
+    console.error(`Connect ready update failed (${cols.ready}):`, error);
+  } else if (rowCount === 0) {
+    console.error(
+      `Connect ready update matched 0 rows (${cols.ready}) event_id=${eventId}`
+    );
+  }
+  return { data, error, rowCount };
+}
+
 export async function createExpressAccount(stripe: Stripe) {
   return stripe.accounts.create({
     type: 'express',

@@ -558,22 +558,21 @@ const [adminPerms, setAdminPerms] = useState({
           : null
       );
 
-      const connectParam = searchParams.get('connect');
-      if (connectParam === 'return' || connectParam === 'refresh') {
-        try {
-          const res = await fetch(
-            `/api/stripe/connect/status?event_id=${encodeURIComponent(eventId)}`
+      try {
+        const res = await fetch(
+          `/api/stripe/connect/status?event_id=${encodeURIComponent(eventId)}`
+        );
+        const data = await res.json();
+        if (res.ok) {
+          setConnectReady(!!data.ready);
+          setConnectAccountSuffix(
+            data.account_id ? String(data.account_id).slice(-4) : null
           );
-          const data = await res.json();
-          if (res.ok) {
-            setConnectReady(!!data.ready);
-            setConnectAccountSuffix(
-              data.account_id ? String(data.account_id).slice(-4) : null
-            );
-          }
-        } catch (e) {
-          console.error('Connect status failed', e);
+        } else {
+          console.error('Connect status failed', data);
         }
+      } catch (e) {
+        console.error('Connect status failed', e);
       }
 
       const access = await loadEventAccess(

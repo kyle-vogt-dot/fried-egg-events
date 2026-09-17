@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { reverseRegistrationIncome } from '@/app/libs/reverse-income';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -43,7 +44,9 @@ export async function POST(request: NextRequest) {
     // Load registration first (audit + safety)
     const { data: reg, error: regErr } = await supabaseAdmin
       .from('event_registrations')
-      .select('id, paid, refunded, event_id, player_name, player_email')
+      .select(
+        'id, paid, refunded, event_id, player_name, player_email, amount_paid'
+      )
       .eq('id', registration_id)
       .maybeSingle();
 
@@ -85,6 +88,14 @@ export async function POST(request: NextRequest) {
         // optional: payment_method: 'refunded',
       })
       .eq('id', registration_id);
+
+    await reverseRegistrationIncome(supabaseAdmin, {
+      eventId: Number(reg.event_id),
+      registrationId: registration_id,
+      playerName: reg.player_name,
+      playerEmail: reg.player_email,
+      amount: amountDollars || Number(reg.amount_paid) || null,
+    });
 
     if (updateErr) {
       console.error('Refund succeeded in Stripe but DB update failed:', updateErr);

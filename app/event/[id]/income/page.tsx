@@ -13,6 +13,13 @@ import {
 } from '@react-pdf/renderer';
 import EventTabs from '@/app/components/EventTabs';
 import BackButton from '@/app/components/BackButton';
+import {
+  amountWithPlatformFee,
+  formatPlatformFeePercent,
+  platformFeeFromChargedAmount,
+  resolvePlatformFeePercent,
+} from '@/app/libs/platform-fee';
+import { computeCashPlatformFeeDue } from '@/app/libs/cash-platform-fee';
 
 const pdfStyles = StyleSheet.create({
   page: {
@@ -144,16 +151,16 @@ function IncomeStatementPDF({
   paidSponsorCount,
   manualIncome,
   manualIncomeTotal,
-  platformFeeTotal,
-  platformFeeCount,
-  platformFeeRate,
+  platformFeeDue,
+  platformFeeWithheld,
+  platformFeeCaption,
   greensFeesTotal,
   greensLines,
   expenses,
   manualExpenseTotal,
   totalExpenses,
   grossIncome,
-  net,
+  estimatedKeep,
   paidPlayerCount,
   paidSeatCount,
   isPerRound,
@@ -169,16 +176,16 @@ function IncomeStatementPDF({
   paidSponsorCount: number;
   manualIncome: any[];
   manualIncomeTotal: number;
-  platformFeeTotal: number;
-  platformFeeCount: number;
-  platformFeeRate: number;
+  platformFeeDue: number;
+  platformFeeWithheld: number;
+  platformFeeCaption: string;
   greensFeesTotal: number;
   greensLines: { label: string; amount: number; detail: string }[];
   expenses: any[];
   manualExpenseTotal: number;
   totalExpenses: number;
   grossIncome: number;
-  net: number;
+  estimatedKeep: number;
   paidPlayerCount: number;
   paidSeatCount: number;
   isPerRound: boolean;
@@ -213,7 +220,7 @@ function IncomeStatementPDF({
 
         <View style={pdfStyles.row}>
           <Text style={pdfStyles.label}>
-            Registration fees ({regCountLabel}, full price)
+            Registration (net card + cash, {regCountLabel})
           </Text>
           <Text style={pdfStyles.amount}>{money(registrationRevenue)}</Text>
         </View>
@@ -275,11 +282,22 @@ function IncomeStatementPDF({
 
         <Text style={pdfStyles.sectionTitle}>Expenses</Text>
 
+        {platformFeeWithheld > 0 && (
+          <View style={pdfStyles.row}>
+            <Text style={pdfStyles.labelMuted}>
+              Platform fee withheld (card, not due)
+            </Text>
+            <Text style={pdfStyles.amountMuted}>
+              {money(platformFeeWithheld)}
+            </Text>
+          </View>
+        )}
+
         <View style={pdfStyles.row}>
           <Text style={pdfStyles.label}>
-            Platform fees ({platformFeeCount} × {money(platformFeeRate)})
+            Platform fee due (cash) ({platformFeeCaption})
           </Text>
-          <Text style={pdfStyles.amount}>{money(platformFeeTotal)}</Text>
+          <Text style={pdfStyles.amount}>{money(platformFeeDue)}</Text>
         </View>
 
         {greensLines.map((line) => (
@@ -314,8 +332,8 @@ function IncomeStatementPDF({
         </View>
 
         <View style={pdfStyles.netRow}>
-          <Text style={pdfStyles.totalLabel}>Net income (loss)</Text>
-          <Text style={pdfStyles.totalAmount}>{money(net)}</Text>
+          <Text style={pdfStyles.totalLabel}>Estimated keep</Text>
+          <Text style={pdfStyles.totalAmount}>{money(estimatedKeep)}</Text>
         </View>
 
         <Text style={pdfStyles.footer}>
@@ -345,7 +363,12 @@ export default function EventIncomePage() {
   const [manualIncome, setManualIncome] = useState<any[]>([]);
   const [expenses, setExpenses] = useState<any[]>([]);
   const [sponsors, setSponsors] = useState<any[]>([]);
-  const [platformFee, setPlatformFee] = useState(0);
+  const [platformFeePercent, setPlatformFeePercent] = useState<number | null>(
+    null
+  );
+  const [platformFeeDollars, setPlatformFeeDollars] = useState<number | null>(
+    null
+  );
 
   const [incomeLabel, setIncomeLabel] = useState('');
   const [incomeAmount, setIncomeAmount] = useState('');
@@ -356,6 +379,7 @@ export default function EventIncomePage() {
   const [expenseNotes, setExpenseNotes] = useState('');
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [feePayments, setFeePayments] = useState<any[]>([]);
 
   const fetchAll = async () => {
     setLoading(true);
@@ -370,6 +394,7 @@ export default function EventIncomePage() {
       { data: exp },
       { data: fee },
       { data: sponsorRows },
+      { data: feePayRows },
     ] = await Promise.all([
       supabase.from('tournaments').select('*').eq('id', id).single(),
       supabase.from('event_registrations').select('*').eq('event_id', id),
@@ -391,7 +416,7 @@ export default function EventIncomePage() {
         .order('created_at', { ascending: false }),
       supabase
         .from('platform_settings')
-        .select('platform_fee')
+        .select('platform_fee, platform_fee_percent')
         .eq('id', 1)
         .single(),
       supabase
@@ -399,6 +424,11 @@ export default function EventIncomePage() {
         .select('id, company_name, amount_paid, paid, package_id')
         .eq('event_id', id)
         .eq('paid', true),
+      supabase
+        .from('platform_fee_payments')
+        .select('*')
+        .eq('event_id', id)
+        .order('created_at', { ascending: false }),
     ]);
 
     setEvent(ev);
@@ -408,7 +438,37 @@ export default function EventIncomePage() {
     setManualIncome(inc || []);
     setExpenses(exp || []);
     setSponsors(sponsorRows || []);
-    if (fee?.platform_fee != null) setPlatformFee(Number(fee.platform_fee));
+    setFeePayments(feePayRows || []);
+    const settingsPercent =
+      fee?.platform_fee_percent != null &&
+      fee.platform_fee_percent !== '' &&
+      Number.isFinite(Number(fee.platform_fee_percent))
+        ? Number(fee.platform_fee_percent)
+        : null;
+    const settingsDollars =
+      fee?.platform_fee != null && Number.isFinite(Number(fee.platform_fee))
+        ? Number(fee.platform_fee)
+        : null;
+    const eventDollars =
+      ev?.platform_fee_per_player != null &&
+      Number.isFinite(Number(ev.platform_fee_per_player))
+        ? Number(ev.platform_fee_per_player)
+        : null;
+
+    // /platform edits platform_fee_percent. Do not fall back to a leftover $3.
+    if (settingsPercent != null) {
+      setPlatformFeePercent(settingsPercent);
+      setPlatformFeeDollars(null);
+    } else if (eventDollars != null) {
+      setPlatformFeePercent(null);
+      setPlatformFeeDollars(eventDollars);
+    } else if (settingsDollars != null) {
+      setPlatformFeePercent(null);
+      setPlatformFeeDollars(settingsDollars);
+    } else {
+      setPlatformFeePercent(null);
+      setPlatformFeeDollars(null);
+    }
     setLoading(false);
   };
 
@@ -417,12 +477,152 @@ export default function EventIncomePage() {
   }, [eventId]);
 
   const isPerRound = (event?.pricing_mode || 'event') === 'per_round';
-  const fee = platformFee;
+  const isTeamEvent = Number(event?.max_teammates) > 1;
+  const feeIsPercent = platformFeePercent != null;
+  const feePercent =
+    platformFeePercent != null
+      ? resolvePlatformFeePercent(platformFeePercent)
+      : 0;
+  const feeDollars = platformFeeDollars != null ? Number(platformFeeDollars) : 0;
+
+  const methodOf = (r: any) => String(r?.payment_method || '').toLowerCase();
+  const isComp = (r: any) =>
+    ['comp', 'complimentary'].includes(methodOf(r));
+  const isCashMethod = (r: any) =>
+    ['cash', 'check', 'manual', 'checkin'].includes(methodOf(r));
+  const isCashPaid = (r: any) =>
+    r?.paid === true && r?.refunded !== true && isCashMethod(r);
+  const isOnlinePaid = (r: any) =>
+    r?.paid === true &&
+    r?.refunded !== true &&
+    !isComp(r) &&
+    !isCashMethod(r);
+
+  const groupRegs = (regs: any[]) => {
+    if (!isTeamEvent) return regs.map((r) => [r]);
+    const byTeam = new Map<string, any[]>();
+    const groups: any[][] = [];
+    for (const r of regs) {
+      const team = String(r.team_name || '').trim().toLowerCase();
+      if (!team) {
+        groups.push([r]);
+        continue;
+      }
+      if (!byTeam.has(team)) byTeam.set(team, []);
+      byTeam.get(team)!.push(r);
+    }
+    return [...groups, ...Array.from(byTeam.values())];
+  };
+
+  const checkoutSubtotal = (reg: any) => {
+    if (reg?.amount_paid != null && Number(reg.amount_paid) > 0) {
+      return Number(reg.amount_paid);
+    }
+    const selectedIds: number[] = Array.isArray(reg?.selected_round_ids)
+      ? reg.selected_round_ids
+      : [];
+    const selectedRounds = rounds.filter((r) => selectedIds.includes(r.id));
+    if (isPerRound) {
+      const roundsToCharge =
+        selectedRounds.length > 0 ? selectedRounds : rounds;
+      return roundsToCharge.reduce((s, r) => s + Number(r.price || 0), 0);
+    }
+    let t = Number(event?.price || 0);
+    for (const round of selectedRounds.filter((r) => r.pay_separately)) {
+      t += Number(round.price || 0);
+    }
+    return t;
+  };
+
+  const paidCheckoutGroups = useMemo(() => {
+    const paid = registrations.filter((r) => {
+      if (r.refunded === true) return false;
+      if (isComp(r) && !(Number(r.amount_paid) > 0 && r.paid === true)) {
+        return false;
+      }
+      return r.paid === true;
+    });
+    return groupRegs(paid);
+  }, [registrations, isTeamEvent]);
+
+  const refundedCheckoutGroups = useMemo(() => {
+    return groupRegs(registrations.filter((r) => r.refunded === true));
+  }, [registrations, isTeamEvent]);
+
+  const groupCheckoutAmount = (group: any[]) => {
+    const withPaid = group.find(
+      (r) => r.amount_paid != null && Number(r.amount_paid) > 0
+    );
+    if (withPaid) return Number(withPaid.amount_paid);
+    return checkoutSubtotal(group[0]);
+  };
+
+  const groupIsOnline = (group: any[]) => group.some(isOnlinePaid);
+  const groupIsCash = (group: any[]) => group.some(isCashPaid);
+  const groupIsCardMethod = (group: any[]) =>
+    group.some((r) => !isComp(r) && !isCashMethod(r));
+
+  const withheldForOnline = (group: any[]) => {
+    const charged = groupCheckoutAmount(group);
+    if (feeIsPercent) {
+      const fromPaid = group.some(
+        (r) => r.amount_paid != null && Number(r.amount_paid) > 0
+      );
+      if (fromPaid) return platformFeeFromChargedAmount(charged, feePercent);
+      return Math.max(
+        0,
+        amountWithPlatformFee(charged, feePercent) - charged
+      );
+    }
+    return feeDollars;
+  };
+
+  const netForOnline = (group: any[]) =>
+    Math.max(0, groupCheckoutAmount(group) - withheldForOnline(group));
+
+  const feeDueForCash = (group: any[]) => {
+    if (feeIsPercent) {
+      const cash = groupCheckoutAmount(group);
+      return Math.max(0, amountWithPlatformFee(cash, feePercent) - cash);
+    }
+    return feeDollars;
+  };
 
   const paidPlayers = useMemo(
     () => registrations.filter((r) => r.paid === true && r.refunded !== true),
     [registrations]
   );
+
+  const refundedRows = useMemo(() => {
+    return registrations
+      .filter((r) => r.refunded === true)
+      .map((r) => {
+        const m = String(r.payment_method || '').toLowerCase();
+        const method = ['cash', 'check', 'manual', 'checkin'].includes(m)
+          ? 'cash'
+          : 'card';
+        const amount =
+          r.refund_amount != null && Number(r.refund_amount) > 0
+            ? Number(r.refund_amount)
+            : Number(r.amount_paid || 0);
+        const withheld =
+          method === 'card' ? withheldForOnline([r]) : 0;
+        const feeDue = method === 'cash' ? feeDueForCash([r]) : 0;
+        return {
+          id: r.id,
+          player_name: r.player_name,
+          team_name: r.team_name,
+          method,
+          amount,
+          withheld,
+          feeDue,
+          refunded_at: r.refunded_at,
+        };
+      })
+      .sort((a, b) =>
+        String(b.refunded_at || '').localeCompare(String(a.refunded_at || ''))
+      );
+  }, [registrations]);
 
   // Paid + comp/cash/etc. — for greens (course payment)
   const isPlayingForGreens = (r: any) => {
@@ -498,31 +698,26 @@ export default function EventIncomePage() {
   }, [isPerRound, rounds, event, greensPlayers]);
 
   const registrationRevenue = useMemo(() => {
-    const paid = registrations.filter((r) => r.paid);
     let total = 0;
-
-    for (const reg of paid) {
-      const selectedIds: number[] = reg.selected_round_ids || [];
-      const selectedRounds = rounds.filter((r) => selectedIds.includes(r.id));
-
-      if (isPerRound) {
-        const roundsToCharge =
-          selectedRounds.length > 0 ? selectedRounds : rounds;
-        for (const round of roundsToCharge) {
-          total += Number(round.price || 0) + fee;
-        }
-      } else {
-        total += Number(event?.price || 0) + fee;
-        for (const round of selectedRounds.filter((r) => r.pay_separately)) {
-          total += Number(round.price || 0) + fee;
-        }
-      }
+    for (const group of paidCheckoutGroups) {
+      if (groupIsOnline(group)) total += netForOnline(group);
+      else if (groupIsCash(group)) total += groupCheckoutAmount(group);
     }
     return total;
-  }, [registrations, rounds, event, isPerRound, fee]);
+  }, [
+    paidCheckoutGroups,
+    rounds,
+    event,
+    isPerRound,
+    feeIsPercent,
+    feePercent,
+    feeDollars,
+  ]);
 
     const discountSummary = useMemo(() => {
-    const paid = registrations.filter((r) => r.paid && r.discount_code);
+    const paid = registrations.filter(
+      (r) => r.paid === true && r.refunded !== true && r.discount_code
+    );
     const byCode: Record<
       string,
       { code: string; players: number; rounds: number; totalSaved: number }
@@ -552,48 +747,102 @@ export default function EventIncomePage() {
     [discountSummary]
   );
 
-  const { platformFeeTotal, platformFeeCount } = useMemo(() => {
-    const paid = registrations.filter((r) => r.paid);
-    let total = 0;
-    let feeUnits = 0;
+  const { platformFeeDue, cashCheckoutCount } = useMemo(() => {
+    const result = computeCashPlatformFeeDue({
+      registrations,
+      event,
+      rounds,
+      feeIsPercent,
+      feePercent,
+      feeDollars,
+    });
+    return {
+      platformFeeDue: Number(result?.due) || 0,
+      cashCheckoutCount: Number(result?.cashCheckoutCount) || 0,
+    };
+  }, [registrations, event, rounds, feeIsPercent, feePercent, feeDollars]);
 
-    for (const reg of paid) {
-      const selectedIds: number[] = reg.selected_round_ids || [];
-      const selectedRounds = rounds.filter((r) => selectedIds.includes(r.id));
-
-      if (isPerRound) {
-        const roundsToCharge =
-          selectedRounds.length > 0 ? selectedRounds : rounds;
-        const units = roundsToCharge.length || 1;
-        total += units * fee;
-        feeUnits += units;
-      } else {
-        total += fee;
-        feeUnits += 1;
-        for (const round of selectedRounds.filter((r) => r.pay_separately)) {
-          total += fee;
-          feeUnits += 1;
-        }
-      }
+  const { platformFeeWithheld } = useMemo(() => {
+    let withheld = 0;
+    for (const group of paidCheckoutGroups) {
+      if (groupIsOnline(group)) withheld += withheldForOnline(group);
     }
+    for (const group of refundedCheckoutGroups) {
+      if (groupIsCardMethod(group)) withheld += withheldForOnline(group);
+    }
+    return { platformFeeWithheld: withheld };
+  }, [
+    paidCheckoutGroups,
+    refundedCheckoutGroups,
+    feeIsPercent,
+    feePercent,
+    feeDollars,
+    rounds,
+    event,
+    isPerRound,
+  ]);
 
-    return { platformFeeTotal: total, platformFeeCount: feeUnits };
-  }, [registrations, rounds, isPerRound, fee]);
+  const paidFeePayments = useMemo(
+    () =>
+      (feePayments || []).filter(
+        (p) => String(p.status || '').toLowerCase() === 'paid'
+      ),
+    [feePayments]
+  );
+  const feeCollected = useMemo(
+    () =>
+      paidFeePayments.reduce((s, p) => s + Number(p.amount || 0), 0),
+    [paidFeePayments]
+  );
+  const feeOutstanding = Math.max(
+    0,
+    (Number(platformFeeDue) || 0) - (Number(feeCollected) || 0)
+  );
+
+  const platformFeeCaption = feeIsPercent
+    ? `${formatPlatformFeePercent(feePercent)}% per checkout`
+    : `$${feeDollars.toFixed(2)} per checkout`;
 
   const addonRevenue = useMemo(() => {
+    const refundedIds = new Set(
+      registrations
+        .filter((r) => r.refunded === true)
+        .map((r) => String(r.id))
+    );
+    const addonCats = new Set(['addon', 'add-on', 'addons']);
+    const incomeByReg = new Set<string>();
     let total = 0;
-    for (const reg of registrations.filter((r) => r.paid_addons)) {
+    for (const row of manualIncome) {
+      const cat = String(row.category || '').toLowerCase();
+      if (!addonCats.has(cat)) continue;
+      if (Number(row.amount) <= 0) continue;
+      const rid = row.registration_id != null ? String(row.registration_id) : '';
+      if (rid && refundedIds.has(rid)) continue;
+      total += Number(row.amount) || 0;
+      if (rid) incomeByReg.add(rid);
+    }
+    for (const reg of registrations) {
+      if (reg.refunded === true) continue;
+      if (incomeByReg.has(String(reg.id))) continue;
       const qty = reg.addon_quantities || {};
+      let line = 0;
       for (const addon of addons) {
         const q = Number(qty[addon.id] ?? qty[String(addon.id)] ?? 0);
-        if (q > 0) total += q * Number(addon.price_per_unit || 0);
+        if (q > 0) line += q * Number(addon.price_per_unit || 0);
       }
+      total += line;
     }
     return total;
-  }, [registrations, addons]);
+  }, [registrations, addons, manualIncome]);
 
   const paidAddonPlayers = useMemo(
-    () => registrations.filter((r) => r.paid_addons).length,
+    () =>
+      registrations.filter((r) => {
+        if (r.refunded === true) return false;
+        if (r.paid_addons) return true;
+        const qty = r.addon_quantities || {};
+        return Object.values(qty).some((q) => Number(q) > 0);
+      }).length,
     [registrations]
   );
 
@@ -614,14 +863,36 @@ export default function EventIncomePage() {
     [expenses]
   );
 
-  const totalExpenses = manualExpenseTotal + greensFeesTotal + platformFeeTotal;
+  const extraManualIncome = useMemo(
+    () =>
+      manualIncome.filter((row) => {
+        const cat = String(row.category || '').toLowerCase();
+        if (
+          ['registration', 'entry', 'addon', 'add-on', 'addons'].includes(
+            cat
+          ) &&
+          (row.registration_id ||
+            /^paid cash/i.test(String(row.label || '')))
+        ) {
+          return false;
+        }
+        return true;
+      }),
+    [manualIncome]
+  );
+  const extraManualIncomeTotal = extraManualIncome.reduce(
+    (s, row) => s + Number(row.amount || 0),
+    0
+  );
+
+  const totalExpenses = manualExpenseTotal + greensFeesTotal;
   const grossIncome =
     registrationRevenue -
     totalDiscounts +
     addonRevenue +
     sponsorRevenue +
-    manualIncomeTotal;
-  const net = grossIncome - totalExpenses;
+    extraManualIncomeTotal;
+  const estimatedKeep = grossIncome - totalExpenses - feeOutstanding;
 
   const generatedAt = useMemo(
     () =>
@@ -712,6 +983,13 @@ export default function EventIncomePage() {
     fetchAll();
   };
 
+  const platformFeeDueNum = Number(platformFeeDue) || 0;
+  const platformFeeCollectedNum = Number(feeCollected) || 0;
+  const platformFeeOutstandingNum = Math.max(
+    0,
+    platformFeeDueNum - platformFeeCollectedNum
+  );
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
@@ -744,18 +1022,18 @@ export default function EventIncomePage() {
                 paidAddonPlayers={paidAddonPlayers}
                 sponsorRevenue={sponsorRevenue}
                 paidSponsorCount={paidSponsorCount}
-                manualIncome={manualIncome}
-                manualIncomeTotal={manualIncomeTotal}
-                platformFeeTotal={platformFeeTotal}
-                platformFeeCount={platformFeeCount}
-                platformFeeRate={fee}
+                manualIncome={extraManualIncome}
+                manualIncomeTotal={extraManualIncomeTotal}
+                platformFeeDue={platformFeeDueNum}
+                platformFeeWithheld={platformFeeWithheld}
+                platformFeeCaption={platformFeeCaption}
                 greensFeesTotal={greensFeesTotal}
                 greensLines={greensLines}
                 expenses={expenses}
                 manualExpenseTotal={manualExpenseTotal}
                 totalExpenses={totalExpenses}
                 grossIncome={grossIncome}
-                net={net}
+                estimatedKeep={estimatedKeep}
                 paidPlayerCount={paidPlayers.length}
                 paidSeatCount={paidSeatCount}
                 isPerRound={isPerRound}
@@ -773,7 +1051,7 @@ export default function EventIncomePage() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="bg-gray-800 rounded-3xl p-6">
-            <p className="text-gray-400 text-sm">Registrations (est.)</p>
+            <p className="text-gray-400 text-sm">Revenue (net card + cash)</p>
             <p className="text-3xl font-bold text-emerald-400 mt-2">
               ${(registrationRevenue - totalDiscounts).toFixed(2)}
             </p>
@@ -813,43 +1091,105 @@ export default function EventIncomePage() {
             </p>
           </div>
           <div className="bg-gray-800 rounded-3xl p-6">
-            <p className="text-gray-400 text-sm">Manual / cash entries</p>
+            <p className="text-gray-400 text-sm">Other income</p>
             <p className="text-3xl font-bold text-emerald-400 mt-2">
-              ${manualIncomeTotal.toFixed(2)}
+              ${extraManualIncomeTotal.toFixed(2)}
             </p>
           </div>
           <div className="bg-gray-800 rounded-3xl p-6">
-            <p className="text-gray-400 text-sm">Net (income − expenses)</p>
+            <p className="text-gray-400 text-sm">Estimated keep</p>
             <p
               className={`text-3xl font-bold mt-2 ${
-                net >= 0 ? 'text-emerald-400' : 'text-red-400'
+                estimatedKeep >= 0 ? 'text-emerald-400' : 'text-red-400'
               }`}
             >
-              ${net.toFixed(2)}
+              ${estimatedKeep.toFixed(2)}
             </p>
             <p className="text-xs text-gray-500 mt-1">
-              Gross ${grossIncome.toFixed(2)} · Expenses $
-              {totalExpenses.toFixed(2)}
+              Revenue ${grossIncome.toFixed(2)} · Expenses $
+              {totalExpenses.toFixed(2)} · Fee outstanding $
+              {platformFeeOutstandingNum.toFixed(2)}
             </p>
           </div>
         </div>
+
+        {refundedRows.length > 0 && (
+          <details className="bg-gray-800 rounded-3xl p-6 md:p-8">
+            <summary className="cursor-pointer text-xl font-semibold flex items-center justify-between gap-3">
+              <span>Refunded ({refundedRows.length})</span>
+              <span className="text-sm font-normal text-gray-500">
+                Not in totals
+              </span>
+            </summary>
+            <p className="text-sm text-gray-500 mt-3">
+              History only. These amounts are not in revenue, net to organizer,
+              cash-in, or platform fee due.
+            </p>
+            <div className="mt-4 space-y-2">
+              {refundedRows.map((r) => {
+                const when = r.refunded_at
+                  ? new Date(r.refunded_at).toLocaleDateString(undefined, {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                    })
+                  : null;
+                return (
+                  <div
+                    key={r.id}
+                    className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 bg-gray-900 rounded-2xl px-5 py-4"
+                  >
+                    <div>
+                      <div className="font-medium">
+                        {r.player_name || 'Player'}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {[r.team_name || '—', r.method, when]
+                          .filter(Boolean)
+                          .join(' · ')}
+                        {r.method === 'card' && r.withheld > 0
+                          ? ` · platform fee withheld $${r.withheld.toFixed(2)}`
+                          : ''}
+                        {r.method === 'cash' && r.feeDue > 0
+                          ? ` · fee due $${r.feeDue.toFixed(2)} still owed`
+                          : ''}
+                      </div>
+                    </div>
+                    <span className="text-gray-400 font-semibold">
+                      {r.amount > 0
+                        ? `−$${r.amount.toFixed(2)}`
+                        : '—'}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        )}
 
         <div className="bg-gray-800 rounded-3xl p-6 md:p-8">
           <h2 className="text-2xl font-semibold mb-6">Income summary</h2>
           <div className="space-y-4">
             <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
               <div>
-                <div className="font-medium">Registered players</div>
+                <div className="font-medium">Net to organizer</div>
                 <div className="text-sm text-gray-500">
+                  Card net + full cash
                   {isPerRound
-                    ? `${paidSeatCount} seat${
+                    ? ` · ${paidSeatCount} seat${
                         paidSeatCount === 1 ? '' : 's'
                       } · ${paidPlayers.length} player${
                         paidPlayers.length === 1 ? '' : 's'
-                      } (full price)`
-                    : `${paidPlayers.length} player${
+                      }`
+                    : ` · ${paidPlayers.length} player${
                         paidPlayers.length === 1 ? '' : 's'
-                      } (full price)`}
+                      }`}
+                  {platformFeeWithheld > 0 && (
+                    <span className="block text-gray-500">
+                      Platform fee withheld: ${platformFeeWithheld.toFixed(2)}{' '}
+                      (not due)
+                    </span>
+                  )}
                 </div>
               </div>
               <span className="text-emerald-400 font-semibold text-lg">
@@ -914,21 +1254,45 @@ export default function EventIncomePage() {
 
             <div className="flex justify-between items-center bg-gray-900 rounded-2xl px-5 py-4">
               <div>
-                <div className="font-medium">Manual / cash income</div>
+                <div className="font-medium">Other income</div>
                 <div className="text-sm text-gray-500">
-                  {manualIncome.length} entr
-                  {manualIncome.length === 1 ? 'y' : 'ies'}
+                  {extraManualIncome.length} entr
+                  {extraManualIncome.length === 1 ? 'y' : 'ies'}
                 </div>
               </div>
               <span className="text-emerald-400 font-semibold text-lg">
-                ${manualIncomeTotal.toFixed(2)}
+                ${extraManualIncomeTotal.toFixed(2)}
               </span>
             </div>
 
             <div className="flex justify-between items-center border-t border-gray-700 pt-4 px-1">
-              <div className="font-semibold text-lg">Total income</div>
+              <div className="font-semibold text-lg">Revenue</div>
               <span className="text-emerald-400 font-bold text-xl">
                 ${grossIncome.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex justify-between items-center px-1">
+              <div className="text-sm text-gray-400">
+                Platform fee due (cash) · {platformFeeCaption}
+              </div>
+              <span className="text-amber-400 font-semibold">
+                ${platformFeeDueNum.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex justify-between items-center px-1">
+              <div className="text-sm text-gray-400">Expenses</div>
+              <span className="text-amber-400 font-semibold">
+                ${totalExpenses.toFixed(2)}
+              </span>
+            </div>
+            <div className="flex justify-between items-center px-1">
+              <div className="font-semibold">Estimated keep</div>
+              <span
+                className={`font-bold text-xl ${
+                  estimatedKeep >= 0 ? 'text-emerald-400' : 'text-red-400'
+                }`}
+              >
+                ${estimatedKeep.toFixed(2)}
               </span>
             </div>
           </div>
@@ -1003,19 +1367,53 @@ export default function EventIncomePage() {
           <div className="bg-gray-900 rounded-3xl p-6">
             <div className="flex justify-between items-start gap-4">
               <div>
-                <p className="text-gray-400 text-sm">Platform fee (auto)</p>
+                <p className="text-gray-400 text-sm">
+                  Platform cash fees
+                </p>
                 <p className="text-3xl font-bold text-amber-400 mt-2">
-                  ${platformFeeTotal.toFixed(2)}
+                  ${platformFeeOutstandingNum.toFixed(2)} outstanding
                 </p>
                 <p className="text-xs text-gray-500 mt-1">
-                  {platformFeeCount} fee unit
-                  {platformFeeCount === 1 ? '' : 's'} × ${fee.toFixed(2)}
-                  {paidPlayers.length > 0
-                    ? ` · ${paidPlayers.length} paid player${
-                        paidPlayers.length === 1 ? '' : 's'
-                      }`
-                    : ''}
+                  Platform fee {platformFeeCaption}
                 </p>
+                <div className="text-sm text-gray-300 mt-3 space-y-1">
+                  <div>Fee due (cash): ${platformFeeDueNum.toFixed(2)}</div>
+                  <div>Fee collected: ${platformFeeCollectedNum.toFixed(2)}</div>
+                  <div>
+                    Fee outstanding: ${platformFeeOutstandingNum.toFixed(2)}
+                    {cashCheckoutCount > 0
+                      ? ` · ${cashCheckoutCount} cash spot${
+                          cashCheckoutCount === 1 ? '' : 's'
+                        }`
+                      : ''}
+                  </div>
+                </div>
+                {platformFeeWithheld > 0 && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    Platform fee withheld: ${platformFeeWithheld.toFixed(2)}{' '}
+                    (card / Apple Pay / Connect — not due)
+                  </p>
+                )}
+                {paidFeePayments.length > 0 && (
+                  <div className="mt-4 space-y-2 border-t border-gray-800 pt-3">
+                    {paidFeePayments.map((p) => (
+                      <div
+                        key={p.id}
+                        className="flex justify-between text-xs text-gray-400 gap-3"
+                      >
+                        <span>
+                          {p.created_at
+                            ? new Date(p.created_at).toLocaleDateString()
+                            : '—'}
+                          {p.stripe_transfer_id
+                            ? ` · ${p.stripe_transfer_id}`
+                            : ''}
+                        </span>
+                        <span>${Number(p.amount || 0).toFixed(2)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>

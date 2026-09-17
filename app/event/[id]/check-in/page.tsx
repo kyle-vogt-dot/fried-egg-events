@@ -13,6 +13,7 @@ import {
   formatPlatformFeePercent,
   resolvePlatformFeePercent,
 } from '@/app/libs/platform-fee';
+import { reverseRegistrationIncome } from '@/app/libs/reverse-income';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -63,6 +64,24 @@ function isCheckedInForRound(reg: any, roundId: number | 'all') {
   return !!reg.checked_in;
 }
 
+function compactAddonQuantities(raw: any, addonsList: any[]) {
+  const out: Record<string, number> = {};
+  for (const addon of addonsList || []) {
+    const q = Number(raw?.[addon.id] ?? raw?.[String(addon.id)] ?? 0);
+    if (Number.isFinite(q) && q > 0) out[String(addon.id)] = q;
+  }
+  return out;
+}
+
+function addonTotalFromQty(qty: Record<string, number>, addonsList: any[]) {
+  let total = 0;
+  for (const addon of addonsList || []) {
+    const q = Number(qty[addon.id] ?? qty[String(addon.id)] ?? 0);
+    if (q > 0) total += q * Number(addon.price_per_unit || 0);
+  }
+  return Math.round(total * 100) / 100;
+}
+
 function countTeams(regs: any[]) {
   const names = new Set(
     regs
@@ -106,6 +125,12 @@ export default function EventCheckInPage() {
   // free | cash | link
   const [addChargeType, setAddChargeType] = useState<'free' | 'cash' | 'link'>('cash');
   const [addingPlayer, setAddingPlayer] = useState(false);
+  const [newPlayerAddonQty, setNewPlayerAddonQty] = useState<
+    Record<string, number>
+  >({});
+  const [editAddonQty, setEditAddonQty] = useState<Record<string, number>>(
+    {}
+  );
 
   const [subName, setSubName] = useState('');
   const [subEmail, setSubEmail] = useState('');
@@ -157,6 +182,70 @@ export default function EventCheckInPage() {
     return amountWithPlatformFee(subtotal, platformFeePercent);
   };
 
+  const addOnsForForms = addons.filter(
+    (a) => String(a.name || '').toLowerCase() !== 'skins'
+  );
+
+  const addPlayerAddonQty = compactAddonQuantities(
+    newPlayerAddonQty,
+    addOnsForForms
+  );
+  const addPlayerAddonTotal = addonTotalFromQty(
+    addPlayerAddonQty,
+    addOnsForForms
+  );
+  const addChargePreview = estimateRegCharge() + addPlayerAddonTotal;
+
+  const writeAddonIncomeRows = async (
+    registrationId: string | number,
+    qty: Record<string, number>
+  ) => {
+    await supabase
+      .from('event_income_entries')
+      .delete()
+      .eq('registration_id', registrationId)
+      .in('category', ['addon', 'add-on', 'addons']);
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const rows = addons
+      .map((addon) => {
+        const q = Number(qty[addon.id] ?? qty[String(addon.id)] ?? 0);
+        if (q <= 0) return null;
+        return {
+          event_id: parseInt(eventId, 10),
+          registration_id: registrationId,
+          category: 'addon',
+          amount: q * Number(addon.price_per_unit || 0),
+          label: addon.name,
+          created_by: user?.id || null,
+        };
+      })
+      .filter(Boolean);
+    if (rows.length) {
+      await supabase.from('event_income_entries').insert(rows);
+    }
+  };
+
+  const persistCashAddons = async (reg: any, rawQty: any) => {
+    const qty = compactAddonQuantities(rawQty, addons);
+    const addonTotal = addonTotalFromQty(qty, addons);
+    const prevQty = compactAddonQuantities(reg.addon_quantities || {}, addons);
+    const prevAddonTotal = addonTotalFromQty(prevQty, addons);
+    const base = Math.max(0, Number(reg.amount_paid || 0) - prevAddonTotal);
+    const { error } = await supabase
+      .from('event_registrations')
+      .update({
+        addon_quantities: qty,
+        paid_addons: Object.keys(qty).length > 0,
+        amount_paid: Math.round((base + addonTotal) * 100) / 100,
+        payment_method: reg.payment_method || 'cash',
+      })
+      .eq('id', reg.id);
+    if (error) throw error;
+    await writeAddonIncomeRows(reg.id, qty);
+  };
+
   const filteredRegistrations = useMemo(() => {
     let list = registrations;
 
@@ -202,6 +291,7 @@ export default function EventCheckInPage() {
         ? [Number(reg.round_id)]
         : [];
     setEditRoundIds(ids);
+    setEditAddonQty(compactAddonQuantities(reg.addon_quantities || {}, addons));
     setShowEditModal(true);
   };
 
@@ -213,17 +303,34 @@ export default function EventCheckInPage() {
     }
     setSavingEdit(true);
     try {
+      const isCash = String(editReg.payment_method || '').toLowerCase() === 'cash';
+      const qty = compactAddonQuantities(editAddonQty, addons);
+      const addonTotal = addonTotalFromQty(qty, addons);
+      const prevQty = compactAddonQuantities(
+        editReg.addon_quantities || {},
+        addons
+      );
+      const prevAddonTotal = addonTotalFromQty(prevQty, addons);
+      const base = Math.max(0, Number(editReg.amount_paid || 0) - prevAddonTotal);
+      const patch: Record<string, any> = {
+        player_name: editName.trim(),
+        player_email: editEmail.trim() || null,
+        team_name: editTeam.trim() || null,
+        selected_round_ids: editRoundIds,
+      };
+      if (isCash) {
+        patch.addon_quantities = qty;
+        patch.paid_addons = Object.keys(qty).length > 0;
+        patch.amount_paid = Math.round((base + addonTotal) * 100) / 100;
+        patch.payment_method = 'cash';
+      }
       const { error } = await supabase
         .from('event_registrations')
-        .update({
-          player_name: editName.trim(),
-          player_email: editEmail.trim() || null,
-          team_name: editTeam.trim() || null,
-          selected_round_ids: editRoundIds,
-        })
+        .update(patch)
         .eq('id', editReg.id);
 
       if (error) throw error;
+      if (isCash) await writeAddonIncomeRows(editReg.id, qty);
 
       setShowEditModal(false);
       setEditReg(null);
@@ -384,6 +491,19 @@ export default function EventCheckInPage() {
         if (error) throw error;
       }
 
+      await reverseRegistrationIncome(supabase, {
+        eventId: parseInt(eventId, 10),
+        registrationId: refundReg.id,
+        playerName: refundReg.player_name,
+        playerEmail: refundReg.player_email,
+        amount:
+          refundAmount > 0
+            ? refundAmount
+            : refundReg.amount_paid != null
+              ? Number(refundReg.amount_paid)
+              : null,
+      });
+
       // Optional audit log
       try {
         const {
@@ -440,6 +560,8 @@ export default function EventCheckInPage() {
           : rounds.map((r) => r.id);
 
       const chargeAmount = estimateRegCharge();
+      const addonQty = compactAddonQuantities(newPlayerAddonQty, addons);
+      const addonTotal = addonTotalFromQty(addonQty, addons);
       const isCash = addChargeType === 'cash';
       const isFree = addChargeType === 'free';
       const isLink = addChargeType === 'link';
@@ -459,7 +581,9 @@ export default function EventCheckInPage() {
           checked_in: false,
           selected_round_ids,
           round_checkins: {},
-          amount_paid: isCash ? chargeAmount : null,
+          amount_paid: isCash
+            ? Math.round((chargeAmount + addonTotal) * 100) / 100
+            : null,
           payment_method: isCash
             ? 'cash'
             : isFree
@@ -467,6 +591,8 @@ export default function EventCheckInPage() {
               : isLink
                 ? 'payment_link'
                 : 'comp',
+          addon_quantities: isCash ? addonQty : {},
+          paid_addons: isCash && Object.keys(addonQty).length > 0,
         })
         .select()
         .single();
@@ -478,6 +604,7 @@ export default function EventCheckInPage() {
         try {
           await supabase.from('event_income_entries').insert({
             event_id: parseInt(eventId),
+            registration_id: inserted.id,
             label: `Paid cash – ${newPlayerName.trim()}`,
             category: 'registration',
             amount: chargeAmount,
@@ -485,6 +612,11 @@ export default function EventCheckInPage() {
           });
         } catch (incErr) {
           console.warn('Income entry failed (reg still created):', incErr);
+        }
+        try {
+          await writeAddonIncomeRows(inserted.id, addonQty);
+        } catch (addonIncErr) {
+          console.warn('Addon income failed (reg still created):', addonIncErr);
         }
       }
 
@@ -561,6 +693,7 @@ export default function EventCheckInPage() {
       setNewPlayerEmail('');
       setNewPlayerTeam('');
       setAddChargeType('cash');
+      setNewPlayerAddonQty({});
     } catch (e: any) {
       console.error(e);
       alert(e.message || 'Failed to add player');
@@ -597,18 +730,49 @@ export default function EventCheckInPage() {
     const existing = { ...(currentPayReg.round_checkins || {}) };
     if (roundKey) existing[roundKey] = true;
 
+    const qty = compactAddonQuantities(
+      selectedQuantities[currentPayReg.id] ||
+        currentPayReg.addon_quantities ||
+        {},
+      addons
+    );
+    const addonTotal = addonTotalFromQty(qty, addons);
+    const prevQty = compactAddonQuantities(
+      currentPayReg.addon_quantities || {},
+      addons
+    );
+    const prevAddonTotal = addonTotalFromQty(prevQty, addons);
+    const base = Math.max(
+      0,
+      Number(currentPayReg.amount_paid || 0) - prevAddonTotal
+    );
+    const isCash =
+      String(currentPayReg.payment_method || '').toLowerCase() === 'cash';
+
     const { error } = await supabase
       .from('event_registrations')
       .update({
-        paid_addons: true,
+        paid_addons: Object.keys(qty).length > 0,
         checked_in: true,
         round_checkins: existing,
+        addon_quantities: qty,
+        ...(isCash
+          ? {
+              amount_paid: Math.round((base + addonTotal) * 100) / 100,
+              payment_method: 'cash',
+            }
+          : {}),
       })
       .eq('id', currentPayReg.id);
 
     if (error) {
       alert('Error marking as paid: ' + error.message);
     } else {
+      try {
+        await writeAddonIncomeRows(currentPayReg.id, qty);
+      } catch (e) {
+        console.warn('Addon income failed:', e);
+      }
       alert(`${currentPayReg.player_name} add-ons paid and checked in.`);
       setShowPaymentModal(false);
       await fetchRegistrations();
@@ -828,7 +992,7 @@ export default function EventCheckInPage() {
   const teamCount = countTeams(filteredRegistrations);
   const checkedInTeamCount = countTeams(checkedInRegs);
 
-  const addChargePreview = estimateRegCharge();
+
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4 sm:p-8">
@@ -1107,30 +1271,67 @@ export default function EventCheckInPage() {
                                   <input
                                     type="checkbox"
                                     checked={qty > 0}
-                                    onChange={(e) => {
+                                    onChange={async (e) => {
                                       const newQty = e.target.checked ? 1 : 0;
+                                      const next = {
+                                        ...(selectedQuantities[reg.id] ||
+                                          addonTotals),
+                                        [addon.id]: newQty,
+                                      };
                                       setSelectedQuantities((prev) => ({
                                         ...prev,
-                                        [reg.id]: {
-                                          ...(prev[reg.id] || addonTotals),
-                                          [addon.id]: newQty,
-                                        },
+                                        [reg.id]: next,
                                       }));
+                                      if (
+                                        String(
+                                          reg.payment_method || ''
+                                        ).toLowerCase() === 'cash'
+                                      ) {
+                                        try {
+                                          await persistCashAddons(reg, next);
+                                          await fetchRegistrations();
+                                        } catch (err: any) {
+                                          alert(
+                                            err.message ||
+                                              'Failed to save cash add-ons'
+                                          );
+                                        }
+                                      }
                                     }}
                                     className="w-5 h-5 accent-green-600"
                                   />
                                   {addon.quantity_available > 1 && qty > 0 && (
                                     <select
                                       value={qty}
-                                      onChange={(e) => {
-                                        const newQty = parseInt(e.target.value);
+                                      onChange={async (e) => {
+                                        const newQty = parseInt(
+                                          e.target.value,
+                                          10
+                                        );
+                                        const next = {
+                                          ...(selectedQuantities[reg.id] ||
+                                            addonTotals),
+                                          [addon.id]: newQty,
+                                        };
                                         setSelectedQuantities((prev) => ({
                                           ...prev,
-                                          [reg.id]: {
-                                            ...(prev[reg.id] || addonTotals),
-                                            [addon.id]: newQty,
-                                          },
+                                          [reg.id]: next,
                                         }));
+                                        if (
+                                          String(
+                                            reg.payment_method || ''
+                                          ).toLowerCase() === 'cash'
+                                        ) {
+                                          try {
+                                            await persistCashAddons(reg, next);
+                                            await fetchRegistrations();
+                                          } catch (err: any) {
+                                            alert(
+                                              err.message ||
+                                                'Failed to save cash add-ons'
+                                            );
+                                          }
+                                        }
                                       }}
                                       className="bg-gray-700 border border-gray-600 rounded-xl text-xs px-2 py-1"
                                     >
@@ -1455,6 +1656,68 @@ export default function EventCheckInPage() {
                 ))}
               </div>
 
+              {addOnsForForms.length > 0 && addChargeType === 'cash' && (
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-400">Add-ons (cash)</p>
+                  {addOnsForForms.map((addon) => {
+                    const qty = Number(
+                      newPlayerAddonQty[addon.id] ??
+                        newPlayerAddonQty[String(addon.id)] ??
+                        0
+                    );
+                    return (
+                      <label
+                        key={addon.id}
+                        className="flex items-center justify-between gap-3 p-3 rounded-2xl border border-gray-700"
+                      >
+                        <span>
+                          <span className="font-medium">{addon.name}</span>
+                          <span className="text-xs text-gray-500 block">
+                            ${Number(addon.price_per_unit || 0).toFixed(2)}
+                          </span>
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={qty > 0}
+                            onChange={(e) =>
+                              setNewPlayerAddonQty((prev) => ({
+                                ...prev,
+                                [addon.id]: e.target.checked ? 1 : 0,
+                              }))
+                            }
+                            className="w-5 h-5 accent-green-600"
+                          />
+                          {Number(addon.quantity_available) > 1 && qty > 0 && (
+                            <select
+                              value={qty}
+                              onChange={(e) =>
+                                setNewPlayerAddonQty((prev) => ({
+                                  ...prev,
+                                  [addon.id]: parseInt(e.target.value, 10),
+                                }))
+                              }
+                              className="bg-gray-700 border border-gray-600 rounded-xl text-xs px-2 py-1"
+                            >
+                              {Array.from(
+                                {
+                                  length: Number(addon.quantity_available) || 1,
+                                },
+                                (_, i) => i + 1
+                              ).map((n) => (
+                                <option key={n} value={n}>
+                                  {n}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="flex gap-3 pt-2">
                 <button
                   onClick={handleAddPlayer}
@@ -1470,6 +1733,7 @@ export default function EventCheckInPage() {
                     setNewPlayerEmail('');
                     setNewPlayerTeam('');
                     setAddChargeType('cash');
+                    setNewPlayerAddonQty({});
                   }}
                   className="flex-1 bg-gray-700 hover:bg-gray-600 py-4 rounded-2xl font-semibold"
                 >
@@ -1615,6 +1879,69 @@ export default function EventCheckInPage() {
                 />
               )}
             </div>
+
+            {String(editReg.payment_method || '').toLowerCase() === 'cash' &&
+              addOnsForForms.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm text-gray-400">Add-ons (cash)</p>
+                  {addOnsForForms.map((addon) => {
+                    const qty = Number(
+                      editAddonQty[addon.id] ??
+                        editAddonQty[String(addon.id)] ??
+                        0
+                    );
+                    return (
+                      <label
+                        key={addon.id}
+                        className="flex items-center justify-between gap-3 p-3 rounded-2xl border border-gray-700"
+                      >
+                        <span>
+                          <span className="font-medium">{addon.name}</span>
+                          <span className="text-xs text-gray-500 block">
+                            ${Number(addon.price_per_unit || 0).toFixed(2)}
+                          </span>
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={qty > 0}
+                            onChange={(e) =>
+                              setEditAddonQty((prev) => ({
+                                ...prev,
+                                [addon.id]: e.target.checked ? 1 : 0,
+                              }))
+                            }
+                            className="w-5 h-5 accent-green-600"
+                          />
+                          {Number(addon.quantity_available) > 1 && qty > 0 && (
+                            <select
+                              value={qty}
+                              onChange={(e) =>
+                                setEditAddonQty((prev) => ({
+                                  ...prev,
+                                  [addon.id]: parseInt(e.target.value, 10),
+                                }))
+                              }
+                              className="bg-gray-700 border border-gray-600 rounded-xl text-xs px-2 py-1"
+                            >
+                              {Array.from(
+                                {
+                                  length: Number(addon.quantity_available) || 1,
+                                },
+                                (_, i) => i + 1
+                              ).map((n) => (
+                                <option key={n} value={n}>
+                                  {n}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
 
             {rounds.length > 0 && (
               <div>

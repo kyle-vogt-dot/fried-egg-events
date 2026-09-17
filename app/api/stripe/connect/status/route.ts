@@ -6,6 +6,7 @@ import {
   requireEventConnectAccess,
   retrieveAccountInCurrentMode,
   saveConnectAccount,
+  saveConnectReady,
   storedConnectAccountId,
 } from '../lib';
 
@@ -38,15 +39,12 @@ export async function GET(request: NextRequest) {
     const accountId = storedConnectAccountId(event, isDemo);
 
     if (!accountId) {
-      const { error: saveErr } = await saveConnectAccount(
-        admin,
-        eventId,
-        isDemo,
-        null,
-        false
-      );
-      if (saveErr) {
-        return NextResponse.json({ error: saveErr.message }, { status: 500 });
+      const saved = await saveConnectReady(admin, eventId, isDemo, false);
+      if (saved.error) {
+        return NextResponse.json(
+          { error: saved.error.message },
+          { status: 500 }
+        );
       }
       return NextResponse.json({
         ready: false,
@@ -56,15 +54,22 @@ export async function GET(request: NextRequest) {
 
     const retrieved = await retrieveAccountInCurrentMode(stripe, accountId);
     if ('mismatch' in retrieved) {
-      const { error: saveErr } = await saveConnectAccount(
+      const { error: clearErr } = await saveConnectAccount(
         admin,
         eventId,
         isDemo,
         null,
         false
       );
-      if (saveErr) {
-        return NextResponse.json({ error: saveErr.message }, { status: 500 });
+      if (clearErr) {
+        return NextResponse.json({ error: clearErr.message }, { status: 500 });
+      }
+      const saved = await saveConnectReady(admin, eventId, isDemo, false);
+      if (saved.error) {
+        return NextResponse.json(
+          { error: saved.error.message },
+          { status: 500 }
+        );
       }
       return NextResponse.json({
         ready: false,
@@ -75,15 +80,9 @@ export async function GET(request: NextRequest) {
     const ready = !!(
       retrieved.account.charges_enabled && retrieved.account.payouts_enabled
     );
-    const { error: saveErr } = await saveConnectAccount(
-      admin,
-      eventId,
-      isDemo,
-      accountId,
-      ready
-    );
-    if (saveErr) {
-      return NextResponse.json({ error: saveErr.message }, { status: 500 });
+    const saved = await saveConnectReady(admin, eventId, isDemo, ready);
+    if (saved.error) {
+      return NextResponse.json({ error: saved.error.message }, { status: 500 });
     }
 
     return NextResponse.json({
