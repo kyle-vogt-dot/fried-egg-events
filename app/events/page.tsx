@@ -104,6 +104,34 @@ export default function CreatedEventsPage() {
           adminCount[row.event_id] = (adminCount[row.event_id] || 0) + 1;
         }
       }
+      const seasonByEvent: Record<number, { team: string; total: number }[]> =
+        {};
+      const leagueIds = list
+        .filter((e) => e.event_kind === 'league')
+        .map((e) => e.id);
+      if (leagueIds.length) {
+        const { data: weekRows } = await supabase
+          .from('league_week_results')
+          .select('event_id, team_name, total')
+          .in('event_id', leagueIds);
+        const acc: Record<string, { team: string; total: number }> = {};
+        for (const row of weekRows || []) {
+          const key = `${row.event_id}::${row.team_name}`;
+          if (!acc[key]) {
+            acc[key] = { team: row.team_name, total: 0 };
+          }
+          acc[key].total += Number(row.total || 0);
+        }
+        for (const [key, row] of Object.entries(acc)) {
+          const eid = Number(key.split('::')[0]);
+          if (!seasonByEvent[eid]) seasonByEvent[eid] = [];
+          seasonByEvent[eid].push(row);
+        }
+        for (const eid of Object.keys(seasonByEvent)) {
+          seasonByEvent[Number(eid)].sort((a, b) => b.total - a.total);
+        }
+      }
+
       setEvents(
         list.map((e) => ({
           ...e,
@@ -115,6 +143,7 @@ export default function CreatedEventsPage() {
               typeof window !== 'undefined' &&
               localStorage.getItem(onlyAdminStorageKey(e.id)) === '1',
           }),
+          seasonStandings: seasonByEvent[e.id] || [],
         }))
       );
       setLoading(false);
@@ -184,6 +213,22 @@ export default function CreatedEventsPage() {
           {new Date(event.date + 'T12:00:00').toLocaleDateString()} •{' '}
           {event.course}
         </p>
+        {event.event_kind === 'league' &&
+          Array.isArray(event.seasonStandings) &&
+          event.seasonStandings.length > 0 && (
+            <div className="mb-4 text-sm text-gray-300 space-y-1">
+              {event.seasonStandings.slice(0, 5).map((row: any, i: number) => (
+                <div key={row.team} className="flex justify-between gap-3">
+                  <span>
+                    {i + 1}. {row.team}
+                  </span>
+                  <span className="text-gray-400">
+                    {Number(row.total).toFixed(1)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
         <div className="flex flex-col sm:flex-row gap-3 mb-4">
           {canManage && (

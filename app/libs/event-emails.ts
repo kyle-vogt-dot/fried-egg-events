@@ -5,6 +5,7 @@ const LISTABLE_METHODS = new Set([
   'complimentary',
   'stripe',
   'team',
+  'roster',
   'manual',
   'checkin',
   'payment_link',

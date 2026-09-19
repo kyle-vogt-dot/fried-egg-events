@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { ensureCaptainsForRegistrationIds } from '@/app/libs/league-roster';
 
 export const runtime = 'nodejs';
 
@@ -131,6 +132,10 @@ async function confirmRegistrationPayment(opts: {
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 });
       }
+      await ensureCaptainsForRegistrationIds(
+        supabaseAdmin,
+        (updated || []).map((r) => r.id)
+      );
       return NextResponse.json({
         success: true,
         paymentIntentId,
@@ -163,6 +168,8 @@ async function confirmRegistrationPayment(opts: {
       { status: 404 }
     );
   }
+
+  await ensureCaptainsForRegistrationIds(supabaseAdmin, ids);
 
   return NextResponse.json({
     success: true,

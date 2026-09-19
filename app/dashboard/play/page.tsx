@@ -6,6 +6,14 @@ import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import QRCode from 'qrcode';
 import { isListable } from '@/app/libs/event-emails';
+import LeagueRosterTab from './LeagueRosterTab';
+import LeagueLineupPanel from '@/app/components/LeagueLineupPanel';
+import { isLeagueEvent } from '@/app/libs/league-match';
+import {
+  isCaptainOfTeam,
+  teamMembers,
+} from '@/app/libs/league-roster';
+import { eventPlaySummary } from '@/app/libs/format-presets';
 
 function formatToPar(toPar: number | null | undefined) {
   if (toPar == null) return '—';
@@ -158,7 +166,50 @@ type EventItem = {
   regs: any[];
   isCheckedIn: boolean;
   isLocked: boolean;
+  isLive: boolean;
+  liveRoundId: number | null;
 };
+
+function ymd(value: any): string {
+  return String(value || '').slice(0, 10);
+}
+
+function liveRoundFor(
+  event: any,
+  rounds: any[],
+  today: string
+): { roundId: number | null } | null {
+  if (!event || event.is_locked) return null;
+  const eventRounds = (rounds || []).filter(
+    (r) => Number(r.event_id) === Number(event.id)
+  );
+  const datedToday = eventRounds.find((r) => ymd(r.date) === today);
+  if (datedToday?.id != null) return { roundId: Number(datedToday.id) };
+  if (ymd(event.date) === today) {
+    const first = eventRounds[0];
+    return { roundId: first?.id != null ? Number(first.id) : null };
+  }
+  return null;
+}
+
+function liveHref(
+  eventId: number,
+  path: 'scoring' | 'leaderboard',
+  roundId: number | null
+) {
+  const base = `/event/${eventId}/${path}`;
+  return roundId != null ? `${base}?round=${roundId}` : base;
+}
+
+function leagueTonightHref(eventId: number, roundId: number | null) {
+  const q = new URLSearchParams({ view: 'tonight' });
+  if (roundId != null) q.set('round', String(roundId));
+  return `/event/${eventId}/leaderboard?${q.toString()}`;
+}
+
+function leagueSeasonHref(eventId: number) {
+  return `/event/${eventId}/leaderboard?view=season`;
+}
 
 export default function MyEventsPage() {
   const router = useRouter();
@@ -173,7 +224,10 @@ const [editEmail, setEditEmail] = useState('');
 
   // Expanded upcoming/past detail
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [detailTab, setDetailTab] = useState<'details' | 'invite'>('details');
+  const [detailTab, setDetailTab] = useState<
+    'details' | 'roster' | 'invite'
+  >('details');
+  const [isEventAdmin, setIsEventAdmin] = useState(false);
   const [inviteQr, setInviteQr] = useState<string | null>(null);
 
   // Leaderboard modal
@@ -269,24 +323,38 @@ const eventIds = [
 
     for (const event of events) {
       const regs = byEvent.get(event.id) || [];
-      const eventDate = (event.date || '').slice(0, 10);
+      const eventDate = ymd(event.date);
       const isCheckedIn = regs.some((r: any) => r.checked_in);
       const isLocked = !!event.is_locked;
-      const item: EventItem = { event, regs, isCheckedIn, isLocked };
+      const live = liveRoundFor(event, rounds, today);
+      const item: EventItem = {
+        event,
+        regs,
+        isCheckedIn,
+        isLocked,
+        isLive: !!live,
+        liveRoundId: live?.roundId ?? null,
+      };
 
-      // Locked / finished → past
-      if (isLocked || eventDate < today) {
+      if (isLocked) {
         pastList.push(item);
         continue;
       }
 
-      // Day-of + checked in → live
-      if (eventDate === today && isCheckedIn) {
+      if (live) {
         liveList.push(item);
         continue;
       }
 
-      // Future, or today not checked in → upcoming
+      const eventRounds = rounds.filter(
+        (r) => Number(r.event_id) === Number(event.id)
+      );
+      const hasUpcomingRound = eventRounds.some((r) => ymd(r.date) >= today);
+      if (eventDate && eventDate < today && !hasUpcomingRound) {
+        pastList.push(item);
+        continue;
+      }
+
       upcomingList.push(item);
     }
 
@@ -298,7 +366,7 @@ const eventIds = [
     pastList.sort((a, b) => byDate(b, a));
 
     return { live: liveList, upcoming: upcomingList, past: pastList };
-  }, [events, registrations, today]);
+  }, [events, registrations, rounds, today]);
 
   const selectedItem = useMemo(() => {
     if (selectedId == null) return null;
@@ -567,6 +635,7 @@ const handleAddTeammates = async () => {
       payment_method: 'team',
       amount_paid: 0,
       checked_in: false,
+      is_captain: false,
       addons_selected: {},
       selected_round_ids: roundIds,
     }));
@@ -588,9 +657,9 @@ const handleAddTeammates = async () => {
 };
 
 
-const openDetail = async (id: number) => {
+const openDetail = async (id: number, opts?: { keepTab?: boolean }) => {
   setSelectedId(id);
-  setDetailTab('details');
+  if (!opts?.keepTab) setDetailTab('details');
   setAddPlayersOpen(false);
   setNewPlayers([]);
   setAppliedDiscount(null);
@@ -605,6 +674,40 @@ const openDetail = async (id: number) => {
     .order('created_at', { ascending: true });
 
   setTeamRoster((allRegs || []).filter(isListable));
+
+  if (currentUser) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    await fetch('/api/team-roster', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session?.access_token || ''}`,
+      },
+      body: JSON.stringify({ action: 'backfill', event_id: id }),
+    }).catch(() => {});
+    const { data: refreshed } = await supabase
+      .from('event_registrations')
+      .select('*')
+      .eq('event_id', id)
+      .order('created_at', { ascending: true });
+    setTeamRoster((refreshed || []).filter(isListable));
+  }
+
+  const ev = events.find((e) => Number(e.id) === Number(id));
+  let admin = !!(currentUser && ev?.created_by === currentUser.id);
+  if (currentUser) {
+    const email = String(currentUser.email || '').toLowerCase();
+    const { data: adminRow } = await supabase
+      .from('event_admins')
+      .select('id')
+      .eq('event_id', id)
+      .or(`user_id.eq.${currentUser.id},email.eq."${email}"`)
+      .maybeSingle();
+    if (adminRow) admin = true;
+  }
+  setIsEventAdmin(admin);
 
   // Refresh THIS user's regs so refunded rounds drop off the cards
   if (currentUser) {
@@ -648,42 +751,93 @@ const openDetail = async (id: number) => {
       ...new Set(regs.map((r: any) => r.team_name).filter(Boolean)),
     ];
     return (
-      <button
-        type="button"
-        onClick={onClick}
-        className="w-full text-left bg-gray-800 rounded-3xl overflow-hidden border border-gray-700 hover:border-gray-500 transition-colors"
-      >
-        <div className="relative h-36 bg-gray-900">
-          {event.image_url ? (
-            <img
-              src={event.image_url}
-              alt=""
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-5xl opacity-30">
-              🏌️
-            </div>
-          )}
-          {badge && (
-            <span className="absolute top-3 right-3 text-xs px-3 py-1 rounded-full bg-black/70 text-gray-200 border border-gray-600">
-              {badge}
-            </span>
-          )}
-        </div>
-        <div className="p-5">
-          <h3 className="text-xl font-semibold mb-1">{event.name}</h3>
-          <p className="text-sm text-gray-400">
-            {formatDate(event.date)}
-            {event.course ? ` · ${event.course}` : ''}
-          </p>
-          {teams.length > 0 && (
-            <p className="text-sm text-gray-500 mt-2">
-              Team: {teams.join(', ')}
+      <div className="w-full bg-gray-800 rounded-3xl overflow-hidden border border-gray-700 hover:border-gray-500 transition-colors">
+        <button
+          type="button"
+          onClick={onClick}
+          className="w-full text-left"
+        >
+          <div className="relative h-36 bg-gray-900">
+            {event.image_url ? (
+              <img
+                src={event.image_url}
+                alt=""
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-5xl opacity-30">
+                🏌️
+              </div>
+            )}
+            {badge && (
+              <span className="absolute top-3 right-3 text-xs px-3 py-1 rounded-full bg-black/70 text-gray-200 border border-gray-600">
+                {badge}
+              </span>
+            )}
+          </div>
+          <div className="p-5">
+            <h3 className="text-xl font-semibold mb-1">{event.name}</h3>
+            <p className="text-sm text-gray-400">
+              {formatDate(event.date)}
+              {event.course ? ` · ${event.course}` : ''}
             </p>
-          )}
-        </div>
-      </button>
+            {eventPlaySummary(event) ? (
+              <p className="text-sm text-teal-400 mt-1">
+                {eventPlaySummary(event)}
+              </p>
+            ) : null}
+            {teams.length > 0 && (
+              <p className="text-sm text-gray-500 mt-2">
+                Team: {teams.join(', ')}
+              </p>
+            )}
+          </div>
+        </button>
+        {item.isLive && (
+          <div className="flex items-center gap-2 px-4 py-2 bg-emerald-950 border-t border-emerald-800">
+            <span className="text-xs font-semibold text-emerald-400 mr-auto">
+              LIVE NOW
+            </span>
+            {isLeagueEvent(event) ? (
+              <>
+                <Link
+                  href={leagueTonightHref(event.id, item.liveRoundId)}
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-medium"
+                >
+                  Tonight
+                </Link>
+                <Link
+                  href={leagueSeasonHref(event.id)}
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-medium"
+                >
+                  Season
+                </Link>
+                <Link
+                  href={liveHref(event.id, 'scoring', item.liveRoundId)}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-medium"
+                >
+                  Scoring
+                </Link>
+              </>
+            ) : (
+              <>
+                <Link
+                  href={liveHref(event.id, 'scoring', item.liveRoundId)}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-medium"
+                >
+                  Scoring
+                </Link>
+                <Link
+                  href={liveHref(event.id, 'leaderboard', item.liveRoundId)}
+                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-medium"
+                >
+                  Leaderboard
+                </Link>
+              </>
+            )}
+          </div>
+        )}
+      </div>
     );
   };
 
@@ -703,83 +857,14 @@ const openDetail = async (id: number) => {
             <h2 className="text-sm uppercase tracking-wide text-emerald-400 mb-4 font-semibold">
               Live now
             </h2>
-            <div className="space-y-4">
-              {live.map((item) => {
-                const teams = [
-                  ...new Set(
-                    item.regs.map((r: any) => r.team_name).filter(Boolean)
-                  ),
-                ];
-                const eventRounds = rounds.filter(
-                  (r) => r.event_id === item.event.id
-                );
-                return (
-                  <div
-                    key={item.event.id}
-                    className="rounded-3xl border-2 border-emerald-500/50 bg-gradient-to-br from-emerald-950/40 to-gray-800 overflow-hidden"
-                  >
-                    <div className="flex flex-col md:flex-row">
-                      <div className="md:w-48 h-40 md:h-auto bg-gray-900 shrink-0">
-                        {item.event.image_url ? (
-                          <img
-                            src={item.event.image_url}
-                            alt=""
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center text-5xl opacity-40">
-                            🏌️
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex-1 p-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                        <div>
-                          <p className="text-xs text-emerald-400 font-semibold mb-1">
-                            LIVE
-                          </p>
-                          <h3 className="text-2xl font-bold">
-                            {item.event.name}
-                          </h3>
-                          <p className="text-sm text-gray-400 mt-1">
-                            {item.event.course}
-                            {teams.length
-                              ? ` · ${teams.join(', ')}`
-                              : ''}
-                          </p>
-                          {eventRounds.length > 0 && (
-                            <p className="text-sm text-teal-400 mt-2">
-                              {eventRounds
-                                .map((r) => {
-                                  const t = formatRoundTime(r.start_time);
-                                  return `${r.name}${t ? ` (${t})` : ''}`;
-                                })
-                                .join(' · ')}
-                            </p>
-                          )}
-                        </div>
-                                                <div className="flex flex-col sm:flex-row gap-3">
-                          {teams.length > 0 && (
-                          <Link
-                            href={`/event/${item.event.id}/live?team=${encodeURIComponent(String(teams[0]))}`}
-                            className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-center font-medium text-sm"
-                          >
-                            Live Scoring
-                          </Link>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => openLeaderboard(item.event)}
-                            className="px-5 py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-center font-medium text-sm"
-                          >
-                            Leaderboard
-                          </button>
-                    
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              {live.map((item) => (
+                <EventCard
+                  key={item.event.id}
+                  item={item}
+                  onClick={() => openDetail(item.event.id)}
+                />
+              ))}
             </div>
           </section>
         )}
@@ -838,6 +923,65 @@ const openDetail = async (id: number) => {
       {selectedItem && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-end md:items-center justify-center p-0 md:p-4">
           <div className="bg-gray-800 rounded-t-3xl md:rounded-3xl w-full max-w-lg max-h-[92vh] overflow-y-auto">
+            {selectedItem.isLive && (
+              <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-3 bg-emerald-950 border-b border-emerald-800">
+                <span className="text-sm font-semibold text-emerald-400 mr-auto">
+                  LIVE NOW
+                </span>
+                {isLeagueEvent(selectedItem.event) ? (
+                  <>
+                    <Link
+                      href={leagueTonightHref(
+                        selectedItem.event.id,
+                        selectedItem.liveRoundId
+                      )}
+                      className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-medium"
+                    >
+                      Tonight
+                    </Link>
+                    <Link
+                      href={leagueSeasonHref(selectedItem.event.id)}
+                      className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-medium"
+                    >
+                      Season
+                    </Link>
+                    <Link
+                      href={liveHref(
+                        selectedItem.event.id,
+                        'scoring',
+                        selectedItem.liveRoundId
+                      )}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-medium"
+                    >
+                      Scoring
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    <Link
+                      href={liveHref(
+                        selectedItem.event.id,
+                        'scoring',
+                        selectedItem.liveRoundId
+                      )}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-xs font-medium"
+                    >
+                      Scoring
+                    </Link>
+                    <Link
+                      href={liveHref(
+                        selectedItem.event.id,
+                        'leaderboard',
+                        selectedItem.liveRoundId
+                      )}
+                      className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-xs font-medium"
+                    >
+                      Leaderboard
+                    </Link>
+                  </>
+                )}
+              </div>
+            )}
             <div className="relative h-40 bg-gray-900">
               {selectedItem.event.image_url ? (
                 <img
@@ -892,11 +1036,75 @@ const openDetail = async (id: number) => {
                 >
                   Invite / QR
                 </button>
+                {selectedItem &&
+                  (isLeagueEvent(selectedItem.event) ||
+                    Number(selectedItem.event.roster_max) >
+                      Number(selectedItem.event.players_per_match || 1)) && (
+                    <button
+                      type="button"
+                      onClick={() => setDetailTab('roster')}
+                      className={`px-4 py-2 rounded-xl text-sm font-medium ${
+                        detailTab === 'roster'
+                          ? 'bg-white text-black'
+                          : 'bg-gray-700 text-gray-300'
+                      }`}
+                    >
+                      Roster
+                    </button>
+                  )}
               </div>
 
 {detailTab === 'details' && selectedItem && (
   <div className="space-y-5">
-    {(() => {
+    {isLeagueEvent(selectedItem.event) ? (
+      (() => {
+        const teamName =
+          selectedItem.regs.find((r) => r.team_name)?.team_name ||
+          teamRoster.find(
+            (r) =>
+              r.user_id === currentUser?.id ||
+              String(r.player_email || '').toLowerCase() ===
+                String(currentUser?.email || '').toLowerCase()
+          )?.team_name ||
+          '';
+        if (!teamName) {
+          return (
+            <p className="text-sm text-gray-400">You are not on a team yet.</p>
+          );
+        }
+        const amCaptain = isCaptainOfTeam(
+          teamMembers(teamRoster, teamName),
+          currentUser
+        );
+        return (
+          <div className="space-y-4">
+            <div>
+              <p className="font-medium text-emerald-400">{teamName}</p>
+              {amCaptain && (
+                <p className="text-xs text-emerald-400 mt-1">
+                  You are team captain
+                </p>
+              )}
+              <p className="text-xs text-gray-500 mt-1">
+                Pick this week&apos;s players. Change a dropdown to sub.
+              </p>
+            </div>
+            <LeagueLineupPanel
+              event={selectedItem.event}
+              rounds={rounds.filter(
+                (r) =>
+                  Number(r.event_id) === Number(selectedItem.event.id)
+              )}
+              registrations={teamRoster}
+              isAdmin={isEventAdmin}
+              user={currentUser}
+              filterTeam={teamName}
+            />
+          </div>
+        );
+      })()
+    ) : (
+    (() => {
       const maxTeam = selectedItem.event.max_teammates || 4;
 
       // One card per (team + round) so same team name on different rounds stays separate
@@ -1205,7 +1413,8 @@ setAddPlayersContext({
           
         );
       });
-    })()}
+    })()
+    )}
 
     <div className="flex flex-col gap-3 pt-1">
       <Link
@@ -1214,9 +1423,10 @@ setAddPlayersContext({
       >
         Full event page
       </Link>
-      {(selectedItem.isLocked ||
-        (selectedItem.event.date || '').slice(0, 10) < today ||
-        selectedItem.isCheckedIn) && (
+      {!selectedItem.isLive &&
+        (selectedItem.isLocked ||
+          ymd(selectedItem.event.date) < today ||
+          selectedItem.isCheckedIn) && (
         <button
           type="button"
           onClick={() => openLeaderboard(selectedItem.event)}
@@ -1225,21 +1435,6 @@ setAddPlayersContext({
           Leaderboard
         </button>
       )}
-      {selectedItem.isCheckedIn &&
-        !selectedItem.isLocked &&
-        (selectedItem.event.date || '').slice(0, 10) === today &&
-        selectedItem.regs.find((r: any) => r.team_name)?.team_name && (
-          <Link
-            href={`/event/${selectedItem.event.id}/live?team=${encodeURIComponent(
-              String(
-                selectedItem.regs.find((r: any) => r.team_name)?.team_name
-              )
-            )}`}
-            className="px-5 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-center font-medium text-sm"
-          >
-            Live Scoring
-          </Link>
-        )}
     </div>
   </div>
 )}
@@ -1276,6 +1471,19 @@ setAddPlayersContext({
   team spots for the rounds you&apos;re on.
 </p>
                 </div>
+              )}
+
+              {detailTab === 'roster' && selectedItem && (
+                <LeagueRosterTab
+                  event={selectedItem.event}
+                  teamRoster={teamRoster}
+                  currentUser={currentUser}
+                  isEventAdmin={isEventAdmin}
+                  myRegs={selectedItem.regs}
+                  onRefresh={() =>
+                    openDetail(selectedItem.event.id, { keepTab: true })
+                  }
+                />
               )}
             </div>
           </div>

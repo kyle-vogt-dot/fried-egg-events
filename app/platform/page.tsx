@@ -8,6 +8,7 @@ import {
   formatPlatformFeePercent,
   resolvePlatformFeePercent,
 } from '@/app/libs/platform-fee';
+import { assignCaptainIfNeeded } from '@/app/libs/league-roster';
 
 export default function PlatformAdminPage() {
   const router = useRouter();
@@ -330,6 +331,7 @@ export default function PlatformAdminPage() {
         selected_round_ids: isPerRound ? selectedRoundIds : [],
         discount_code: null,
         discount_amount: 0,
+        is_captain: false,
       };
 
       const { data: inserted, error: insertErr } = await supabase
@@ -343,6 +345,12 @@ export default function PlatformAdminPage() {
         setAddingPlayer(false);
         return;
       }
+      await assignCaptainIfNeeded(
+        supabase,
+        Number(inserted.event_id),
+        inserted.team_name,
+        inserted.id
+      );
 
       // If charging, create a payment link
       if (chargeType === 'charge' && amountToCharge > 0 && inserted) {

@@ -15,6 +15,12 @@ import {
   Image,
 } from '@react-pdf/renderer';
 import { isListableReg } from '@/app/libs/event-emails';
+import { eventPlaySummary } from '@/app/libs/format-presets';
+import {
+  assignCaptainIfNeeded,
+  isNamedTeam,
+  teamMembers,
+} from '@/app/libs/league-roster';
 import {
   amountWithPlatformFee,
   DEFAULT_PLATFORM_FEE_PERCENT,
@@ -2045,7 +2051,12 @@ setWaitlistPhone('');
             sessionStorage.removeItem(paymentHandledKey);
 
       // Create unpaid rows first so Stripe metadata has registration ids
-const regRows = players.map((p: any) => ({
+      const creatingTeam =
+        !isIndividual &&
+        isNamedTeam(finalTeamName) &&
+        (mode === 'create' ||
+          teamMembers(registrations, finalTeamName).length === 0);
+const regRows = players.map((p: any, i: number) => ({
   event_id: parseInt(eventId),
   user_id: p.user_id || null,
   player_name: p.player_name,
@@ -2054,6 +2065,7 @@ const regRows = players.map((p: any) => ({
   paid: false,
   payment_method: 'pending_checkout',
   checked_in: false,
+  is_captain: creatingTeam && i === 0,
   addons_selected: {},
   selected_round_ids: selectedRoundIds,
   discount_code: appliedDiscount?.code || null,
@@ -2074,6 +2086,14 @@ const regRows = players.map((p: any) => ({
 
       const registrationIds = insertedRegs.map((r: any) => r.id);
       const primaryRegistrationId = registrationIds[0];
+      if (!isIndividual && isNamedTeam(finalTeamName)) {
+        await assignCaptainIfNeeded(
+          supabase,
+          parseInt(eventId),
+          finalTeamName,
+          primaryRegistrationId
+        );
+      }
 
       const draft = {
         eventId: parseInt(eventId),
@@ -2259,11 +2279,15 @@ paid: false,
               <p className="text-2xl text-gray-200">
                 {event.course} • {event.location}
               </p>
-              {event.event_type && (
+              {eventPlaySummary(event) ? (
+                <p className="text-lg text-blue-400 mt-2">
+                  {eventPlaySummary(event)}
+                </p>
+              ) : event.event_type ? (
                 <p className="text-lg text-blue-400 mt-2">
                   Event Type: {event.event_type}
                 </p>
-              )}
+              ) : null}
             </div>
           </div>
           

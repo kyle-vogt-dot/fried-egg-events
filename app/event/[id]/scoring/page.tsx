@@ -1,15 +1,26 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import EventTabs from '@/app/components/EventTabs';
 import BackButton from '@/app/components/BackButton';
 import { createBrowserClient } from '@supabase/ssr';
+import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 import {
   eventFormatLabel,
   hideRoundSelector,
   isTeamRosterEvent,
 } from '@/app/libs/event-setup';
+import {
+  eventPlaySummary,
+  isBestBallFormat,
+  isTeamCloneFormat,
+  resolvedScoringType,
+} from '@/app/libs/format-presets';
+import { isLeagueEvent } from '@/app/libs/league-match';
+import LeagueMatchScoring from './LeagueMatchScoring';
+import LeagueLeaderboard from '../leaderboard/LeagueLeaderboard';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -180,7 +191,11 @@ type RowMode = 'open' | 'locked' | 'editing';
 export default function EventScoringPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const eventId = params.id as string;
+  const roundQuery = Number(searchParams.get('round') || '');
+  const initialRoundId =
+    Number.isFinite(roundQuery) && roundQuery > 0 ? roundQuery : null;
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -198,6 +213,7 @@ export default function EventScoringPage() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [rowMode, setRowMode] = useState<Record<string, RowMode>>({});
     const [savingEvent, setSavingEvent] = useState(false);
+  const [isManager, setIsManager] = useState(false);
 
   const teamMembersRef = useRef<Record<string, string[]>>({});
   const rowModeRef = useRef(rowMode);
@@ -280,6 +296,23 @@ export default function EventScoringPage() {
         .single();
       setEvent(eventData);
 
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user) {
+        const access = await loadEventAccess(supabase, id, user);
+        setIsManager(
+          !!(
+            access.isCreator ||
+            access.isPlatform ||
+            access.allowed ||
+            (access.allowed && canUse(access.perms, 'manage'))
+          )
+        );
+      } else {
+        setIsManager(false);
+      }
+
       const { data: roundsData } = await supabase
         .from('event_rounds')
         .select('*')
@@ -288,7 +321,10 @@ export default function EventScoringPage() {
 
       setRounds(roundsData || []);
       if (roundsData && roundsData.length > 0) {
-        setSelectedRoundId(roundsData[0].id);
+        const match = initialRoundId
+          ? roundsData.find((r) => Number(r.id) === initialRoundId)
+          : null;
+        setSelectedRoundId((match || roundsData[0]).id);
       }
 
       const { data: regData } = await supabase
@@ -301,7 +337,7 @@ export default function EventScoringPage() {
     };
 
     fetchData();
-  }, [eventId]);
+  }, [eventId, initialRoundId]);
 
   useEffect(() => {
     if (registrations.length === 0) return;
@@ -381,7 +417,9 @@ export default function EventScoringPage() {
 
     setPlayerScores((prev) => {
       const next = { ...prev };
-      for (const id of memberIds) {
+      const ids = isTeamCloneFormat(event) ? memberIds : [memberIds[0]];
+      for (const id of ids) {
+        if (!id) continue;
         next[id] = { ...(next[id] || {}), [hole]: score };
       }
       return next;
@@ -417,7 +455,9 @@ export default function EventScoringPage() {
     const key = lockKey(selectedRoundId);
 
     try {
-      for (const regId of memberIds) {
+      const writeIds = isTeamCloneFormat(event) ? memberIds : [memberIds[0]];
+      for (const regId of writeIds) {
+        if (!regId) continue;
         // Clear existing holes for this reg (+ round when scoped)
         const roundId = Number(selectedRoundId);
 
@@ -494,6 +534,33 @@ export default function EventScoringPage() {
   const frontCount = Math.min(9, numHoles);
   const backCount = Math.max(0, numHoles - 9);
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
+        Loading scoring...
+      </div>
+    );
+  }
+
+  if (
+    isLeagueEvent(event) &&
+    resolvedScoringType(event) === 'match_play'
+  ) {
+    if (!isManager) {
+      return (
+        <LeagueLeaderboard
+          eventId={eventId}
+          initialRoundId={initialRoundId}
+          initialView="tonight"
+          showEventTabs={false}
+        />
+      );
+    }
+    return (
+      <LeagueMatchScoring eventId={eventId} initialRoundId={initialRoundId} />
+    );
+  }
+
   const renderHoleInput = (
     hole: number,
     par: number,
@@ -535,12 +602,31 @@ export default function EventScoringPage() {
   return (
      <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-[1400px] mx-auto">
-        <BackButton
-          href="/events"
-          className="mb-6 text-gray-400 hover:text-white"
-        />
-
-        <EventTabs eventId={eventId} variant="dayof" active="scoring" />
+        {isManager ? (
+          <>
+            <BackButton
+              href="/events"
+              className="mb-6 text-gray-400 hover:text-white"
+            />
+            <EventTabs eventId={eventId} variant="dayof" active="scoring" />
+          </>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3 mb-6 text-sm">
+            <Link
+              href={`/event/${eventId}`}
+              className="text-gray-400 hover:text-white"
+            >
+              ← Event
+            </Link>
+            <span className="text-gray-600">·</span>
+            <Link
+              href="/dashboard/play"
+              className="text-gray-400 hover:text-white"
+            >
+              My Events
+            </Link>
+          </div>
+        )}
 
         <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
           <div>
@@ -548,9 +634,13 @@ export default function EventScoringPage() {
               <h1 className="text-4xl font-bold">{event?.name}</h1>
             </div>
             <p className="text-gray-400 mt-1">
-              Live Scoring · {numHoles} holes
+              Live Scoring
               {event?.course ? ` · ${event.course}` : ''}
-              {formatLabel ? ` · ${formatLabel}` : ''}
+              {eventPlaySummary(event)
+                ? ` · ${eventPlaySummary(event)}`
+                : formatLabel
+                  ? ` · ${formatLabel} · ${numHoles} holes`
+                  : ` · ${numHoles} holes`}
               {headerTeeTime ? ` · ${headerTeeTime}` : ''}
             </p>
             {selectedRound && !lockRoundSelector && (
@@ -609,7 +699,9 @@ export default function EventScoringPage() {
               <thead>
                 <tr className="border-b border-gray-700 bg-gray-900">
                   <th className="text-left py-4 px-6 font-medium w-52">
-                    {isTeamEvent ? 'Team' : 'Player'}
+                    {isTeamEvent && !isBestBallFormat(event)
+                      ? 'Team'
+                      : 'Player'}
                   </th>
                   {Array.from({ length: frontCount }, (_, i) => (
                     <th
@@ -648,8 +740,10 @@ export default function EventScoringPage() {
               <tbody>
                 {(() => {
                   const grouped = scoredRegs.reduce((acc: any, reg) => {
-                    const key =
-                      isTeamEvent && reg.team_name
+                    const perPlayer = isBestBallFormat(event);
+                    const key = perPlayer
+                      ? String(reg.id)
+                      : isTeamEvent && reg.team_name
                         ? reg.team_name
                         : reg.player_name || 'Unknown';
                     if (!acc[key]) acc[key] = [];
@@ -721,13 +815,21 @@ export default function EventScoringPage() {
                         className="border-b border-gray-700 hover:bg-gray-700/50"
                       >
                         <td className="py-3 px-6 font-medium">
-                          {teamKey}
+                          {isBestBallFormat(event)
+                            ? teamMembers[0]?.player_name || teamKey
+                            : teamKey}
+                          {isBestBallFormat(event) &&
+                            teamMembers[0]?.team_name && (
+                              <div className="text-xs text-gray-400">
+                                {teamMembers[0].team_name}
+                              </div>
+                            )}
                           {pairing && (
                             <div className="text-xs text-teal-400 mt-0.5">
                               {pairing}
                             </div>
                           )}
-                          {isTeamEvent && (
+                          {isTeamEvent && !isBestBallFormat(event) && (
                             <div className="text-xs text-gray-400">
                               {teamMembers.length} players
                             </div>

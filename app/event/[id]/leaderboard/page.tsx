@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 import EventTabs from '@/app/components/EventTabs';
@@ -11,6 +12,12 @@ import {
   hideRoundSelector,
   isTeamRosterEvent,
 } from '@/app/libs/event-setup';
+import {
+  isBestBallFormat,
+  isTeamCloneFormat,
+} from '@/app/libs/format-presets';
+import { isLeagueEvent } from '@/app/libs/league-match';
+import LeagueLeaderboard from './LeagueLeaderboard';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -310,7 +317,11 @@ function ScoreMark({
 export default function EventLeaderboardPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const eventId = params.id as string;
+  const roundQuery = Number(searchParams.get('round') || '');
+  const initialRoundId =
+    Number.isFinite(roundQuery) && roundQuery > 0 ? roundQuery : null;
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -328,6 +339,7 @@ export default function EventLeaderboardPage() {
   const [showNet, setShowNet] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [isManager, setIsManager] = useState(false);
   const [blurHoleInput, setBlurHoleInput] = useState('');
   const [savingBlur, setSavingBlur] = useState(false);
   const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
@@ -396,8 +408,17 @@ export default function EventLeaderboardPage() {
       if (user) {
         const access = await loadEventAccess(supabase, id, user);
         setIsAdmin(access.allowed && canUse(access.perms, 'leaderboard'));
+        setIsManager(
+          !!(
+            access.isCreator ||
+            access.isPlatform ||
+            access.allowed ||
+            (access.allowed && canUse(access.perms, 'manage'))
+          )
+        );
       } else {
         setIsAdmin(false);
+        setIsManager(false);
       }
 
       const { data: roundsData } = await supabase
@@ -408,7 +429,10 @@ export default function EventLeaderboardPage() {
 
       setRounds(roundsData || []);
       if (roundsData && roundsData.length > 0) {
-        setSelectedRoundId(roundsData[0].id);
+        const match = initialRoundId
+          ? roundsData.find((r) => Number(r.id) === initialRoundId)
+          : null;
+        setSelectedRoundId((match || roundsData[0]).id);
       }
 
       const { data: regData } = await supabase
@@ -421,7 +445,7 @@ export default function EventLeaderboardPage() {
     };
 
     fetchData();
-  }, [eventId]);
+  }, [eventId, initialRoundId]);
 
   const loadScores = async () => {
     if (registrations.length === 0) {
@@ -517,6 +541,8 @@ export default function EventLeaderboardPage() {
     }
 
     const isTeamEvent = isTeamRosterEvent(event);
+    const bestBall = isBestBallFormat(event);
+    const cloneTeam = isTeamCloneFormat(event);
 
     const grouped = filtered.reduce((acc: any, reg) => {
       const teamKey =
@@ -540,10 +566,16 @@ export default function EventLeaderboardPage() {
           const hole = Number(holeKey);
           const score = regScores[hole];
           if (score === undefined || score === null) return;
-          scores[hole] =
-            scores[hole] !== undefined
-              ? Math.min(scores[hole], score)
-              : score;
+          if (bestBall) {
+            scores[hole] =
+              scores[hole] !== undefined
+                ? Math.min(scores[hole], score)
+                : score;
+          } else if (cloneTeam) {
+            if (scores[hole] === undefined) scores[hole] = score;
+          } else {
+            scores[hole] = score;
+          }
         });
       });
 
@@ -746,6 +778,23 @@ const isPlayingSkins = (reg: any) => {
       </div>
     );
   }
+
+  if (isLeagueEvent(event)) {
+    const viewQuery = searchParams.get('view');
+    const initialView =
+      viewQuery === 'season' || viewQuery === 'tonight'
+        ? viewQuery
+        : initialRoundId
+          ? 'tonight'
+          : 'tonight';
+    return (
+      <LeagueLeaderboard
+        eventId={eventId}
+        initialRoundId={initialRoundId}
+        initialView={initialView}
+      />
+    );
+  }
     const saveEvent = async () => {
     if (!isAdmin || event?.is_locked) return;
 
@@ -796,12 +845,31 @@ const isPlayingSkins = (reg: any) => {
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">
       <div className="max-w-[1400px] mx-auto">
-        <BackButton
-          href="/events"
-          className="mb-6 text-gray-400 hover:text-white"
-        />
-
-        <EventTabs eventId={eventId} variant="dayof" active="leaderboard" />
+        {isManager ? (
+          <>
+            <BackButton
+              href="/events"
+              className="mb-6 text-gray-400 hover:text-white"
+            />
+            <EventTabs eventId={eventId} variant="dayof" active="leaderboard" />
+          </>
+        ) : (
+          <div className="flex flex-wrap items-center gap-3 mb-6 text-sm">
+            <Link
+              href={`/event/${eventId}`}
+              className="text-gray-400 hover:text-white"
+            >
+              ← Event
+            </Link>
+            <span className="text-gray-600">·</span>
+            <Link
+              href="/dashboard/play"
+              className="text-gray-400 hover:text-white"
+            >
+              My Events
+            </Link>
+          </div>
+        )}
 
                 <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-8">
           <div>

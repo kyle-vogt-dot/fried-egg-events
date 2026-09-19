@@ -9,6 +9,17 @@ import EventTabs from '@/app/components/EventTabs';
 import BackButton from '@/app/components/BackButton';
 import { loadEventAccess, canUse } from '@/app/libs/event-admin';
 import {
+  FORMAT_PRESETS,
+  eventPlaySummary,
+  needsFormatPreset,
+  playFormatOf,
+  roundRobinPairings,
+  type FormatPreset,
+} from '@/app/libs/format-presets';
+import { isListableReg } from '@/app/libs/event-emails';
+import { backfillEventCaptains } from '@/app/libs/league-roster';
+import LeagueLineupPanel from '@/app/components/LeagueLineupPanel';
+import {
   DEFAULT_PLATFORM_FEE_PERCENT,
   resolvePlatformFeePercent,
 } from '@/app/libs/platform-fee';
@@ -94,7 +105,7 @@ function scoringBlurb(format?: string | null, isTeam?: boolean): string {
 }
 
 function isTournamentKind(kind?: string | null) {
-  return kind === 'tournament';
+  return kind === 'tournament' || kind === 'one_day';
 }
 
 function isLeagueOrTourKind(kind?: string | null) {
@@ -420,6 +431,20 @@ const [deleting, setDeleting] = useState(false); // ← here with the rest
     null
   );
   const [deletingRoundId, setDeletingRoundId] = useState<number | null>(null);
+  const [leagueTeams, setLeagueTeams] = useState<
+    {
+      name: string;
+      captain: string | null;
+      captainId: number | null;
+      size: number;
+      members: { id: number; name: string }[];
+    }[]
+  >([]);
+  const [leagueMatches, setLeagueMatches] = useState<any[]>([]);
+  const [leagueRegs, setLeagueRegs] = useState<any[]>([]);
+  const [generatingSchedule, setGeneratingSchedule] = useState(false);
+  const [addingWeek, setAddingWeek] = useState(false);
+  const [scoresCount, setScoresCount] = useState(0);
     const [newRound, setNewRound] = useState({
     name: '',
     course: '',
@@ -537,6 +562,16 @@ const [adminPerms, setAdminPerms] = useState({
             ? null
             : eventData.greens_fee,
       };
+      if (
+        synced.event_kind === 'league' &&
+        !String(synced.scoring_type || '').trim()
+      ) {
+        synced.scoring_type = 'match_play';
+        await supabase
+          .from('tournaments')
+          .update({ scoring_type: 'match_play' })
+          .eq('id', eventData.id);
+      }
       setEvent(synced);
       setCourseSearch(courseName);
       setSelectedCourse(eventData.course_data || null);
@@ -620,12 +655,16 @@ const [adminPerms, setAdminPerms] = useState({
       }
       setRounds(roundsData || []);
       setRoundMode(
-        isTournamentKind(eventData.event_kind)
-          ? 'single'
-          : (roundsData || []).length > 1
-            ? 'multi'
-            : 'single'
+        eventData.event_kind === 'league' ||
+          (!isTournamentKind(eventData.event_kind) &&
+            (roundsData || []).length > 1)
+          ? 'multi'
+          : 'single'
       );
+      if (eventData.event_kind === 'league') {
+        await loadLeagueData();
+      }
+      await loadScoresCount();
 
       const { data: feeData } = await supabase
         .from('platform_settings')
@@ -1260,6 +1299,72 @@ const handleSaveEvent = async () => {
     setRounds(roundsData || []);
   };
 
+  async function loadLeagueData() {
+    const id = parseInt(eventId, 10);
+    await backfillEventCaptains(supabase, id);
+    const { data: regs } = await supabase
+      .from('event_registrations')
+      .select('*')
+      .eq('event_id', id);
+    setLeagueRegs(regs || []);
+    const byTeam = new Map<
+      string,
+      {
+        name: string;
+        captain: string | null;
+        captainId: number | null;
+        size: number;
+        members: { id: number; name: string }[];
+      }
+    >();
+    for (const r of regs || []) {
+      if (!isListableReg(r)) continue;
+      const name = String(r.team_name || '').trim();
+      if (!name || name.toLowerCase() === 'individual') continue;
+      const existing = byTeam.get(name) || {
+        name,
+        captain: null,
+        captainId: null,
+        size: 0,
+        members: [],
+      };
+      existing.size += 1;
+      existing.members.push({
+        id: r.id,
+        name: r.player_name || 'Player',
+      });
+      if (r.is_captain) {
+        existing.captain = r.player_name || existing.captain;
+        existing.captainId = r.id;
+      }
+      byTeam.set(name, existing);
+    }
+    setLeagueTeams(Array.from(byTeam.values()).sort((a, b) => a.name.localeCompare(b.name)));
+    const { data: matches } = await supabase
+      .from('league_matches')
+      .select('*')
+      .eq('event_id', id);
+    setLeagueMatches(matches || []);
+  };
+
+  async function loadScoresCount() {
+    const id = parseInt(eventId, 10);
+    const { data: regs } = await supabase
+      .from('event_registrations')
+      .select('id')
+      .eq('event_id', id);
+    const ids = (regs || []).map((r) => r.id);
+    if (!ids.length) {
+      setScoresCount(0);
+      return;
+    }
+    const { count } = await supabase
+      .from('scores')
+      .select('id', { count: 'exact', head: true })
+      .in('registration_id', ids);
+    setScoresCount(count || 0);
+  }
+
   const defaultRoundCaps = () => {
     const isTeam = Number(event?.roster_max) >= 2;
     const fieldCap = Number(event?.max_players) || 72;
@@ -1553,6 +1658,132 @@ const handleSaveEvent = async () => {
     }
   };
 
+  const applyFormatPreset = async (key: FormatPreset) => {
+    if (scoresCount > 0) {
+      alert('Scoring started — duplicate event to change format.');
+      return;
+    }
+    const fields = FORMAT_PRESETS[key];
+    const currentKind = event?.event_kind;
+    const weeksOrMatches =
+      (rounds?.length || 0) > 1 || (leagueMatches?.length || 0) > 0;
+    if (
+      weeksOrMatches &&
+      currentKind === 'league' &&
+      fields.event_kind !== 'league'
+    ) {
+      alert('This league already has weeks or matches. Format kind is locked.');
+      return;
+    }
+    if (
+      weeksOrMatches &&
+      currentKind !== 'league' &&
+      fields.event_kind === 'league'
+    ) {
+      alert('This event already has weeks or matches. Format kind is locked.');
+      return;
+    }
+    const patch = { ...fields };
+    setEvent((prev: any) => ({ ...prev, ...patch }));
+    const { error } = await supabase
+      .from('tournaments')
+      .update(patch)
+      .eq('id', parseInt(eventId, 10));
+    if (error) {
+      alert('Failed to save format: ' + error.message);
+      return;
+    }
+    const first = rounds[0];
+    if (first?.id) {
+      await persistRound(first.id, { format: fields.play_format });
+    }
+    if (fields.event_kind === 'league') {
+      setRoundMode('multi');
+      await loadLeagueData();
+    }
+  };
+
+  const handleAddWeek = async () => {
+    setAddingWeek(true);
+    try {
+      const weekNum = rounds.length + 1;
+      const { error } = await supabase.from('event_rounds').insert({
+        event_id: parseInt(eventId, 10),
+        sort_order: rounds.length,
+        name: `Week ${weekNum}`,
+        format: event?.play_format || event?.format || 'scramble',
+        course: event?.course || null,
+        course_data: event?.course_data || null,
+        date: event?.date || null,
+      });
+      if (error) throw error;
+      await reloadRounds();
+    } catch (e: any) {
+      alert(e.message || 'Failed to add week');
+    } finally {
+      setAddingWeek(false);
+    }
+  };
+
+  const generateLeagueSchedule = async () => {
+    const names = leagueTeams.map((t) => t.name);
+    if (names.length < 2) {
+      alert('Need at least 2 teams to generate a schedule.');
+      return;
+    }
+    if (rounds.length < 1) {
+      alert('Add a week first.');
+      return;
+    }
+    setGeneratingSchedule(true);
+    try {
+      const eventNumericId = parseInt(eventId, 10);
+      await supabase.from('league_matches').delete().eq('event_id', eventNumericId);
+      const rows: any[] = [];
+      rounds.forEach((round, weekIndex) => {
+        const pairs = roundRobinPairings(names, weekIndex);
+        for (const p of pairs) {
+          rows.push({
+            event_id: eventNumericId,
+            round_id: round.id,
+            home_team: p.home,
+            away_team: p.away,
+          });
+        }
+      });
+      if (rows.length) {
+        const { error } = await supabase.from('league_matches').insert(rows);
+        if (error) throw error;
+      }
+      await loadLeagueData();
+    } catch (e: any) {
+      alert(e.message || 'Failed to generate schedule');
+    } finally {
+      setGeneratingSchedule(false);
+    }
+  };
+
+  const setLeagueCaptain = async (teamName: string, registrationId: number) => {
+    const eventNumericId = parseInt(eventId, 10);
+    const { data: regs } = await supabase
+      .from('event_registrations')
+      .select('id')
+      .eq('event_id', eventNumericId)
+      .eq('team_name', teamName);
+    const ids = (regs || []).map((r) => r.id);
+    if (ids.length) {
+      await supabase
+        .from('event_registrations')
+        .update({ is_captain: false })
+        .in('id', ids);
+    }
+    await supabase
+      .from('event_registrations')
+      .update({ is_captain: true })
+      .eq('id', registrationId);
+    await loadLeagueData();
+  };
+
   const searchRoundCourses = (key: string, query: string) => {
     setRoundCourseQuery((prev) => ({ ...prev, [key]: query }));
     if (roundSearchTimeoutRef.current) {
@@ -1743,6 +1974,9 @@ const handleDeleteEvent = async () => {
       { table: 'event_sponsor_packages' },
       { table: 'event_addons' },
       { table: 'event_admins' },
+      { table: 'league_week_results' },
+      { table: 'league_lineups' },
+      { table: 'league_matches' },
       { table: 'event_rounds' },
       { table: 'event_registrations' },
     ];
@@ -1907,7 +2141,48 @@ const handleDeleteEvent = async () => {
         <EventTabs eventId={eventId} variant="manage" active="manage" />
 
         <h1 className="text-4xl font-bold mb-2">{event.name}</h1>
-        <p className="text-gray-400 mb-6">Manage Event Details</p>
+        <p className="text-gray-400 mb-6">
+          {eventPlaySummary(event) || 'Manage Event Details'}
+        </p>
+
+        {needsFormatPreset(event) && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            {(
+              [
+                {
+                  id: 'charity_scramble' as const,
+                  title: 'Charity scramble',
+                  blurb: 'One team score per hole',
+                },
+                {
+                  id: 'best_ball' as const,
+                  title: 'Best ball',
+                  blurb: 'Each player scores · low ball counts',
+                },
+                {
+                  id: 'company_league' as const,
+                  title: 'Company league',
+                  blurb: '9 holes · roster 6 · match play',
+                },
+                {
+                  id: 'stroke_play' as const,
+                  title: 'Stroke play',
+                  blurb: 'Individual stroke play',
+                },
+              ] as const
+            ).map((card) => (
+              <button
+                key={card.id}
+                type="button"
+                onClick={() => applyFormatPreset(card.id)}
+                className="text-left p-8 min-h-40 rounded-2xl border-2 border-gray-700 bg-gray-800 hover:border-gray-500"
+              >
+                <div className="text-2xl font-bold mb-2">{card.title}</div>
+                <p className="text-gray-400">{card.blurb}</p>
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="space-y-4">
           <AccordionSection
@@ -2246,38 +2521,98 @@ const handleDeleteEvent = async () => {
                 />
               </div>
             )}
-            <div>
-              <label className="block text-sm text-gray-400 mb-3">Format</label>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                {allowedFormats.map((f) => {
-                  const selected = playFormatValue === f.value;
-                  return (
+            {event?.event_kind !== 'league' &&
+              (event?.play_format || event?.scoring_type) && (
+              <div className="space-y-4">
+                {scoresCount > 0 && (
+                  <p className="text-sm text-amber-300">
+                    Scoring started — duplicate event to change format.
+                  </p>
+                )}
+                <div>
+                  <label className="block text-sm text-gray-400 mb-3">
+                    Holes
+                  </label>
+                  <div className="flex gap-3">
+                    {([9, 18] as const).map((h) => (
+                      <button
+                        key={h}
+                        type="button"
+                        disabled={scoresCount > 0}
+                        onClick={() => handleEventChange('number_of_holes', h)}
+                        className={`flex-1 py-4 rounded-2xl border-2 font-medium disabled:opacity-50 ${
+                          Number(event.number_of_holes) === h
+                            ? 'border-emerald-500 bg-emerald-900/30'
+                            : 'border-gray-700 bg-gray-800'
+                        }`}
+                      >
+                        {h}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {(playFormatOf(event) === 'scramble' ||
+                  playFormatOf(event) === 'alternate_shot' ||
+                  playFormatOf(event) === 'best_ball') && (
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-3">
+                      Who plays
+                    </label>
+                    <div className="flex gap-3">
+                      {([2, 4] as const).map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          disabled={scoresCount > 0}
+                          onClick={() => {
+                            handleEventChange('players_per_match', n);
+                            handleEventChange('roster_max', n);
+                            handleEventChange('default_competing', n);
+                            handleEventChange('max_teammates', n);
+                          }}
+                          className={`flex-1 py-4 rounded-2xl border-2 font-medium disabled:opacity-50 ${
+                            Number(
+                              event.players_per_match || event.roster_max
+                            ) === n
+                              ? 'border-emerald-500 bg-emerald-900/30'
+                              : 'border-gray-700 bg-gray-800'
+                          }`}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(playFormatOf(event) === 'scramble' ||
+                  playFormatOf(event) === 'alternate_shot') && (
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-3">
+                      Optional
+                    </label>
                     <button
-                      key={f.value}
                       type="button"
-                      onClick={() => persistPlayFormat(f.value)}
-                      className={`px-4 py-4 rounded-2xl border-2 text-left font-medium transition-colors ${
-                        selected
+                      disabled={scoresCount > 0}
+                      onClick={() => {
+                        const next =
+                          playFormatOf(event) === 'alternate_shot'
+                            ? 'scramble'
+                            : 'alternate_shot';
+                        handleEventChange('play_format', next);
+                        handleEventChange('format', next);
+                      }}
+                      className={`px-5 py-4 rounded-2xl border-2 font-medium disabled:opacity-50 ${
+                        playFormatOf(event) === 'alternate_shot'
                           ? 'border-emerald-500 bg-emerald-900/30'
-                          : 'border-gray-700 bg-gray-800 hover:border-gray-500'
+                          : 'border-gray-700 bg-gray-800'
                       }`}
                     >
-                      {f.label}
+                      Alternate shot
                     </button>
-                  );
-                })}
+                  </div>
+                )}
               </div>
-              {playFormatBlurb ? (
-                <div className="mt-4 rounded-2xl border border-gray-700 bg-gray-900 px-5 py-4">
-                  <p className="text-sm font-medium text-gray-200">
-                    How scoring works
-                  </p>
-                  <p className="text-sm text-gray-400 mt-1 leading-relaxed">
-                    {playFormatBlurb}
-                  </p>
-                </div>
-              ) : null}
-            </div>
+            )}
             <div>
               <label className="block text-sm text-gray-400 mb-2">
                 Field cap
@@ -2412,7 +2747,21 @@ const handleDeleteEvent = async () => {
             summary={roundsSummary}
             startOpen={!roundsComplete}
           >
-            {!isTournamentKind(event?.event_kind) ? (
+            {event?.event_kind === 'league' ? (
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-gray-400">
+                  {rounds.length} week{rounds.length === 1 ? '' : 's'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleAddWeek}
+                  disabled={addingWeek}
+                  className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-5 py-3 rounded-2xl font-medium"
+                >
+                  {addingWeek ? 'Adding…' : '+ Add week'}
+                </button>
+              </div>
+            ) : !isTournamentKind(event?.event_kind) ? (
               <>
                 <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-3xl p-1">
                   <button
@@ -3512,6 +3861,146 @@ const handleDeleteEvent = async () => {
               </div>
             )}
           </AccordionSection>
+
+          {event?.event_kind === 'league' && (
+            <AccordionSection
+              title="League schedule"
+              complete={leagueMatches.length > 0}
+              summary={
+                leagueTeams.length
+                  ? `${leagueTeams.length} team${leagueTeams.length === 1 ? '' : 's'}`
+                  : 'Teams & weeks'
+              }
+              startOpen
+            >
+              <div className="space-y-6">
+                <div>
+                  <h3 className="font-semibold mb-3">Teams</h3>
+                  {leagueTeams.length === 0 ? (
+                    <p className="text-sm text-gray-400">
+                      No teams yet. Players with a team name show up here.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {leagueTeams.map((team) => (
+                        <div
+                          key={team.name}
+                          className="bg-gray-900 rounded-2xl px-5 py-4"
+                        >
+                          <div className="font-medium">{team.name}</div>
+                          <div className="text-sm text-gray-400 mt-1">
+                            {team.size} player{team.size === 1 ? '' : 's'}
+                            {team.captain ? ` · Captain: ${team.captain}` : ''}
+                          </div>
+                          <div className="flex flex-wrap gap-2 mt-3">
+                            {team.members.map((m) => (
+                              <button
+                                key={m.id}
+                                type="button"
+                                onClick={() => setLeagueCaptain(team.name, m.id)}
+                                className={`text-xs px-3 py-2 rounded-xl inline-flex items-center gap-2 ${
+                                  team.captainId === m.id
+                                    ? 'bg-emerald-700 text-white'
+                                    : 'bg-gray-700 hover:bg-gray-600'
+                                }`}
+                              >
+                                {m.name}
+                                {team.captainId === m.id && (
+                                  <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
+                                    Captain
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      handleEventChange('auto_checkin_lineup', true);
+                      await supabase
+                        .from('tournaments')
+                        .update({ auto_checkin_lineup: true })
+                        .eq('id', parseInt(eventId, 10));
+                    }}
+                    className={`flex-1 py-3 rounded-2xl border-2 text-sm font-medium ${
+                      event?.auto_checkin_lineup !== false
+                        ? 'border-emerald-500 bg-emerald-900/30'
+                        : 'border-gray-700 bg-gray-800'
+                    }`}
+                  >
+                    Auto check-in when lineups are set
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      handleEventChange('auto_checkin_lineup', false);
+                      await supabase
+                        .from('tournaments')
+                        .update({ auto_checkin_lineup: false })
+                        .eq('id', parseInt(eventId, 10));
+                    }}
+                    className={`flex-1 py-3 rounded-2xl border-2 text-sm font-medium ${
+                      event?.auto_checkin_lineup === false
+                        ? 'border-emerald-500 bg-emerald-900/30'
+                        : 'border-gray-700 bg-gray-800'
+                    }`}
+                  >
+                    Manual check-in each week
+                  </button>
+                </div>
+                <div>
+                  <h3 className="font-semibold mb-3">Weekly lineup</h3>
+                  <LeagueLineupPanel
+                    event={event}
+                    rounds={rounds}
+                    registrations={leagueRegs}
+                    isAdmin
+                    user={null}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={generateLeagueSchedule}
+                  disabled={generatingSchedule}
+                  className="bg-teal-600 hover:bg-teal-700 disabled:bg-gray-600 px-6 py-4 rounded-2xl font-semibold"
+                >
+                  {generatingSchedule ? 'Generating…' : 'Generate schedule'}
+                </button>
+                {leagueMatches.length > 0 && (
+                  <div className="space-y-4">
+                    {rounds.map((round) => {
+                      const weekMatches = leagueMatches.filter(
+                        (m) => Number(m.round_id) === Number(round.id)
+                      );
+                      if (!weekMatches.length) return null;
+                      return (
+                        <div key={round.id}>
+                          <h4 className="font-medium mb-2">
+                            {round.name || 'Week'}
+                          </h4>
+                          <div className="space-y-1 text-sm text-gray-300">
+                            {weekMatches.map((m) => (
+                              <div key={m.id}>
+                                {m.away_team
+                                  ? `${m.home_team} vs ${m.away_team}`
+                                  : `${m.home_team} — bye`}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </AccordionSection>
+          )}
 
           <AccordionSection
             title="Price, add-ons & payouts"

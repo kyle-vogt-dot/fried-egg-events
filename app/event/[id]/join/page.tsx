@@ -5,6 +5,7 @@ import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import Link from 'next/link';
 import { isListable } from '@/app/libs/event-emails';
+import { assignCaptainIfNeeded } from '@/app/libs/league-roster';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -329,12 +330,24 @@ export default function JoinFromInvitePage() {
         payment_method: 'team',
         amount_paid: 0,
         checked_in: false,
+        is_captain: false,
         addons_selected: {},
         selected_round_ids: rids,
       }));
 
-      const { error } = await supabase.from('event_registrations').insert(rows);
+      const { data: inserted, error } = await supabase
+        .from('event_registrations')
+        .insert(rows)
+        .select('id, event_id, team_name');
       if (error) throw error;
+      for (const row of inserted || []) {
+        await assignCaptainIfNeeded(
+          supabase,
+          Number(row.event_id),
+          row.team_name,
+          row.id
+        );
+      }
 
       router.push(`/event/${event.id}?joined=1`);
     } catch (e: any) {

@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import EventTabs from '@/app/components/EventTabs';
+import { isLeagueEvent } from '@/app/libs/league-match';
+import LeagueScorecards from './LeagueScorecards';
 import BackButton from '@/app/components/BackButton';
 import { createBrowserClient } from '@supabase/ssr';
 import { QRCodeCanvas } from 'qrcode.react';
@@ -705,6 +707,10 @@ export default function EventScorecardsPage() {
   ).length;
 
   const totalPar = editHoles.reduce((s, h) => s + (h.par > 0 ? h.par : 4), 0);
+
+  if (isLeagueEvent(event)) {
+    return <LeagueScorecards eventId={eventId} />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-6 md:p-10">

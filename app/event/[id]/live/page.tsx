@@ -3,6 +3,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
+import { isLeagueEvent } from '@/app/libs/league-match';
+import LeagueLeaderboard from '../leaderboard/LeagueLeaderboard';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -945,6 +947,34 @@ export default function LiveEventPage() {
       <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center text-xl">
         Loading live scorecard...
       </div>
+    );
+  }
+
+  if (isLeagueEvent(event)) {
+    const today = new Date().toISOString().slice(0, 10);
+    const roundToday = rounds.some(
+      (r) => String(r.date || '').slice(0, 10) === today
+    );
+    const eventDay =
+      roundToday || String(event?.date || '').slice(0, 10) === today;
+    const viewQuery = searchParams.get('view');
+    const initialView: 'tonight' | 'season' =
+      viewQuery === 'season' || viewQuery === 'tonight'
+        ? viewQuery
+        : eventDay
+          ? 'tonight'
+          : 'season';
+    const liveRound =
+      selectedRoundId ||
+      rounds.find((r) => String(r.date || '').slice(0, 10) === today)?.id ||
+      rounds[0]?.id;
+    return (
+      <LeagueLeaderboard
+        eventId={eventId}
+        initialRoundId={liveRound != null ? Number(liveRound) : null}
+        initialView={initialView}
+        showEventTabs={false}
+      />
     );
   }
 

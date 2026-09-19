@@ -10,6 +10,7 @@ const MANAGE_TABS = [
 
 const DAY_TABS = [
   { key: 'check-in', label: 'Check-in', path: 'check-in' },
+  { key: 'lineup', label: 'Lineup', path: 'lineup' },
   { key: 'scoring', label: 'Scoring', path: 'scoring' },
   { key: 'leaderboard', label: 'Leaderboard', path: 'leaderboard' },
   { key: 'scorecards', label: 'Scorecards', path: 'scorecards' },

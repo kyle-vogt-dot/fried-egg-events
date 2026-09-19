@@ -26,7 +26,11 @@ export function isTeamRosterEvent(event: any): boolean {
 }
 
 export function hideRoundSelector(event: any, roundCount: number): boolean {
-  return event?.event_kind === 'tournament' || roundCount <= 1;
+  return (
+    event?.event_kind === 'tournament' ||
+    event?.event_kind === 'one_day' ||
+    roundCount <= 1
+  );
 }
 
 const FORMAT_LABELS: Record<string, string> = {
@@ -35,6 +39,8 @@ const FORMAT_LABELS: Record<string, string> = {
   shamble: 'Shamble',
   best_ball: 'Best ball',
   alt_shot: 'Alternate shot',
+  alternate_shot: 'Alternate shot',
+  individual: 'Stroke play',
   match_play: 'Match play',
   stableford: 'Stableford',
   nassau: 'Nassau',
@@ -43,7 +49,11 @@ const FORMAT_LABELS: Record<string, string> = {
 
 export function eventFormatLabel(event: any, round?: any): string {
   const raw = String(
-    round?.format || event?.format || event?.event_type || ''
+    round?.format ||
+      event?.play_format ||
+      event?.format ||
+      event?.event_type ||
+      ''
   )
     .toLowerCase()
     .replace(/[\s-]+/g, '_');

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
+import { ensureCaptainsForRegistrationIds } from '@/app/libs/league-roster';
 
 export const runtime = 'nodejs';
 
@@ -104,18 +105,24 @@ async function markRegistrationsPaid(opts: {
     if (missing.length) {
       console.error('Webhook: paid session but rows gone', logLabel, missing);
     }
+    await ensureCaptainsForRegistrationIds(supabaseAdmin, ids);
     return;
   }
 
   const fallbackEmail = email.toLowerCase().trim();
   if (eventId && fallbackEmail) {
-    const { error } = await supabaseAdmin
+    const { data: fallbackRows, error } = await supabaseAdmin
       .from('event_registrations')
       .update(paidPatch)
       .eq('event_id', eventId)
       .ilike('player_email', fallbackEmail)
-      .eq('paid', false);
+      .eq('paid', false)
+      .select('id');
     if (error) throw error;
+    await ensureCaptainsForRegistrationIds(
+      supabaseAdmin,
+      (fallbackRows || []).map((r) => r.id)
+    );
   } else {
     console.warn(`${logLabel} with no registration ids`);
   }

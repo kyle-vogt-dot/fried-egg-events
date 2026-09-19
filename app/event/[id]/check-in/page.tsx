@@ -14,6 +14,8 @@ import {
   resolvePlatformFeePercent,
 } from '@/app/libs/platform-fee';
 import { reverseRegistrationIncome } from '@/app/libs/reverse-income';
+import { isLeagueEvent, parseLineupIds } from '@/app/libs/league-match';
+import { assignCaptainIfNeeded } from '@/app/libs/league-roster';
 
 function formatRoundTime(startTime: string | null | undefined) {
   if (!startTime) return null;
@@ -43,24 +45,33 @@ function getPairingLabel(reg: any, roundId: number | 'all') {
 function buildLiveUrl(
   eventId: string,
   reg: any,
-  selectedRoundId: number | 'all'
+  selectedRoundId: number | 'all',
+  view?: 'tonight' | 'season' | null
 ) {
   const base =
     process.env.NEXT_PUBLIC_APP_URL ||
     (typeof window !== 'undefined' ? window.location.origin : '');
-  const team = encodeURIComponent(
-    (reg.team_name || reg.player_name || '').trim()
-  );
-  const round =
-    selectedRoundId !== 'all' ? `&round=${selectedRoundId}` : '';
-  return `${base}/event/${eventId}/live?team=${team}${round}`;
+  const q = new URLSearchParams();
+  const team = String(reg?.team_name || reg?.player_name || '').trim();
+  if (team) q.set('team', team);
+  if (selectedRoundId !== 'all' && selectedRoundId) {
+    q.set('round', String(selectedRoundId));
+  }
+  if (view) q.set('view', view);
+  const qs = q.toString();
+  return `${base}/event/${eventId}/live${qs ? `?${qs}` : ''}`;
 }
 
-function isCheckedInForRound(reg: any, roundId: number | 'all') {
+function isCheckedInForRound(
+  reg: any,
+  roundId: number | 'all',
+  league = false
+) {
   if (roundId === 'all') return !!reg.checked_in;
   const map = reg.round_checkins || {};
   if (map[String(roundId)] != null) return !!map[String(roundId)];
   if (map[roundId as number] != null) return !!map[roundId as number];
+  if (league) return false;
   return !!reg.checked_in;
 }
 
@@ -137,6 +148,10 @@ export default function EventCheckInPage() {
   const [subName, setSubName] = useState('');
   const [subEmail, setSubEmail] = useState('');
   const [selectedQuantities, setSelectedQuantities] = useState<Record<string, any>>({});
+  const [weekLineupIds, setWeekLineupIds] = useState<Set<string>>(new Set());
+  const [leagueRosterFilter, setLeagueRosterFilter] = useState<
+    'lineup' | 'bench'
+  >('lineup');
 
   const lastNotificationRef = useRef<number>(0);
 
@@ -263,13 +278,22 @@ export default function EventCheckInPage() {
 
   const filteredRegistrations = useMemo(() => {
     let list = registrations;
+    const league = isLeagueEvent(event);
 
-    if (selectedRoundId !== 'all') {
+    if (selectedRoundId !== 'all' && !league) {
       list = list.filter((r) => {
         const ids: number[] = r.selected_round_ids || [];
         if (!ids.length) return rounds.length <= 1;
         return ids.includes(selectedRoundId as number);
       });
+    }
+
+    if (league && selectedRoundId !== 'all') {
+      if (leagueRosterFilter === 'lineup') {
+        list = list.filter((r) => weekLineupIds.has(String(r.id)));
+      } else {
+        list = list.filter((r) => !weekLineupIds.has(String(r.id)));
+      }
     }
 
     if (searchTerm.trim()) {
@@ -284,7 +308,15 @@ export default function EventCheckInPage() {
     return [...list].sort((a, b) =>
       (a.player_name || '').localeCompare(b.player_name || '')
     );
-  }, [registrations, selectedRoundId, rounds.length, searchTerm]);
+  }, [
+    registrations,
+    selectedRoundId,
+    rounds.length,
+    searchTerm,
+    weekLineupIds,
+    event,
+    leagueRosterFilter,
+  ]);
 
     const existingTeams = useMemo(() => {
     const names = new Set<string>();
@@ -414,6 +446,28 @@ export default function EventCheckInPage() {
 
     fetchData();
   }, [eventId, supabase, router]);
+
+  useEffect(() => {
+    const loadLineup = async () => {
+      if (!isLeagueEvent(event) || selectedRoundId === 'all') {
+        setWeekLineupIds(new Set());
+        return;
+      }
+      const { data } = await supabase
+        .from('league_lineups')
+        .select('registration_ids')
+        .eq('event_id', parseInt(eventId, 10))
+        .eq('round_id', selectedRoundId);
+      const ids = new Set<string>();
+      for (const row of data || []) {
+        for (const id of parseLineupIds(row.registration_ids)) {
+          ids.add(String(id));
+        }
+      }
+      setWeekLineupIds(ids);
+    };
+    loadLineup();
+  }, [event, selectedRoundId, eventId, supabase]);
 
   const fetchRegistrations = async () => {
     const { data } = await supabase
@@ -624,6 +678,7 @@ export default function EventCheckInPage() {
               : isLink
                 ? 'payment_link'
                 : 'comp',
+          is_captain: false,
           addon_quantities: isCash ? addonQty : {},
           paid_addons: isCash && Object.keys(addonQty).length > 0,
         })
@@ -631,6 +686,12 @@ export default function EventCheckInPage() {
         .single();
 
       if (error) throw error;
+      await assignCaptainIfNeeded(
+        supabase,
+        parseInt(eventId),
+        inserted?.team_name,
+        inserted?.id
+      );
 
       // Document cash on income so books + platform fee visibility stay honest
       if (isCash && chargeAmount > 0) {
@@ -895,25 +956,49 @@ export default function EventCheckInPage() {
     }
   };
 
+  const toggleSeasonCheckIn = async (reg: any) => {
+    const next = !reg.checked_in;
+    if (!next && !confirm(`Remove ${reg.player_name} from season check-in?`)) {
+      return;
+    }
+    const { error } = await supabase
+      .from('event_registrations')
+      .update({ checked_in: next })
+      .eq('id', reg.id);
+    if (error) {
+      alert('Failed to update season check-in: ' + error.message);
+      return;
+    }
+    await fetchRegistrations();
+  };
+
     const toggleCheckIn = async (reg: any) => {
-    const currentlyIn = isCheckedInForRound(reg, selectedRoundId);
+    const league = isLeagueEvent(event);
+    const currentlyIn = isCheckedInForRound(reg, selectedRoundId, league);
 
     if (currentlyIn) {
       if (!confirm(`Un-check in ${reg.player_name}?`)) return;
     }
 
     const existing = { ...(reg.round_checkins || {}) };
+    const patch: Record<string, any> = {};
 
-    if (selectedRoundId !== 'all') {
+    if (league && selectedRoundId === 'all') {
+      patch.checked_in = !currentlyIn;
+    } else if (league && selectedRoundId !== 'all') {
       existing[String(selectedRoundId)] = !currentlyIn;
+      patch.round_checkins = existing;
+    } else {
+      if (selectedRoundId !== 'all') {
+        existing[String(selectedRoundId)] = !currentlyIn;
+      }
+      patch.round_checkins = existing;
+      patch.checked_in = !currentlyIn;
     }
 
     const { error } = await supabase
       .from('event_registrations')
-      .update({
-        round_checkins: existing,
-        checked_in: !currentlyIn,
-      })
+      .update(patch)
       .eq('id', reg.id);
 
     if (error) {
@@ -1018,8 +1103,9 @@ export default function EventCheckInPage() {
     ? formatRoundTime(selectedRound.start_time)
     : null;
 
+    const leagueCheckIn = isLeagueEvent(event);
     const checkedInRegs = filteredRegistrations.filter((r) =>
-    isCheckedInForRound(r, selectedRoundId)
+    isCheckedInForRound(r, selectedRoundId, leagueCheckIn)
   );
   const checkedInCount = checkedInRegs.length;
   const teamCount = countTeams(filteredRegistrations);
@@ -1062,7 +1148,7 @@ export default function EventCheckInPage() {
           {rounds.length > 0 && (
             <div className="w-full lg:w-72">
               <label className="block text-sm text-gray-400 mb-2">
-                Check-in by round
+                {leagueCheckIn ? 'Check-in by week' : 'Check-in by round'}
               </label>
               <select
                 value={
@@ -1074,7 +1160,9 @@ export default function EventCheckInPage() {
                 }}
                 className="w-full bg-gray-800 border border-gray-600 rounded-2xl px-5 py-4 text-white"
               >
-                <option value="all">All rounds</option>
+                <option value="all">
+                  {leagueCheckIn ? 'Season (league check-in)' : 'All rounds'}
+                </option>
                 {rounds.map((r) => {
                   const t = formatRoundTime(r.start_time);
                   return (
@@ -1141,11 +1229,42 @@ export default function EventCheckInPage() {
           </button>
         </div>
 
+        {leagueCheckIn && selectedRoundId !== 'all' && (
+          <div className="flex flex-wrap gap-2 mb-6">
+            <button
+              type="button"
+              onClick={() => setLeagueRosterFilter('lineup')}
+              className={`px-4 py-2 rounded-2xl text-sm font-medium ${
+                leagueRosterFilter === 'lineup'
+                  ? 'bg-white text-black'
+                  : 'bg-gray-700 text-gray-300'
+              }`}
+            >
+              Lineup this week
+            </button>
+            <button
+              type="button"
+              onClick={() => setLeagueRosterFilter('bench')}
+              className={`px-4 py-2 rounded-2xl text-sm font-medium ${
+                leagueRosterFilter === 'bench'
+                  ? 'bg-white text-black'
+                  : 'bg-gray-700 text-gray-300'
+              }`}
+            >
+              Roster not playing
+            </button>
+          </div>
+        )}
+
         {filteredRegistrations.length === 0 ? (
           <div className="text-center py-20 text-gray-400">
             {selectedRoundId === 'all'
               ? 'No registrations yet for this event.'
-              : 'No players registered for this round.'}
+              : leagueCheckIn && leagueRosterFilter === 'lineup'
+                ? 'No lineup set for this week.'
+                : leagueCheckIn
+                  ? 'Everyone on the roster is in this week’s lineup.'
+                  : 'No players registered for this round.'}
           </div>
         ) : (
           <div className="overflow-x-auto -mx-4 sm:mx-0">
@@ -1189,7 +1308,11 @@ export default function EventCheckInPage() {
               </thead>
               <tbody>
                 {filteredRegistrations.map((reg: any) => {
-                  const isCheckedIn = isCheckedInForRound(reg, selectedRoundId);
+                  const isCheckedIn = isCheckedInForRound(
+                    reg,
+                    selectedRoundId,
+                    leagueCheckIn
+                  );
                   const addonTotals =
                     selectedQuantities[reg.id] || reg.addon_quantities || {};
 
@@ -1456,6 +1579,20 @@ export default function EventCheckInPage() {
                             )
                           )}
 
+                          {leagueCheckIn && selectedRoundId !== 'all' && (
+                            <button
+                              type="button"
+                              onClick={() => toggleSeasonCheckIn(reg)}
+                              className={`px-2.5 py-1.5 rounded-xl text-xs font-medium text-white whitespace-nowrap ${
+                                reg.checked_in
+                                  ? 'bg-amber-700 hover:bg-amber-800'
+                                  : 'bg-gray-600 hover:bg-gray-500'
+                              }`}
+                            >
+                              {reg.checked_in ? '✓ Season' : 'Season'}
+                            </button>
+                          )}
+
                                                     <button
                             onClick={() => toggleCheckIn(reg)}
                             className={`px-2.5 py-1.5 rounded-xl text-xs font-medium text-white whitespace-nowrap ${
@@ -1469,13 +1606,12 @@ export default function EventCheckInPage() {
 
                           {isCheckedIn && (
                             <a
-                              href={`/event/${eventId}/live?team=${encodeURIComponent(
-                                (reg.team_name || reg.player_name || '').trim()
-                              )}${
-                                selectedRoundId !== 'all'
-                                  ? `&round=${selectedRoundId}`
-                                  : ''
-                              }`}
+                              href={buildLiveUrl(
+                                eventId,
+                                reg,
+                                selectedRoundId,
+                                leagueCheckIn ? 'tonight' : null
+                              )}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="bg-emerald-700 hover:bg-emerald-600 px-2.5 py-1.5 rounded-xl text-xs font-medium text-white whitespace-nowrap"

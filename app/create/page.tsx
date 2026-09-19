@@ -3,54 +3,11 @@
 import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
-
-type EventKind = 'tournament' | 'league';
-type RosterMode = 'individual' | 'team';
-type PlayFormat =
-  | 'stroke'
-  | 'match_play'
-  | 'stableford'
-  | 'nassau'
-  | 'other_individual'
-  | 'scramble'
-  | 'shamble'
-  | 'best_ball'
-  | 'alt_shot';
-
-const INDIVIDUAL_FORMATS: { value: PlayFormat; label: string }[] = [
-  { value: 'stroke', label: 'Stroke play' },
-  { value: 'match_play', label: 'Match play' },
-  { value: 'stableford', label: 'Stableford' },
-  { value: 'nassau', label: 'Nassau' },
-  { value: 'other_individual', label: 'Other individual' },
-];
-
-const TEAM_FORMATS: { value: PlayFormat; label: string }[] = [
-  { value: 'scramble', label: 'Scramble' },
-  { value: 'shamble', label: 'Shamble' },
-  { value: 'best_ball', label: 'Best ball' },
-  { value: 'alt_shot', label: 'Alternate shot' },
-  { value: 'stroke', label: 'Stroke (team total)' },
-];
-
-const TEAM_ONLY_FORMATS = new Set<PlayFormat>([
-  'scramble',
-  'shamble',
-  'best_ball',
-  'alt_shot',
-]);
-
-function parseTeamRosterSize(value: string): number | null {
-  const n = parseInt(value, 10);
-  if (!Number.isFinite(n) || n < 2) return null;
-  return n;
-}
-
-function parseTournamentTeamSize(value: string): 2 | 4 | null {
-  const n = parseInt(value, 10);
-  if (n === 2 || n === 4) return n;
-  return null;
-}
+import {
+  FORMAT_PRESETS,
+  type FormatPreset,
+  type FormatPresetFields,
+} from '@/app/libs/format-presets';
 
 function todayDateStr() {
   const d = new Date();
@@ -74,12 +31,11 @@ function courseDisplayName(course: any): string {
 }
 
 export default function CreateTournament() {
-  const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [eventKind, setEventKind] = useState<EventKind | null>(null);
-  const [rosterMode, setRosterMode] = useState<RosterMode | null>(null);
-  const [teamRosterSize, setTeamRosterSize] = useState('4');
-  const [playFormat, setPlayFormat] = useState<PlayFormat | null>(null);
+  const [step, setStep] = useState<1 | 2>(1);
+  const [preset, setPreset] = useState<FormatPreset | null>(null);
   const [numberOfHoles, setNumberOfHoles] = useState<9 | 18>(18);
+  const [whoPlays, setWhoPlays] = useState<1 | 2 | 4>(4);
+  const [altShot, setAltShot] = useState(false);
 
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
@@ -181,89 +137,57 @@ export default function CreateTournament() {
     }
   };
 
-  const selectKind = (kind: EventKind) => {
-    setEventKind(kind);
+  const selectPreset = (next: FormatPreset) => {
+    setPreset(next);
     setError(null);
-    if (kind === 'tournament') {
-      const n = parseInt(teamRosterSize, 10);
-      if (n !== 2 && n !== 4) setTeamRosterSize('4');
-    }
-    setStep(2);
-  };
-
-  const selectIndividual = () => {
-    setRosterMode('individual');
-    if (playFormat && TEAM_ONLY_FORMATS.has(playFormat)) {
-      setPlayFormat(null);
-    }
-    setError(null);
-  };
-
-  const selectTeam = () => {
-    setRosterMode('team');
-    setError(null);
-  };
-
-  const resolveRoster = ():
-    | { play: number; roster: number }
-    | { error: string } => {
-    if (rosterMode === 'individual') {
-      return { play: 1, roster: 1 };
-    }
-    if (rosterMode === 'team') {
-      if (eventKind === 'tournament') {
-        const size = parseTournamentTeamSize(teamRosterSize);
-        if (size == null) {
-          return { error: 'Team size must be 2 or 4.' };
-        }
-        return { play: size, roster: size };
-      }
-      const size = parseTeamRosterSize(teamRosterSize);
-      if (size == null) {
-        return { error: 'Team roster size must be at least 2.' };
-      }
-      return { play: size, roster: size };
-    }
-    return { error: 'Choose Individual or Team.' };
-  };
-
-  const goToDetails = () => {
-    const resolved = resolveRoster();
-    if ('error' in resolved) {
-      setError(resolved.error);
+    if (next === 'charity_scramble' || next === 'best_ball') {
+      setNumberOfHoles(18);
+      setWhoPlays(4);
+      setAltShot(false);
       return;
     }
-    if (!playFormat) {
-      setError('Choose a format.');
+    if (next === 'stroke_play') {
+      setNumberOfHoles(18);
+      setWhoPlays(1);
       return;
     }
-    setError(null);
-    setStep(3);
+    if (next === 'company_league') {
+      setNumberOfHoles(9);
+      setWhoPlays(2);
+      setStep(2);
+    }
+  };
+
+  const presetFields = (): FormatPresetFields | null => {
+    if (!preset) return null;
+    const base = { ...FORMAT_PRESETS[preset] };
+    if (preset === 'company_league') return base;
+    base.number_of_holes = numberOfHoles;
+    if (preset === 'charity_scramble' || preset === 'best_ball') {
+      const n = whoPlays === 2 || whoPlays === 4 ? whoPlays : 4;
+      base.players_per_match = n;
+      base.roster_max = n;
+      base.default_competing = n;
+      base.max_teammates = n;
+    }
+    if (preset === 'charity_scramble' && altShot) {
+      base.play_format = 'alternate_shot';
+      base.format = 'alternate_shot';
+    }
+    return base;
   };
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    if (!eventKind) {
-      setError('Choose Tournament or League / Tour');
+    const fields = presetFields();
+    if (!fields) {
+      setError('Choose a format.');
       setStep(1);
       return;
     }
 
-    const resolved = resolveRoster();
-    if ('error' in resolved) {
-      setError(resolved.error);
-      setStep(2);
-      return;
-    }
-
-    if (!playFormat) {
-      setError('Choose a format.');
-      setStep(2);
-      return;
-    }
-
-    if (eventKind === 'tournament') {
+    if (fields.event_kind === 'one_day') {
       const priceValue = price.trim() === '' ? NaN : parseFloat(price);
       if (!Number.isFinite(priceValue) || priceValue < 0) {
         setError('Enter a price (0 for free).');
@@ -305,15 +229,22 @@ export default function CreateTournament() {
       course_data: selectedCourse,
       created_by: user.id,
       is_active: true,
-      event_kind: eventKind,
-      format: playFormat,
-      roster_max: resolved.roster,
-      default_competing: resolved.play,
-      max_teammates: resolved.play,
+      event_kind: fields.event_kind,
+      format: fields.format,
+      play_format: fields.play_format,
+      scoring_type: fields.scoring_type,
+      roster_max: fields.roster_max,
+      players_per_match: fields.players_per_match,
+      default_competing: fields.default_competing,
+      max_teammates: fields.max_teammates,
       max_players: 72,
-      number_of_holes: numberOfHoles,
+      number_of_holes: fields.number_of_holes,
+      points_per_hole: fields.points_per_hole,
+      halved_points: fields.halved_points,
+      match_win_bonus: fields.match_win_bonus,
+      auto_checkin_lineup: fields.auto_checkin_lineup !== false && fields.event_kind === 'league',
       price:
-        eventKind === 'tournament' &&
+        fields.event_kind === 'one_day' &&
         priceValue != null &&
         Number.isFinite(priceValue) &&
         priceValue >= 0
@@ -337,8 +268,8 @@ export default function CreateTournament() {
     const { error: roundError } = await supabase.from('event_rounds').insert({
       event_id: newEvent.id,
       sort_order: 0,
-      name: 'Round 1',
-      format: playFormat,
+      name: fields.event_kind === 'league' ? 'Week 1' : 'Round 1',
+      format: fields.play_format,
       course: insertPayload.course || null,
       course_data: selectedCourse,
     });
@@ -373,23 +304,17 @@ export default function CreateTournament() {
     router.push(`/event/${newEvent.id}/manage`);
   };
 
-  const isLeagueOrTour = eventKind === 'league';
-  const isTournament = eventKind === 'tournament';
+  const fields = presetFields();
+  const isLeagueOrTour = fields?.event_kind === 'league';
+  const isTeamPay = (fields?.players_per_match || 1) > 1;
   const createLabel = isLeagueOrTour
-    ? 'Create League / Tour'
-    : 'Create Tournament';
-  const nameLabel = isLeagueOrTour ? 'League / Tour Name' : 'Tournament Name';
-  const steps = isLeagueOrTour
-    ? [
-        { n: 1 as const, label: 'Type' },
-        { n: 2 as const, label: 'Roster' },
-        { n: 3 as const, label: 'Details' },
-      ]
-    : [
-        { n: 1 as const, label: 'Type' },
-        { n: 2 as const, label: 'Play' },
-        { n: 3 as const, label: 'Details' },
-      ];
+    ? 'Create League'
+    : 'Create Event';
+  const nameLabel = isLeagueOrTour ? 'League Name' : 'Event Name';
+  const steps = [
+    { n: 1 as const, label: 'Format' },
+    { n: 2 as const, label: 'Details' },
+  ];
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
@@ -422,165 +347,128 @@ export default function CreateTournament() {
         </div>
 
         {step === 1 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <button
-              type="button"
-              onClick={() => selectKind('tournament')}
-              className={`text-left p-8 min-h-48 rounded-2xl border-2 transition-colors ${
-                eventKind === 'tournament'
-                  ? 'border-emerald-500 bg-emerald-900/30'
-                  : 'border-gray-700 bg-gray-800 hover:border-gray-500'
-              }`}
-            >
-              <div className="text-2xl font-bold mb-3">Tournament</div>
-              <p className="text-gray-400 leading-relaxed">
-                One-round event (one day, one format).
-              </p>
-            </button>
-            <button
-              type="button"
-              onClick={() => selectKind('league')}
-              className={`text-left p-8 min-h-48 rounded-2xl border-2 transition-colors ${
-                eventKind === 'league'
-                  ? 'border-emerald-500 bg-emerald-900/30'
-                  : 'border-gray-700 bg-gray-800 hover:border-gray-500'
-              }`}
-            >
-              <div className="text-2xl font-bold mb-3">League / Tour</div>
-              <p className="text-gray-400 leading-relaxed">
-                Repeating weeks, multiple rounds.
-              </p>
-            </button>
-          </div>
-        )}
-
-        {step === 2 && (
           <div className="space-y-6">
-            <div className="grid grid-cols-2 gap-3 items-stretch">
-              <button
-                type="button"
-                onClick={selectIndividual}
-                className={`p-4 rounded-2xl border-2 h-full flex items-center justify-center text-center transition-colors ${
-                  rosterMode === 'individual'
-                    ? 'border-emerald-500 bg-emerald-900/30'
-                    : 'border-gray-700 bg-gray-800 hover:border-gray-500'
-                }`}
-              >
-                <div className="text-lg sm:text-xl font-bold">Individual</div>
-              </button>
-              <button
-                type="button"
-                onClick={selectTeam}
-                className={`p-4 rounded-2xl border-2 h-full flex items-center justify-center text-center transition-colors ${
-                  rosterMode === 'team'
-                    ? 'border-emerald-500 bg-emerald-900/30'
-                    : 'border-gray-700 bg-gray-800 hover:border-gray-500'
-                }`}
-              >
-                <div className="text-lg sm:text-xl font-bold">Team</div>
-              </button>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(
+                [
+                  {
+                    id: 'charity_scramble' as const,
+                    title: 'Charity scramble',
+                    blurb: 'One team score per hole · 4 play · team pays once',
+                  },
+                  {
+                    id: 'best_ball' as const,
+                    title: 'Best ball',
+                    blurb: 'Each player scores · team uses the low ball',
+                  },
+                  {
+                    id: 'company_league' as const,
+                    title: 'Company league',
+                    blurb: '9 holes · roster 6 · 2 play · match play',
+                  },
+                  {
+                    id: 'stroke_play' as const,
+                    title: 'Stroke play',
+                    blurb: 'Individual stroke play',
+                  },
+                ] as const
+              ).map((card) => (
+                <button
+                  key={card.id}
+                  type="button"
+                  onClick={() => selectPreset(card.id)}
+                  className={`text-left p-8 min-h-40 rounded-2xl border-2 transition-colors ${
+                    preset === card.id
+                      ? 'border-emerald-500 bg-emerald-900/30'
+                      : 'border-gray-700 bg-gray-800 hover:border-gray-500'
+                  }`}
+                >
+                  <div className="text-2xl font-bold mb-3">{card.title}</div>
+                  <p className="text-gray-400 leading-relaxed">{card.blurb}</p>
+                </button>
+              ))}
             </div>
 
-            {rosterMode === 'team' && isLeagueOrTour && (
-              <div className="space-y-3">
-                <label className="block text-sm font-medium">
-                  Team roster size
-                </label>
-                <p className="text-sm text-gray-400 leading-relaxed">
-                  How many names on the team. Can differ from how many play a
-                  round later.
-                </p>
-                <input
-                  type="number"
-                  min="2"
-                  inputMode="numeric"
-                  value={teamRosterSize}
-                  onChange={(e) => setTeamRosterSize(e.target.value)}
-                  className="w-full px-5 py-4 bg-gray-700 border border-gray-600 rounded-2xl no-spinner"
-                />
-              </div>
-            )}
-
-            {rosterMode === 'team' && isTournament && (
-              <div className="space-y-3">
-                <label className="block text-sm font-medium">Team size</label>
-                <div className="grid grid-cols-2 gap-3">
-                  {([2, 4] as const).map((size) => (
+            {preset && preset !== 'company_league' && (
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-sm font-medium mb-3">Holes</label>
+                  <div className="flex gap-3">
+                    {([9, 18] as const).map((h) => (
+                      <button
+                        key={h}
+                        type="button"
+                        onClick={() => setNumberOfHoles(h)}
+                        className={`flex-1 py-4 rounded-2xl border-2 font-medium ${
+                          numberOfHoles === h
+                            ? 'border-emerald-500 bg-emerald-900/30'
+                            : 'border-gray-700 bg-gray-800'
+                        }`}
+                      >
+                        {h}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {(preset === 'charity_scramble' || preset === 'best_ball') && (
+                  <div>
+                    <label className="block text-sm font-medium mb-3">
+                      Who plays
+                    </label>
+                    <div className="flex gap-3">
+                      {([2, 4] as const).map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setWhoPlays(n)}
+                          className={`flex-1 py-4 rounded-2xl border-2 font-medium ${
+                            whoPlays === n
+                              ? 'border-emerald-500 bg-emerald-900/30'
+                              : 'border-gray-700 bg-gray-800'
+                          }`}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {preset === 'charity_scramble' && (
+                  <div>
+                    <label className="block text-sm font-medium mb-3">
+                      Optional
+                    </label>
                     <button
-                      key={size}
                       type="button"
-                      onClick={() => {
-                        setTeamRosterSize(String(size));
-                        setError(null);
-                      }}
-                      className={`p-4 rounded-2xl border-2 font-semibold transition-colors ${
-                        teamRosterSize === String(size)
+                      onClick={() => setAltShot((v) => !v)}
+                      className={`px-5 py-4 rounded-2xl border-2 font-medium ${
+                        altShot
                           ? 'border-emerald-500 bg-emerald-900/30'
-                          : 'border-gray-700 bg-gray-800 hover:border-gray-500'
+                          : 'border-gray-700 bg-gray-800'
                       }`}
                     >
-                      {size}
+                      Alternate shot
                     </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {rosterMode && (
-              <div className="space-y-3">
-                <label className="block text-sm font-medium">Format</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  {(rosterMode === 'team'
-                    ? TEAM_FORMATS
-                    : INDIVIDUAL_FORMATS
-                  ).map((f) => (
-                    <button
-                      key={f.value}
-                      type="button"
-                      onClick={() => {
-                        setPlayFormat(f.value);
-                        setError(null);
-                      }}
-                      className={`px-4 py-4 rounded-2xl border-2 text-left font-medium transition-colors ${
-                        playFormat === f.value
-                          ? 'border-emerald-500 bg-emerald-900/30'
-                          : 'border-gray-700 bg-gray-800 hover:border-gray-500'
-                      }`}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setStep(2);
+                  }}
+                  className="w-full py-4 bg-green-600 hover:bg-green-700 rounded-2xl font-semibold text-lg"
+                >
+                  Continue
+                </button>
               </div>
             )}
 
             {error && <p className="text-red-500 text-center">{error}</p>}
-
-            <div className="flex gap-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setError(null);
-                  setStep(1);
-                }}
-                className="flex-1 py-4 bg-gray-700 hover:bg-gray-600 rounded-2xl font-semibold text-lg transition-colors"
-              >
-                Back
-              </button>
-              {rosterMode && (isLeagueOrTour || playFormat) && (
-                <button
-                  type="button"
-                  onClick={goToDetails}
-                  className="flex-1 py-4 bg-green-600 hover:bg-green-700 rounded-2xl font-semibold text-lg transition-colors"
-                >
-                  Continue
-                </button>
-              )}
-            </div>
           </div>
         )}
 
-        {step === 3 && (
+        {step === 2 && (
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
               <label className="block text-sm font-medium mb-2">
@@ -675,40 +563,10 @@ export default function CreateTournament() {
               )}
             </div>
 
-            <div>
-              <label className="block text-sm font-medium mb-3">
-                Number of holes
-              </label>
-              <div className="flex gap-3 bg-gray-700 border border-gray-600 rounded-2xl p-1">
-                <button
-                  type="button"
-                  onClick={() => setNumberOfHoles(9)}
-                  className={`flex-1 py-4 rounded-2xl font-medium ${
-                    numberOfHoles === 9
-                      ? 'bg-blue-600 text-white'
-                      : 'hover:bg-gray-600 text-gray-300'
-                  }`}
-                >
-                  9 Holes
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNumberOfHoles(18)}
-                  className={`flex-1 py-4 rounded-2xl font-medium ${
-                    numberOfHoles === 18
-                      ? 'bg-blue-600 text-white'
-                      : 'hover:bg-gray-600 text-gray-300'
-                  }`}
-                >
-                  18 Holes
-                </button>
-              </div>
-            </div>
-
-            {isTournament && (
+            {fields?.event_kind === 'one_day' && (
               <div>
                 <label className="block text-sm font-medium mb-2">
-                  {rosterMode === 'team' ? 'Price per team' : 'Price per player'}
+                  {isTeamPay ? 'Price per team' : 'Price per player'}
                 </label>
                 <input
                   name="price"
@@ -768,7 +626,7 @@ export default function CreateTournament() {
                 type="button"
                 onClick={() => {
                   setError(null);
-                  setStep(2);
+                  setStep(1);
                 }}
                 className="flex-1 py-4 bg-gray-700 hover:bg-gray-600 rounded-2xl font-semibold text-lg transition-colors"
               >
