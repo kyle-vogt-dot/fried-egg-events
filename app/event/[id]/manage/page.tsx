@@ -4097,6 +4097,10 @@ const handleDeleteEvent = async () => {
                 Connect Stripe so registration money for this event can be paid
                 out to your bank.
               </p>
+              <p className="text-sm text-gray-400 mt-2 leading-relaxed">
+                No website? We’ll use your event page. You can change it in
+                Stripe.
+              </p>
               {connectReady ? (
                 <p className="text-sm text-emerald-400 mt-2">
                   Ready

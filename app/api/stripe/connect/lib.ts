@@ -118,7 +118,26 @@ export async function saveConnectReady(
   return { data, error, rowCount };
 }
 
-export async function createExpressAccount(stripe: Stripe) {
+export const CONNECT_PRODUCT_DESCRIPTION =
+  'Golf tournament registration and payouts collected through Fried Egg Events.';
+
+export function connectBusinessProfile(eventId?: number | null) {
+  const url =
+    eventId != null && Number(eventId) > 0
+      ? `https://friedeggevents.app/event/${eventId}`
+      : 'https://friedeggevents.app';
+  return {
+    url,
+    product_description: CONNECT_PRODUCT_DESCRIPTION,
+    mcc: '7941',
+  };
+}
+
+export async function createExpressAccount(
+  stripe: Stripe,
+  eventId?: number | null
+) {
+  const business_profile = connectBusinessProfile(eventId);
   return stripe.accounts.create({
     type: 'express',
     country: 'US',
@@ -126,7 +145,34 @@ export async function createExpressAccount(stripe: Stripe) {
       card_payments: { requested: true },
       transfers: { requested: true },
     },
+    business_profile,
   });
+}
+
+export async function prefillConnectBusinessProfile(
+  stripe: Stripe,
+  accountId: string,
+  eventId?: number | null
+) {
+  try {
+    const account = await stripe.accounts.retrieve(accountId);
+    const existing = account.business_profile || {};
+    const defaults = connectBusinessProfile(eventId);
+    const patch: {
+      url?: string;
+      product_description?: string;
+      mcc?: string;
+    } = {};
+    if (!existing.url) patch.url = defaults.url;
+    if (!existing.product_description) {
+      patch.product_description = defaults.product_description;
+    }
+    if (!existing.mcc) patch.mcc = defaults.mcc;
+    if (Object.keys(patch).length === 0) return;
+    await stripe.accounts.update(accountId, { business_profile: patch });
+  } catch (err) {
+    console.warn('Connect business_profile prefill failed:', err);
+  }
 }
 
 export function supabaseAdmin() {

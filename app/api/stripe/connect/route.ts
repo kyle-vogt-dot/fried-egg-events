@@ -61,6 +61,9 @@ export async function POST(request: NextRequest) {
 
     // Create Express account if needed
     if (!accountId) {
+      const profileUrl = eventId
+        ? `https://friedeggevents.app/event/${eventId}`
+        : 'https://friedeggevents.app';
       const account = await stripe.accounts.create({
         type: 'express',
         email: profile?.email || user.email || undefined,
@@ -69,6 +72,12 @@ export async function POST(request: NextRequest) {
           transfers: { requested: true },
         },
         business_type: 'individual',
+        business_profile: {
+          url: profileUrl,
+          product_description:
+            'Golf tournament registration and payouts collected through Fried Egg Events.',
+          mcc: '7941',
+        },
         metadata: {
           supabase_user_id: user.id,
         },
@@ -109,6 +118,31 @@ if (updateErr) {
 
     const returnUrl = `${origin}${returnPath}`;
     const refreshUrl = `${origin}${refreshPath}`;
+
+    try {
+      const existing = await stripe.accounts.retrieve(accountId);
+      const bp = existing.business_profile || {};
+      const patch: {
+        url?: string;
+        product_description?: string;
+        mcc?: string;
+      } = {};
+      if (!bp.url) {
+        patch.url = eventId
+          ? `https://friedeggevents.app/event/${eventId}`
+          : 'https://friedeggevents.app';
+      }
+      if (!bp.product_description) {
+        patch.product_description =
+          'Golf tournament registration and payouts collected through Fried Egg Events.';
+      }
+      if (!bp.mcc) patch.mcc = '7941';
+      if (Object.keys(patch).length) {
+        await stripe.accounts.update(accountId, { business_profile: patch });
+      }
+    } catch (prefillErr) {
+      console.warn('Connect business_profile prefill failed:', prefillErr);
+    }
 
     const accountLink = await stripe.accountLinks.create({
       account: accountId,

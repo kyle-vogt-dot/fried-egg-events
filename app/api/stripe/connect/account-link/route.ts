@@ -3,6 +3,7 @@ import {
   appOrigin,
   createExpressAccount,
   getStripe,
+  prefillConnectBusinessProfile,
   isModeMismatchError,
   loadTournamentServiceRole,
   parseEventId,
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (!accountId) {
-      const account = await createExpressAccount(stripe);
+      const account = await createExpressAccount(stripe, eventId);
       accountId = account.id;
       const { error: saveErr } = await saveConnectAccount(
         admin,
@@ -75,6 +76,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: saveErr.message }, { status: 500 });
       }
     }
+
+    await prefillConnectBusinessProfile(stripe, accountId, eventId);
 
     const origin = appOrigin(request);
     const linkParams = {
@@ -101,7 +104,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: clearErr.message }, { status: 500 });
       }
 
-      const account = await createExpressAccount(stripe);
+      const account = await createExpressAccount(stripe, eventId);
       accountId = account.id;
       const { error: saveErr } = await saveConnectAccount(
         admin,

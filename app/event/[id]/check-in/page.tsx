@@ -125,6 +125,8 @@ export default function EventCheckInPage() {
   // free | cash | link
   const [addChargeType, setAddChargeType] = useState<'free' | 'cash' | 'link'>('cash');
   const [addingPlayer, setAddingPlayer] = useState(false);
+  const [showConnectRequired, setShowConnectRequired] = useState(false);
+  const [showCashFeeConfirm, setShowCashFeeConfirm] = useState(false);
   const [newPlayerAddonQty, setNewPlayerAddonQty] = useState<
     Record<string, number>
   >({});
@@ -195,6 +197,19 @@ export default function EventCheckInPage() {
     addOnsForForms
   );
   const addChargePreview = estimateRegCharge() + addPlayerAddonTotal;
+  const eventHasConnectAccount = !!(
+    String(
+      event?.is_demo
+        ? event?.stripe_connect_account_id_test ||
+            event?.stripe_connect_account_id
+        : event?.stripe_connect_account_id
+    ).trim()
+  );
+  const cashFeeBase =
+    Number(event?.greens_fee || 0) + addPlayerAddonTotal;
+  const cashFeePercent = Number(platformFeePercent) || 0;
+  const cashFeeAmount =
+    Math.round(cashFeeBase * (cashFeePercent / 100) * 100) / 100;
 
   const writeAddonIncomeRows = async (
     registrationId: string | number,
@@ -552,6 +567,24 @@ export default function EventCheckInPage() {
       return alert('Email is required to send a payment link');
     }
 
+    if (addChargeType === 'cash') {
+      if (!eventHasConnectAccount) {
+        setShowConnectRequired(true);
+        return;
+      }
+      setShowCashFeeConfirm(true);
+      return;
+    }
+
+    await saveNewPlayer();
+  };
+
+  const confirmCashAddPlayer = async () => {
+    setShowCashFeeConfirm(false);
+    await saveNewPlayer();
+  };
+
+  const saveNewPlayer = async () => {
     setAddingPlayer(true);
     try {
       const selected_round_ids =
@@ -1740,6 +1773,60 @@ export default function EventCheckInPage() {
                   Cancel
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showConnectRequired && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 rounded-3xl p-6 sm:p-8 max-w-md w-full space-y-4">
+            <h3 className="text-2xl font-semibold">Connect Stripe first</h3>
+            <p className="text-gray-300 leading-relaxed">
+              Connect Stripe first so cash platform fees can be collected.
+            </p>
+            <a
+              href={`/event/${eventId}/manage`}
+              className="block text-center bg-amber-500 hover:bg-amber-400 text-gray-900 font-semibold py-4 rounded-2xl"
+            >
+              Connect setup
+            </a>
+            <button
+              type="button"
+              onClick={() => setShowConnectRequired(false)}
+              className="w-full py-4 bg-gray-700 hover:bg-gray-600 rounded-2xl font-semibold"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showCashFeeConfirm && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-900 rounded-3xl p-6 sm:p-8 max-w-md w-full space-y-4">
+            <h3 className="text-2xl font-semibold">Cash platform fee</h3>
+            <p className="text-gray-300 leading-relaxed whitespace-pre-line">
+              {`Fried Egg Events keeps $${cashFeeAmount.toFixed(2)} (${formatPlatformFeePercent(cashFeePercent)}%) on this cash spot.
+We’ll collect it from your Stripe payout balance when card payments exist,
+or it stays as outstanding on the platform.`}
+            </p>
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCashFeeConfirm(false)}
+                className="py-4 rounded-2xl bg-gray-700 hover:bg-gray-600 font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmCashAddPlayer}
+                disabled={addingPlayer}
+                className="py-4 rounded-2xl bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 font-semibold"
+              >
+                {addingPlayer ? 'Adding…' : 'Add player'}
+              </button>
             </div>
           </div>
         </div>
