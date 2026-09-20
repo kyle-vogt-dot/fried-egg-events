@@ -4,6 +4,8 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { createBrowserClient } from '@supabase/ssr';
 import { isLeagueEvent } from '@/app/libs/league-match';
+import { resolvedScoringType } from '@/app/libs/format-presets';
+import { sameRosterPlayer } from '@/app/libs/league-roster';
 import LeagueLeaderboard from '../leaderboard/LeagueLeaderboard';
 
 function formatRoundTime(startTime: string | null | undefined) {
@@ -253,7 +255,11 @@ type LbRow = {
   scores: Record<number, number>;
 };
 
-export default function LiveEventPage() {
+export default function LiveEventPage({
+  initialTab = 'scorecard',
+}: {
+  initialTab?: 'scorecard' | 'leaderboard';
+}) {
   const params = useParams();
   const searchParams = useSearchParams();
   const eventId = params.id as string;
@@ -271,7 +277,7 @@ export default function LiveEventPage() {
   const [selectedRoundId, setSelectedRoundId] = useState<number | null>(null);
   const [scores, setScores] = useState<Record<number, number>>({});
   const [activeTab, setActiveTab] = useState<'scorecard' | 'leaderboard'>(
-    'scorecard'
+    initialTab
   );
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -284,6 +290,7 @@ export default function LiveEventPage() {
   const [leaderboard, setLeaderboard] = useState<LbRow[]>([]);
   const [scorecardTeam, setScorecardTeam] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [resolvedTeam, setResolvedTeam] = useState<string | null>(null);
 
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [submittingFinal, setSubmittingFinal] = useState(false);
@@ -312,10 +319,12 @@ export default function LiveEventPage() {
     [event?.course_data, numHoles]
   );
 
-  const teamRegs = useMemo(() => {
-    if (!teamParam || !registrations.length) return [];
+  const teamKey = teamParam || resolvedTeam;
 
-    const raw = decodeURIComponent(teamParam).trim();
+  const teamRegs = useMemo(() => {
+    if (!teamKey || !registrations.length) return [];
+
+    const raw = decodeURIComponent(teamKey).trim();
     const q = normName(raw);
 
     const byId = registrations.filter((r) => String(r.id) === raw);
@@ -327,7 +336,7 @@ export default function LiveEventPage() {
     if (byTeam.length) return byTeam;
 
     return registrations.filter((r) => normName(r.player_name || '') === q);
-  }, [registrations, teamParam]);
+  }, [registrations, teamKey]);
 
   const primaryReg =
     teamRegs.find((r) => r?.id != null && String(r.id).length > 0) ||
@@ -340,7 +349,7 @@ export default function LiveEventPage() {
   const teamLabel =
     primaryReg?.team_name ||
     primaryReg?.player_name ||
-    teamParam ||
+    teamKey ||
     'Your Team';
 
   const scoresLocked = useMemo(
@@ -449,6 +458,21 @@ export default function LiveEventPage() {
         .select('*')
         .eq('event_id', id);
       setRegistrations(regData || []);
+
+      if (!teamParam && user) {
+        const mine = (regData || []).find((r: any) =>
+          sameRosterPlayer(r, user)
+        );
+        if (mine) {
+          setResolvedTeam(
+            mine.team_name || mine.player_name || String(mine.id)
+          );
+        } else {
+          setResolvedTeam(null);
+        }
+      } else {
+        setResolvedTeam(null);
+      }
 
       setLoading(false);
     };
@@ -950,34 +974,6 @@ export default function LiveEventPage() {
     );
   }
 
-  if (isLeagueEvent(event)) {
-    const today = new Date().toISOString().slice(0, 10);
-    const roundToday = rounds.some(
-      (r) => String(r.date || '').slice(0, 10) === today
-    );
-    const eventDay =
-      roundToday || String(event?.date || '').slice(0, 10) === today;
-    const viewQuery = searchParams.get('view');
-    const initialView: 'tonight' | 'season' =
-      viewQuery === 'season' || viewQuery === 'tonight'
-        ? viewQuery
-        : eventDay
-          ? 'tonight'
-          : 'season';
-    const liveRound =
-      selectedRoundId ||
-      rounds.find((r) => String(r.date || '').slice(0, 10) === today)?.id ||
-      rounds[0]?.id;
-    return (
-      <LeagueLeaderboard
-        eventId={eventId}
-        initialRoundId={liveRound != null ? Number(liveRound) : null}
-        initialView={initialView}
-        showEventTabs={false}
-      />
-    );
-  }
-
   if (!primaryReg) {
     return (
       <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center p-8 text-center">
@@ -991,6 +987,9 @@ export default function LiveEventPage() {
       </div>
     );
   }
+
+  const leagueMatchPlay =
+    isLeagueEvent(event) && resolvedScoringType(event) === 'match_play';
 
   const teeTime = selectedRound
     ? formatRoundTime(selectedRound.start_time)
@@ -1047,7 +1046,7 @@ export default function LiveEventPage() {
                 : 'text-gray-400'
             }`}
           >
-            Score
+            Scoring
           </button>
           <button
             onClick={() => setActiveTab('leaderboard')}
@@ -1193,7 +1192,16 @@ export default function LiveEventPage() {
           </div>
         )}
 
-        {activeTab === 'leaderboard' && (
+        {activeTab === 'leaderboard' && leagueMatchPlay ? (
+          <LeagueLeaderboard
+            eventId={eventId}
+            initialRoundId={
+              selectedRoundId != null ? Number(selectedRoundId) : null
+            }
+            initialView="tonight"
+            embedded
+          />
+        ) : activeTab === 'leaderboard' ? (
           <div className="relative bg-gray-900 rounded-3xl overflow-hidden">
             {showBlurred && boardView === 'stroke' && (
               <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-950/80 backdrop-blur-md rounded-3xl">
@@ -1360,7 +1368,7 @@ export default function LiveEventPage() {
               </ul>
             )}
           </div>
-        )}
+        ) : null}
       </div>
       {scorecardRow && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
